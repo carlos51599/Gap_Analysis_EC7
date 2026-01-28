@@ -1158,6 +1158,7 @@ def check_and_split_large_cluster(
 
     # Store cell geometries as WKT for visualization
     cell_wkts = [cell.wkt for cell in cells]
+    log.info(f"   🔪 Splitting large cluster into {len(cells)} cells")
 
     # Process each cell
     all_selected: List[Dict[str, Any]] = []
@@ -1216,6 +1217,9 @@ def check_and_split_large_cluster(
     cell_czrc_config = config.get("cell_boundary_consolidation", {})
     cell_czrc_enabled = cell_czrc_config.get("enabled", True)
     cell_czrc_stats: Dict[str, Any] = {"status": "disabled"}
+    
+    # Debug: Check third pass conditions
+    log.info(f"   🔗 Third pass: enabled={cell_czrc_enabled}, {len(cells)} cells")
 
     if cell_czrc_enabled and len(cells) > 1:
         # Collect test points from all cell stats (for ILP constraints)
@@ -1318,10 +1322,13 @@ def detect_cell_adjacencies(
     )
 
     grid_spacing = spacing * test_spacing_mult
+    
+    log = logger or _logger  # Use module logger as fallback
+    log.info(f"   🔍 Cell adjacency detection: {len(cell_geometries)} cells, spacing={spacing}m")
 
     # Step 1: Compute coverage cloud for each cell
     clouds: List[BaseGeometry] = []
-    for cell_geom in cell_geometries:
+    for idx, cell_geom in enumerate(cell_geometries):
         cloud = compute_zone_coverage_cloud(
             zone_geometry=cell_geom,
             max_spacing_m=spacing,
@@ -1344,10 +1351,10 @@ def detect_cell_adjacencies(
                 logger=None,  # Suppress per-pair logging
             )
             if intersection is not None and not intersection.is_empty:
+                log.info(f"      ✅ Cell_{i} ↔ Cell_{j}: {intersection.area:.0f}m²")
                 adjacencies.append((i, j, intersection))
 
-    if logger:
-        logger.debug(f"   🔗 Cell adjacency: {len(adjacencies)} pairs from {n} cells")
+    log.info(f"   🔗 Cell adjacency: {len(adjacencies)} pairs from {n} cells")
 
     return adjacencies
 
@@ -1534,14 +1541,25 @@ def run_cell_czrc_pass(
 
     # Step 2: Detect cell adjacencies
     test_spacing_mult = config.get("test_spacing_mult", 0.2)
+    
+    # Debug: log cell geometry info
+    if log:
+        for idx, geom in enumerate(cell_geometries):
+            log.info(f"      📐 Cell {idx}: area={geom.area:.0f}m², bounds={geom.bounds}")
+    
     adjacencies = detect_cell_adjacencies(
         cell_geometries, spacing, test_spacing_mult, logger
     )
+    
+    if log:
+        log.info(f"   🔗 detect_cell_adjacencies found {len(adjacencies)} pairs from {len(cell_geometries)} cells with spacing={spacing}m")
 
     if not adjacencies:
         return cell_boreholes, [], [], {"status": "skipped", "reason": "no_adjacencies"}
 
-    log.info(f"   🔗 Cell CZRC (Third Pass): Processing {len(adjacencies)} cell-cell pairs")
+    log.info(
+        f"   🔗 Cell CZRC (Third Pass): Processing {len(adjacencies)} cell-cell pairs"
+    )
 
     # Step 3: Process each adjacent pair
     all_removed: List[Dict[str, Any]] = []
@@ -1558,6 +1576,8 @@ def run_cell_czrc_pass(
                 highs_log_folder,
                 f"third_c{cluster_idx + 1:02d}_p{pair_idx + 1:02d}.log",
             )
+        
+        log.info(f"      🔄 Cell_{cell_i} ↔ Cell_{cell_j} (pair {pair_idx+1}/{len(adjacencies)})")
 
         selected, removed, added, stats = solve_cell_cell_czrc(
             cell_i,
@@ -1572,9 +1592,20 @@ def run_cell_czrc_pass(
         )
 
         if stats.get("status") == "success":
-            current_boreholes = selected
+            # FIX: Instead of replacing current_boreholes with selected (which only contains 
+            # boreholes from this pair's Tier1+Tier2), we need to:
+            # 1. Remove the 'removed' boreholes from current_boreholes
+            # 2. Add the 'added' boreholes to current_boreholes
+            removed_positions = {(bh["x"], bh["y"]) for bh in removed}
+            current_boreholes = [
+                bh for bh in current_boreholes 
+                if (bh["x"], bh["y"]) not in removed_positions
+            ]
+            current_boreholes.extend(added)
             all_removed.extend(removed)
             all_added.extend(added)
+        else:
+            log.info(f"      ⏭️ Pair {pair_idx+1}: {stats.get('status')}, reason={stats.get('reason')}")
 
         pair_stats.append(stats)
 
