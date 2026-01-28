@@ -752,6 +752,29 @@ CONFIG: Dict[str, Any] = {
                 "random_state": 42,
             },
         },
+        # ═══════════════════════════════════════════════════════════════════
+        # 🔗 THIRD PASS: CELL-CELL BOUNDARY CONSOLIDATION
+        # ═══════════════════════════════════════════════════════════════════
+        # After splitting large clusters into Voronoi cells and solving each
+        # cell independently, there may be redundant boreholes at cell boundaries.
+        # This third pass applies the same CZRC methodology to cell-cell boundaries:
+        #
+        # 1. Compute coverage cloud for each cell
+        # 2. Find pairwise intersections (cell-cell CZRC regions)
+        # 3. Re-optimize each intersection to remove redundant boreholes
+        #
+        # This is mathematically identical to zone-zone CZRC but operates on
+        # cells within the same cluster (uniform spacing).
+        "cell_boundary_consolidation": {
+            # Master switch for third pass cell-cell CZRC
+            "enabled": True,
+            # Tier 1 multiplier (same as zone CZRC - inherit from parent)
+            "tier1_rmax_multiplier": 1.0,
+            # Tier 2 multiplier (same as zone CZRC - inherit from parent)
+            "tier2_rmax_multiplier": 2.0,
+            # Test point spacing multiplier (same as zone CZRC)
+            "test_spacing_mult": 0.2,
+        },
     },
     # ═══════════════════════════════════════════════════════════════════════
     # 🎚️ FILTER UI SETTINGS

@@ -558,6 +558,38 @@ class GlobalILPBorderConfig:
 
 
 @dataclass(frozen=True)
+class CellBoundaryConsolidationConfig:
+    """
+    Configuration for third pass cell-cell CZRC boundary consolidation.
+
+    After splitting large clusters into Voronoi cells and solving each cell
+    independently, there may be redundant boreholes at cell boundaries.
+    This third pass applies the same CZRC methodology to cell-cell boundaries.
+
+    Attributes:
+        enabled: Master switch for third pass cell-cell CZRC.
+        tier1_rmax_multiplier: Tier 1 region expansion multiplier.
+        tier2_rmax_multiplier: Tier 2 region expansion multiplier.
+        test_spacing_mult: Test point spacing as multiple of coverage radius.
+    """
+
+    enabled: bool = True
+    tier1_rmax_multiplier: float = 1.0
+    tier2_rmax_multiplier: float = 2.0
+    test_spacing_mult: float = 0.2
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "CellBoundaryConsolidationConfig":
+        """Create CellBoundaryConsolidationConfig from dictionary."""
+        return cls(
+            enabled=d.get("enabled", True),
+            tier1_rmax_multiplier=d.get("tier1_rmax_multiplier", 1.0),
+            tier2_rmax_multiplier=d.get("tier2_rmax_multiplier", 2.0),
+            test_spacing_mult=d.get("test_spacing_mult", 0.2),
+        )
+
+
+@dataclass(frozen=True)
 class BorderConsolidationConfig:
     """
     Configuration for border consolidation second pass.

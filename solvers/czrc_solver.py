@@ -1212,6 +1212,60 @@ def check_and_split_large_cluster(
             deduped_added.append(bh)
             added_positions.add(pos)
 
+    # === THIRD PASS: Cell-Cell CZRC Boundary Consolidation ===
+    cell_czrc_config = config.get("cell_boundary_consolidation", {})
+    cell_czrc_enabled = cell_czrc_config.get("enabled", True)
+    cell_czrc_stats: Dict[str, Any] = {"status": "disabled"}
+
+    if cell_czrc_enabled and len(cells) > 1:
+        # Collect test points from all cell stats (for ILP constraints)
+        all_cell_test_points: List[Dict[str, Any]] = []
+        seen_test_points: set = set()
+        for cs in cell_stats:
+            for tp in cs.get("czrc_test_points", []):
+                pos = (tp["x"], tp["y"])
+                if pos not in seen_test_points:
+                    all_cell_test_points.append(tp)
+                    seen_test_points.add(pos)
+
+        # Get spacing from cluster (use overall_r_max as uniform spacing for cells)
+        cell_spacing = cluster.get("overall_r_max", 100.0)
+
+        # Run cell-cell CZRC pass
+        (
+            consolidated_selected,
+            cell_czrc_removed,
+            cell_czrc_added,
+            cell_czrc_stats,
+        ) = run_cell_czrc_pass(
+            cell_wkts=cell_wkts,
+            cell_boreholes=all_selected,
+            cell_test_points=all_cell_test_points,
+            spacing=cell_spacing,
+            config=cell_czrc_config,
+            logger=logger,
+            highs_log_folder=highs_log_folder,
+            cluster_idx=cluster_idx,
+        )
+
+        if cell_czrc_stats.get("status") == "success":
+            all_selected = consolidated_selected
+            deduped_removed.extend(cell_czrc_removed)
+            deduped_added.extend(cell_czrc_added)
+            # Re-deduplicate removed/added after adding cell CZRC results
+            final_removed_positions: set = set()
+            final_deduped_removed: List[Dict[str, Any]] = []
+            for bh in deduped_removed:
+                pos = (bh["x"], bh["y"])
+                if pos not in final_removed_positions:
+                    final_deduped_removed.append(bh)
+                    final_removed_positions.add(pos)
+            deduped_removed = final_deduped_removed
+            # Store third pass results separately for visualization
+            cell_czrc_stats["third_pass_removed"] = cell_czrc_removed
+            cell_czrc_stats["third_pass_added"] = cell_czrc_added
+    # === END THIRD PASS ===
+
     cluster_key = "+".join(sorted(cluster["pair_keys"]))
     return (
         all_selected,
@@ -1226,12 +1280,338 @@ def check_and_split_large_cluster(
             "cell_wkts": cell_wkts,  # For visualization
             "cell_stats": cell_stats,
             "selected_count": len(all_selected),
+            "cell_czrc_stats": cell_czrc_stats,  # Third pass stats
         },
     )
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# �🔗 UNIFIED CLUSTER SOLVER
+# 🔗 THIRD PASS: CELL-CELL BOUNDARY CONSOLIDATION
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def detect_cell_adjacencies(
+    cell_geometries: List[BaseGeometry],
+    spacing: float,
+    test_spacing_mult: float = 0.2,
+    logger: Optional[logging.Logger] = None,
+) -> List[Tuple[int, int, BaseGeometry]]:
+    """
+    Detect adjacent cell pairs via coverage cloud intersection.
+
+    This is the cell-level equivalent of compute_czrc_consolidation_region()
+    but simplified for cells within the same cluster (uniform spacing).
+
+    Args:
+        cell_geometries: List of cell polygons (from cell_wkts)
+        spacing: max_spacing_m inherited from parent zone (uniform for all cells)
+        test_spacing_mult: Test point grid density multiplier
+        logger: Optional logger
+
+    Returns:
+        List of (cell_i_idx, cell_j_idx, intersection_geometry) tuples
+        where intersection is the cell-cell CZRC region.
+    """
+    from Gap_Analysis_EC7.solvers.czrc_geometry import (
+        compute_zone_coverage_cloud,
+        compute_pairwise_intersection,
+    )
+
+    grid_spacing = spacing * test_spacing_mult
+
+    # Step 1: Compute coverage cloud for each cell
+    clouds: List[BaseGeometry] = []
+    for cell_geom in cell_geometries:
+        cloud = compute_zone_coverage_cloud(
+            zone_geometry=cell_geom,
+            max_spacing_m=spacing,
+            grid_spacing=grid_spacing,
+            logger=None,  # Suppress per-cell logging
+        )
+        clouds.append(cloud)
+
+    # Step 2: Find pairwise intersections
+    adjacencies: List[Tuple[int, int, BaseGeometry]] = []
+    n = len(clouds)
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            intersection = compute_pairwise_intersection(
+                cloud_a=clouds[i],
+                cloud_b=clouds[j],
+                zone_name_a=f"Cell_{i}",
+                zone_name_b=f"Cell_{j}",
+                logger=None,  # Suppress per-pair logging
+            )
+            if intersection is not None and not intersection.is_empty:
+                adjacencies.append((i, j, intersection))
+
+    if logger:
+        logger.debug(f"   🔗 Cell adjacency: {len(adjacencies)} pairs from {n} cells")
+
+    return adjacencies
+
+
+def solve_cell_cell_czrc(
+    cell_i: int,
+    cell_j: int,
+    czrc_region: BaseGeometry,
+    cell_boreholes: List[Dict[str, Any]],
+    cell_test_points: List[Dict[str, Any]],
+    spacing: float,
+    config: Dict[str, Any],
+    logger: Optional[logging.Logger] = None,
+    highs_log_file: Optional[str] = None,
+) -> Tuple[
+    List[Dict[str, Any]],
+    List[Dict[str, Any]],
+    List[Dict[str, Any]],
+    Dict[str, Any],
+]:
+    """
+    Solve ILP for a cell-cell CZRC region.
+
+    This is a thin wrapper that reuses all existing CZRC infrastructure.
+
+    Args:
+        cell_i: Index of first cell
+        cell_j: Index of second cell
+        czrc_region: Cell-cell coverage cloud intersection
+        cell_boreholes: Boreholes output from cell processing (input to third pass)
+        cell_test_points: Test points from cell processing
+        spacing: max_spacing_m (uniform for cells in same cluster)
+        config: Cell CZRC config section
+        logger: Optional logger
+        highs_log_file: Optional path to write HiGHS solver log
+
+    Returns:
+        (selected, removed, added, stats) tuple
+    """
+    start_time = time.perf_counter()
+    pair_key = f"Cell_{cell_i}_Cell_{cell_j}"
+
+    # Step 1: Compute tiers (REUSE existing function)
+    tier1_mult = config.get("tier1_rmax_multiplier", 1.0)
+    tier2_mult = config.get("tier2_rmax_multiplier", 2.0)
+    cell_spacings = {f"Cell_{cell_i}": spacing, f"Cell_{cell_j}": spacing}
+
+    tier1_region, tier2_region, r_max = compute_czrc_tiers(
+        czrc_region, cell_spacings, pair_key, tier1_mult, tier2_mult
+    )
+
+    # Step 2: Filter test points to Tier 1 (REUSE)
+    tier1_test_points = filter_test_points_to_tier1(cell_test_points, tier1_region)
+    if not tier1_test_points:
+        return (
+            cell_boreholes,
+            [],
+            [],
+            {"status": "skipped", "reason": "no_tier1_test_points"},
+        )
+
+    # Step 3: Classify boreholes (REUSE)
+    bh_candidates, locked = classify_first_pass_boreholes(
+        cell_boreholes, tier1_region, tier2_region
+    )
+
+    if not bh_candidates:
+        # No candidates in Tier 1 - nothing to optimize
+        return cell_boreholes, [], [], {"status": "skipped", "reason": "no_candidates"}
+
+    # Step 4: Compute unsatisfied test points (REUSE)
+    tier1_unsatisfied, precovered_ct = _compute_unsatisfied_test_points(
+        tier1_test_points, locked, logger
+    )
+
+    # Step 5: Prepare candidates (REUSE)
+    candidates, _ = _prepare_candidates_for_ilp(
+        tier1_region, bh_candidates, r_max, spacing, config
+    )
+
+    # Step 6: Solve ILP (REUSE)
+    # Use tier1_test_points if all are precovered (allows removing redundant candidates)
+    solve_test_points = tier1_unsatisfied if tier1_unsatisfied else tier1_test_points
+    selected_indices, ilp_stats = _solve_czrc_ilp(
+        solve_test_points,
+        candidates,
+        spacing,
+        config,
+        logger,
+        highs_log_file,
+    )
+
+    # Step 7: Classify results
+    if selected_indices is None:
+        return cell_boreholes, [], [], {"status": "failed", "ilp_stats": ilp_stats}
+
+    selected_set = set(selected_indices)
+    selected_positions = {(candidates[i].x, candidates[i].y) for i in selected_set}
+
+    # Candidate positions from first-pass
+    candidate_positions = {(bh["x"], bh["y"]) for bh in bh_candidates}
+
+    # Removed = first-pass candidates NOT in selected
+    removed = [
+        bh for bh in bh_candidates if (bh["x"], bh["y"]) not in selected_positions
+    ]
+
+    # Added = selected positions NOT from first-pass
+    added = []
+    for i in selected_set:
+        pos = (candidates[i].x, candidates[i].y)
+        if pos not in candidate_positions:
+            added.append({"x": pos[0], "y": pos[1], "coverage_radius": spacing})
+
+    # Build final selected list: locked (Tier 2) + selected from ILP
+    selected = list(locked)
+    for i in selected_set:
+        selected.append(
+            {"x": candidates[i].x, "y": candidates[i].y, "coverage_radius": spacing}
+        )
+
+    elapsed = time.perf_counter() - start_time
+
+    return (
+        selected,
+        removed,
+        added,
+        {
+            "status": "success",
+            "pair_key": pair_key,
+            "tier1_test_points": len(tier1_test_points),
+            "tier1_unsatisfied": len(tier1_unsatisfied) if tier1_unsatisfied else 0,
+            "precovered": precovered_ct,
+            "candidates": len(candidates),
+            "bh_candidates": len(bh_candidates),
+            "locked": len(locked),
+            "selected": len(selected_set),
+            "removed": len(removed),
+            "added": len(added),
+            "solve_time": elapsed,
+            "ilp_stats": ilp_stats,
+        },
+    )
+
+
+def run_cell_czrc_pass(
+    cell_wkts: List[str],
+    cell_boreholes: List[Dict[str, Any]],
+    cell_test_points: List[Dict[str, Any]],
+    spacing: float,
+    config: Dict[str, Any],
+    logger: Optional[logging.Logger] = None,
+    highs_log_folder: Optional[str] = None,
+    cluster_idx: int = 0,
+) -> Tuple[
+    List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]
+]:
+    """
+    Run third pass cell CZRC optimization for a split cluster.
+
+    Args:
+        cell_wkts: WKT strings of cell geometries (from cluster_stats["cell_wkts"])
+        cell_boreholes: Boreholes selected by cell processing
+        cell_test_points: Test points from cell processing
+        spacing: max_spacing_m (uniform for cells in cluster)
+        config: Cell CZRC config section
+        logger: Optional logger
+        highs_log_folder: Optional folder path for HiGHS solver logs
+        cluster_idx: Cluster index for log file naming (0-based)
+
+    Returns:
+        (final_boreholes, all_removed, all_added, stats) tuple
+    """
+    import os
+
+    start_time = time.perf_counter()
+    log = logger or _logger
+
+    # Step 1: Parse cell geometries
+    cell_geometries = [wkt.loads(w) for w in cell_wkts]
+
+    if len(cell_geometries) < 2:
+        return cell_boreholes, [], [], {"status": "skipped", "reason": "single_cell"}
+
+    # Step 2: Detect cell adjacencies
+    test_spacing_mult = config.get("test_spacing_mult", 0.2)
+    adjacencies = detect_cell_adjacencies(
+        cell_geometries, spacing, test_spacing_mult, logger
+    )
+
+    if not adjacencies:
+        return cell_boreholes, [], [], {"status": "skipped", "reason": "no_adjacencies"}
+
+    log.info(f"   🔗 Cell CZRC (Third Pass): Processing {len(adjacencies)} cell-cell pairs")
+
+    # Step 3: Process each adjacent pair
+    all_removed: List[Dict[str, Any]] = []
+    all_added: List[Dict[str, Any]] = []
+    pair_stats: List[Dict[str, Any]] = []
+    current_boreholes = list(cell_boreholes)
+
+    for pair_idx, (cell_i, cell_j, czrc_region) in enumerate(adjacencies):
+        # Generate HiGHS log file path for this cell-cell pair
+        highs_log_file = None
+        if highs_log_folder:
+            os.makedirs(highs_log_folder, exist_ok=True)
+            highs_log_file = os.path.join(
+                highs_log_folder,
+                f"third_c{cluster_idx + 1:02d}_p{pair_idx + 1:02d}.log",
+            )
+
+        selected, removed, added, stats = solve_cell_cell_czrc(
+            cell_i,
+            cell_j,
+            czrc_region,
+            current_boreholes,
+            cell_test_points,
+            spacing,
+            config,
+            logger,
+            highs_log_file,
+        )
+
+        if stats.get("status") == "success":
+            current_boreholes = selected
+            all_removed.extend(removed)
+            all_added.extend(added)
+
+        pair_stats.append(stats)
+
+    # Deduplicate removed/added
+    removed_positions: set = set()
+    deduped_removed: List[Dict[str, Any]] = []
+    for bh in all_removed:
+        pos = (bh["x"], bh["y"])
+        if pos not in removed_positions:
+            deduped_removed.append(bh)
+            removed_positions.add(pos)
+
+    elapsed = time.perf_counter() - start_time
+
+    log.info(
+        f"   ✅ Cell CZRC complete: {len(deduped_removed)} removed, "
+        f"{len(all_added)} added ({elapsed:.2f}s)"
+    )
+
+    return (
+        current_boreholes,
+        deduped_removed,
+        all_added,
+        {
+            "status": "success",
+            "cell_count": len(cell_geometries),
+            "pairs_processed": len(adjacencies),
+            "total_removed": len(deduped_removed),
+            "total_added": len(all_added),
+            "pair_stats": pair_stats,
+            "solve_time": elapsed,
+        },
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 🔗 UNIFIED CLUSTER SOLVER
 # ═══════════════════════════════════════════════════════════════════════════
 
 
