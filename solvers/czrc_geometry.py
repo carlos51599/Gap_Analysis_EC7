@@ -235,8 +235,8 @@ def compute_czrc_consolidation_region(
         - "coverage_clouds_wkt": Dict of {zone_name: wkt_string}
         - "pairwise_regions": Dict of {"ZoneA_ZoneB": intersection_geometry}
         - "pairwise_wkts": Dict of {"ZoneA_ZoneB": wkt_string}
-        - "triple_overlaps": Dict of {"ZoneA_ZoneB_ZoneC": geometry}
-        - "triple_overlaps_wkt": Dict of {"ZoneA_ZoneB_ZoneC": wkt_string}
+        - "zone_spacings": Dict of {zone_name: max_spacing_m}
+        - "zone_geometries": Dict of {zone_name: geometry}
         - "stats": Statistics dict
     """
     if logger:
@@ -292,41 +292,32 @@ def compute_czrc_consolidation_region(
             f"      📊 Found {len(pairwise_regions)} zone pairs with overlapping clouds"
         )
 
-    # === STEP 3: IDENTIFY TRIPLE+ OVERLAPS ===
-    triple_overlaps = _identify_multi_zone_overlaps(
-        pairwise_regions=pairwise_regions,
-        coverage_clouds=coverage_clouds,
-        logger=logger,
-    )
-
-    # === STEP 4: UNION ALL PAIRWISE INTERSECTIONS ===
+    # === STEP 3: UNION ALL PAIRWISE INTERSECTIONS ===
     if pairwise_regions:
         total_region = unary_union(list(pairwise_regions.values()))
     else:
         total_region = Polygon()  # Empty polygon
 
-    # === STEP 5: COMPUTE STATISTICS ===
+    # === STEP 4: COMPUTE STATISTICS ===
     stats = _compute_czrc_stats(
         zones_gdf=zones_gdf,
         coverage_clouds=coverage_clouds,
         pairwise_regions=pairwise_regions,
-        triple_overlaps=triple_overlaps,
         total_region=total_region,
         logger=logger,
     )
 
-    # === STEP 6: CONVERT TO WKT FOR SERIALIZATION ===
+    # === STEP 5: CONVERT TO WKT FOR SERIALIZATION ===
     coverage_clouds_wkt = {name: cloud.wkt for name, cloud in coverage_clouds.items()}
     pairwise_wkts = {key: geom.wkt for key, geom in pairwise_regions.items()}
-    triple_overlaps_wkt = {key: geom.wkt for key, geom in triple_overlaps.items()}
     total_region_wkt = total_region.wkt if not total_region.is_empty else None
 
-    # === STEP 7: BUILD ZONE SPACINGS DICT FOR ILP VISIBILITY ===
+    # === STEP 6: BUILD ZONE SPACINGS DICT FOR ILP VISIBILITY ===
     zone_spacings = {
         row["zone_name"]: row["max_spacing_m"] for _, row in zones_gdf.iterrows()
     }
 
-    # === STEP 8: BUILD RAW ZONE GEOMETRIES (for clipping Tier 2 test points) ===
+    # === STEP 7: BUILD RAW ZONE GEOMETRIES (for clipping Tier 2 test points) ===
     zone_geometries = {
         row["zone_name"]: row["geometry"] for _, row in zones_gdf.iterrows()
     }
@@ -338,94 +329,16 @@ def compute_czrc_consolidation_region(
         "coverage_clouds_wkt": coverage_clouds_wkt,
         "pairwise_regions": pairwise_regions,
         "pairwise_wkts": pairwise_wkts,
-        "triple_overlaps": triple_overlaps,
-        "triple_overlaps_wkt": triple_overlaps_wkt,
         "zone_spacings": zone_spacings,
         "zone_geometries": zone_geometries,  # Raw zone geometries for clipping
         "stats": stats,
     }
 
 
-def _identify_multi_zone_overlaps(
-    pairwise_regions: Dict[str, BaseGeometry],
-    coverage_clouds: Dict[str, BaseGeometry],
-    logger: Optional[logging.Logger] = None,
-) -> Dict[str, BaseGeometry]:
-    """
-    Identify regions where 3+ zones overlap.
-
-    These are the highest-value areas for optimization - a single borehole
-    there could satisfy test points from 3+ zones.
-
-    Args:
-        pairwise_regions: Dict of pairwise intersections
-        coverage_clouds: Dict of per-zone coverage clouds
-        logger: Optional logger
-
-    Returns:
-        Dict mapping "ZoneA_ZoneB_ZoneC" -> triple-intersection geometry
-    """
-    triple_overlaps: Dict[str, BaseGeometry] = {}
-
-    # Get all unique zones from pairwise keys
-    zones_in_pairs = set()
-    for pair_key in pairwise_regions.keys():
-        zone_a, zone_b = pair_key.split("_", 1)
-        zones_in_pairs.add(zone_a)
-        zones_in_pairs.add(zone_b)
-
-    zones_list = sorted(zones_in_pairs)
-    n_zones = len(zones_list)
-
-    if n_zones < 3:
-        return triple_overlaps
-
-    # Check all zone triplets
-    for i in range(n_zones):
-        for j in range(i + 1, n_zones):
-            for k in range(j + 1, n_zones):
-                zone_a = zones_list[i]
-                zone_b = zones_list[j]
-                zone_c = zones_list[k]
-
-                # Check if all three pairwise intersections exist
-                pair_ab = f"{zone_a}_{zone_b}"
-                pair_ac = f"{zone_a}_{zone_c}"
-                pair_bc = f"{zone_b}_{zone_c}"
-
-                # Need all three pairs to have overlap
-                if not all(p in pairwise_regions for p in [pair_ab, pair_ac, pair_bc]):
-                    continue
-
-                # Compute triple intersection
-                try:
-                    # Intersect all three clouds
-                    triple = (
-                        coverage_clouds[zone_a]
-                        .intersection(coverage_clouds[zone_b])
-                        .intersection(coverage_clouds[zone_c])
-                    )
-
-                    if not triple.is_empty and triple.area > 0:
-                        triple_key = f"{zone_a}_{zone_b}_{zone_c}"
-                        triple_overlaps[triple_key] = triple
-
-                        if logger:
-                            logger.info(
-                                f"      🎯 Triple overlap: {triple_key} "
-                                f"({triple.area:.0f} m²)"
-                            )
-                except Exception:
-                    pass  # Skip on error
-
-    return triple_overlaps
-
-
 def _compute_czrc_stats(
     zones_gdf: GeoDataFrame,
     coverage_clouds: Dict[str, BaseGeometry],
     pairwise_regions: Dict[str, BaseGeometry],
-    triple_overlaps: Dict[str, BaseGeometry],
     total_region: BaseGeometry,
     logger: Optional[logging.Logger] = None,
 ) -> Dict[str, Any]:
@@ -447,9 +360,6 @@ def _compute_czrc_stats(
     # Pairwise intersection areas
     pairwise_total_area = sum(geom.area for geom in pairwise_regions.values())
 
-    # Triple overlap area
-    triple_total_area = sum(geom.area for geom in triple_overlaps.values())
-
     # Zone spacing statistics (needed for candidate grid generation)
     zone_spacings = [row["max_spacing_m"] for _, row in zones_gdf.iterrows()]
     min_zone_spacing = min(zone_spacings) if zone_spacings else 100.0
@@ -461,8 +371,6 @@ def _compute_czrc_stats(
         "total_cloud_area_m2": total_cloud_area,
         "n_pairwise_overlaps": len(pairwise_regions),
         "pairwise_overlap_area_m2": pairwise_total_area,
-        "n_triple_overlaps": len(triple_overlaps),
-        "triple_overlap_area_m2": triple_total_area,
         "czrc_total_area_m2": czrc_area,
         "min_zone_spacing": min_zone_spacing,
         "max_zone_spacing": max_zone_spacing,
@@ -476,10 +384,6 @@ def _compute_czrc_stats(
         logger.info(
             f"      • Pairwise overlaps: {len(pairwise_regions)} pairs, "
             f"{pairwise_total_area:,.0f} m²"
-        )
-        logger.info(
-            f"      • Triple overlaps: {len(triple_overlaps)} triplets, "
-            f"{triple_total_area:,.0f} m²"
         )
         logger.info(f"      • CZRC total region: {czrc_area:,.0f} m²")
 

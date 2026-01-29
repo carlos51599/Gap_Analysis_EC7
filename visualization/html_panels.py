@@ -260,7 +260,7 @@ def generate_layers_panel_html(
     - Multiple BGS Geology layers (independent toggles)
     - Proposed boreholes (ILP-optimized locations with buffer zones)
     - Second Pass (removed/added boreholes from cross-zone redundancy check)
-    - Second Pass Zone Overlap (coverage clouds, pairwise, triple overlap regions)
+    - Second Pass Zone Overlap (coverage clouds and pairwise overlap regions)
     - Second Pass Grid (visibility boundary and hexagonal candidate grid)
     - Second Pass Test Points (test points used in optimization)
     - Third Pass (removed/added from cell-cell CZRC optimization)
@@ -278,7 +278,7 @@ def generate_layers_panel_html(
         has_second_pass: Whether second pass traces (removed/added) are available
         has_czrc_second_pass: Whether Second Pass traces (cross-zone optimization) are available
         has_czrc_test_points: Whether Second Pass test points trace is available
-        has_czrc_zone_overlap: Whether Second Pass zone overlap traces (clouds/pairwise/triple) exist
+        has_czrc_zone_overlap: Whether Second Pass zone overlap traces (clouds/pairwise) exist
         has_czrc_grid: Whether Second Pass grid traces (visibility boundary, hex grid) exist
         has_third_pass: Whether third pass traces (cell-cell removed/added) are available
         has_third_pass_overlap: Whether third pass overlap traces (cell clouds/intersections) exist

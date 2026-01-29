@@ -51,7 +51,7 @@ def generate_layer_toggle_scripts(
     - Proposed boreholes checkbox (shows/hides proposed borehole markers + buffers)
     - Second pass checkbox (shows/hides removed and added borehole traces together)
     - CZRC second pass checkbox (shows/hides CZRC removed/added traces)
-    - CZRC zone overlap checkbox (shows/hides coverage clouds, pairwise, triple overlaps)
+    - CZRC zone overlap checkbox (shows/hides coverage clouds and pairwise overlaps)
     - CZRC grid checkbox (shows/hides visibility boundary and hex candidate grid)
     - Third pass checkbox (shows/hides cell-cell CZRC removed/added traces)
     - Third pass overlap checkbox (shows/hides cell clouds and intersections)
@@ -144,13 +144,6 @@ def generate_layer_toggle_scripts(
                     // Toggle CZRC pairwise regions (2-zone overlaps)
                     if (ranges.czrc_pairwise) {
                         const [startIdx, endIdx] = ranges.czrc_pairwise;
-                        for (let i = startIdx; i < endIdx; i++) {
-                            traceIndices.push(i);
-                        }
-                    }
-                    // Toggle CZRC triple overlaps (3+ zone overlaps)
-                    if (ranges.czrc_triple) {
-                        const [startIdx, endIdx] = ranges.czrc_triple;
                         for (let i = startIdx; i < endIdx; i++) {
                             traceIndices.push(i);
                         }

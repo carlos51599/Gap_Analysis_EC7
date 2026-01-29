@@ -351,7 +351,7 @@ def _add_single_combo_traces(
     # ═══════════════════════════════════════════════════════════════════════
     # 🌐 CZRC (Cross-Zone Reachability Consolidation) VISUALIZATION
     # ═══════════════════════════════════════════════════════════════════════
-    # Shows coverage clouds, pairwise intersections, and triple overlaps
+    # Shows coverage clouds and pairwise intersections
     czrc_data = data.get("czrc_data")
     if czrc_data:
         from Gap_Analysis_EC7.config import CONFIG
@@ -367,12 +367,6 @@ def _add_single_combo_traces(
         # Add pairwise intersection regions
         # Always add - visibility controlled by Zone Overlap checkbox
         ranges["czrc_pairwise"] = _add_czrc_pairwise_trace(
-            fig, combo_key, czrc_data, czrc_config
-        )
-
-        # Add triple+ overlap regions (highest value)
-        # Always add - visibility controlled by Zone Overlap checkbox
-        ranges["czrc_triple"] = _add_czrc_triple_overlaps_trace(
             fig, combo_key, czrc_data, czrc_config
         )
 
@@ -1836,53 +1830,6 @@ def _add_czrc_pairwise_trace(
     return (start_idx, len(fig.data))
 
 
-def _add_czrc_triple_overlaps_trace(
-    fig: go.Figure,
-    combo_key: str,  # noqa: ARG001 - kept for API consistency
-    czrc_data: Dict[str, Any],
-    czrc_config: Dict[str, Any],
-) -> Tuple[int, int]:
-    """Add triple+ overlap regions (3+ zones' clouds overlap - highest value)."""
-    from shapely import wkt
-
-    start_idx = len(fig.data)
-    triple_wkts = czrc_data.get("triple_overlaps_wkt", {})
-    if not triple_wkts:
-        return (start_idx, len(fig.data))
-
-    color = czrc_config.get("czrc_triple_color", "lime")
-    opacity = czrc_config.get("czrc_triple_opacity", 0.5)
-    line_width = czrc_config.get("czrc_line_width", 2)
-
-    for triple_key, region_wkt in triple_wkts.items():
-        try:
-            region_geom = wkt.loads(region_wkt)
-            if region_geom.is_empty:
-                continue
-            x_coords, y_coords = _extract_polygon_coords(region_geom)
-            zones = triple_key.replace("_", " + ")
-            fig.add_trace(
-                go.Scattergl(
-                    x=x_coords,
-                    y=y_coords,
-                    mode="lines",
-                    fill="toself",
-                    fillcolor=f"rgba(0, 255, 0, {opacity})",
-                    line=dict(color=color, width=line_width + 1),
-                    hoverinfo="text",
-                    hovertext=f"CZRC Triple: {zones} (HIGH VALUE)",
-                    name=f"CZRC Triple: {zones}",
-                    legendgroup="czrc_triple",
-                    showlegend=False,
-                    visible=False,  # Hidden by default, controlled by Zone Overlap checkbox
-                )
-            )
-        except Exception:  # noqa: BLE001 - WKT parsing can fail
-            pass
-
-    return (start_idx, len(fig.data))
-
-
 def _add_czrc_cell_boundaries_trace(
     fig: go.Figure,
     combo_key: str,  # noqa: ARG001 - kept for API consistency
@@ -2534,18 +2481,16 @@ def _generate_sidebar_panels(
                 has_czrc_test_points = True
                 break
 
-    # Check if any combo has CZRC zone overlap data (clouds/pairwise/triple)
+    # Check if any combo has CZRC zone overlap data (clouds/pairwise)
     # This enables the Zone Overlap checkbox even when skip_ilp=True
     has_czrc_zone_overlap = False
     if coverage_trace_ranges:
         for combo_ranges in coverage_trace_ranges.values():
             czrc_clouds = combo_ranges.get("czrc_clouds", (0, 0))
             czrc_pairwise = combo_ranges.get("czrc_pairwise", (0, 0))
-            czrc_triple = combo_ranges.get("czrc_triple", (0, 0))
             if (
                 czrc_clouds[0] != czrc_clouds[1]
                 or czrc_pairwise[0] != czrc_pairwise[1]
-                or czrc_triple[0] != czrc_triple[1]
             ):
                 has_czrc_zone_overlap = True
                 break

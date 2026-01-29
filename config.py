@@ -561,8 +561,6 @@ CONFIG: Dict[str, Any] = {
         "czrc_cell_cloud_opacity": 0.20,  # Alpha for cell coverage clouds (higher for visibility)
         "czrc_pairwise_color": "cyan",  # Color for pairwise intersections
         "czrc_pairwise_opacity": 0.40,  # Higher opacity for overlap regions (more visible than fills)
-        "czrc_triple_color": "#018801",  # Color for triple+ overlaps (highest value)
-        "czrc_triple_opacity": 0.5,
         "czrc_line_width": 2,
         # CZRC candidate grid styling (hexagonal cells - same style as second_pass_grid)
         "czrc_grid": {

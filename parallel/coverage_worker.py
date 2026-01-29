@@ -525,7 +525,6 @@ def worker_process_filter_combination(
                     "total_region_wkt": czrc_data.get("total_region_wkt"),
                     "coverage_clouds_wkt": czrc_data.get("coverage_clouds_wkt", {}),
                     "pairwise_wkts": czrc_data.get("pairwise_wkts", {}),
-                    "triple_overlaps_wkt": czrc_data.get("triple_overlaps_wkt", {}),
                     "zone_spacings": czrc_data.get("zone_spacings", {}),
                     "stats": czrc_data.get("stats", {}),
                 }
@@ -533,8 +532,7 @@ def worker_process_filter_combination(
                 # Log CZRC stats to console
                 czrc_stats = czrc_data.get("stats", {})
                 print(
-                    f"   🌐 CZRC: {czrc_stats.get('n_pairwise_overlaps', 0)} pairwise, "
-                    f"{czrc_stats.get('n_triple_overlaps', 0)} triple overlaps, "
+                    f"   🌐 CZRC: {czrc_stats.get('n_pairwise_overlaps', 0)} pairwise overlaps, "
                     f"{czrc_stats.get('czrc_total_area_m2', 0):,.0f} m² total region"
                 )
 
