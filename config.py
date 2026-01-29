@@ -121,7 +121,7 @@ CONFIG: Dict[str, Any] = {
         "enabled": True,  # Disabled for CZRC cross-worker cache testing
         # Fixed filter settings for testing (creates maximum gap scenario)
         "filter": {
-            "min_depth": 50,  # Depth >= x (creates good test gaps)
+            "min_depth": 45,  # Depth >= x (creates good test gaps)
             "require_spt": False,  # No SPT requirement
             "require_triaxial_total": False,  # No TxT requirement
             "require_triaxial_effective": False,  # No TxE requirement
@@ -557,11 +557,12 @@ CONFIG: Dict[str, Any] = {
         # Displays: Tier 1 (candidate grid boundary) and Tier 2 (visibility boundary) as lines
         "show_czrc_ilp_visibility": True,
         # Colors for CZRC visualization (Zone Overlap checkbox controls visibility)
-        "czrc_cloud_opacity": 0.15,  # Very light for coverage clouds
+        "czrc_cloud_opacity": 0.20,  # Alpha for zone coverage clouds (was 0.15, too faint)
+        "czrc_cell_cloud_opacity": 0.20,  # Alpha for cell coverage clouds (higher for visibility)
         "czrc_pairwise_color": "cyan",  # Color for pairwise intersections
-        "czrc_pairwise_opacity": 0.3,
+        "czrc_pairwise_opacity": 0.40,  # Higher opacity for overlap regions (more visible than fills)
         "czrc_triple_color": "#018801",  # Color for triple+ overlaps (highest value)
-        "czrc_triple_opacity": 0.8,
+        "czrc_triple_opacity": 0.5,
         "czrc_line_width": 2,
         # CZRC candidate grid styling (hexagonal cells - same style as second_pass_grid)
         "czrc_grid": {

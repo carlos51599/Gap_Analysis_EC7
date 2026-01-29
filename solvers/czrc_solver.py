@@ -100,6 +100,71 @@ def _get_czrc_stall_detection_config(czrc_ilp_config: Dict[str, Any]) -> Dict[st
         }
 
 
+def _get_cross_zone_exclusion_method(config: Dict[str, Any]) -> str:
+    """
+    Resolve cross-zone exclusion method from config.
+
+    CZRC can override the global ilp_solver setting. If CZRC config specifies
+    None, falls back to the global ilp_solver.cross_zone_exclusion_method.
+
+    Args:
+        config: CZRC config section (czrc_optimization.ilp)
+
+    Returns:
+        Method string: "min", "max", or "average"
+    """
+    # Import CONFIG here to avoid circular imports
+    from Gap_Analysis_EC7.config import CONFIG
+
+    # Check for CZRC-specific override (None = inherit from ilp_solver)
+    czrc_method = config.get("cross_zone_exclusion_method", None)
+    if czrc_method is not None:
+        return czrc_method
+
+    # Fall back to global ilp_solver setting
+    ilp_solver_config = CONFIG.get("ilp_solver", {})
+    return ilp_solver_config.get("cross_zone_exclusion_method", "average")
+
+
+def _aggregate_zone_spacings(
+    zone_spacings: Dict[str, float],
+    zones: List[str],
+    method: str,
+) -> float:
+    """
+    Aggregate zone spacings using the specified method.
+
+    Used for cross-zone conflict constraints where boreholes from different
+    zones may have different spacing requirements.
+
+    Args:
+        zone_spacings: Dict mapping zone_name -> max_spacing_m
+        zones: List of zone names to aggregate
+        method: Aggregation method ("min", "max", or "average")
+
+    Returns:
+        Aggregated spacing value
+
+    Raises:
+        ValueError: If method is not recognized
+    """
+    spacings = [zone_spacings.get(z, 100.0) for z in zones]
+    if not spacings:
+        return 100.0  # Default fallback
+
+    if method == "min":
+        return min(spacings)
+    elif method == "max":
+        return max(spacings)
+    elif method == "average":
+        return sum(spacings) / len(spacings)
+    else:
+        raise ValueError(
+            f"Invalid cross_zone_exclusion_method: '{method}'. "
+            f"Must be 'min', 'max', or 'average'."
+        )
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 🏗️ TIER COMPUTATION SECTION
 # ═══════════════════════════════════════════════════════════════════════════
@@ -740,7 +805,9 @@ def solve_czrc_ilp_for_pair(
 
     # Step 6: Prepare candidates
     zones = pair_key.split("_")
-    min_spacing = min(zone_spacings.get(z, 100.0) for z in zones)
+    # Use cross_zone_exclusion_method from config to aggregate spacings
+    exclusion_method = _get_cross_zone_exclusion_method(config)
+    min_spacing = _aggregate_zone_spacings(zone_spacings, zones, exclusion_method)
     candidates, _ = _prepare_candidates_for_ilp(
         tier1_region, bh_candidates, r_max, min_spacing, config
     )
@@ -1261,6 +1328,7 @@ def check_and_split_large_cluster(
             cell_test_points=all_cell_test_points,
             spacing=cell_spacing,
             config=cell_czrc_config,
+            zones_clip_geometry=zones_clip_geometry,
             logger=logger,
             highs_log_folder=highs_log_folder,
             cluster_idx=cluster_idx,
@@ -1315,8 +1383,9 @@ def detect_cell_adjacencies(
     cell_geometries: List[BaseGeometry],
     spacing: float,
     test_spacing_mult: float = 0.2,
+    clip_geometry: Optional[BaseGeometry] = None,
     logger: Optional[logging.Logger] = None,
-) -> List[Tuple[int, int, BaseGeometry]]:
+) -> Tuple[List[Tuple[int, int, BaseGeometry]], List[BaseGeometry]]:
     """
     Detect adjacent cell pairs via coverage cloud intersection.
 
@@ -1327,11 +1396,14 @@ def detect_cell_adjacencies(
         cell_geometries: List of cell polygons (from cell_wkts)
         spacing: max_spacing_m inherited from parent zone (uniform for all cells)
         test_spacing_mult: Test point grid density multiplier
+        clip_geometry: Optional geometry to clip cells to (actual zone shapefile)
         logger: Optional logger
 
     Returns:
-        List of (cell_i_idx, cell_j_idx, intersection_geometry) tuples
-        where intersection is the cell-cell CZRC region.
+        Tuple of:
+        - List of (cell_i_idx, cell_j_idx, intersection_geometry) tuples
+          where intersection is the cell-cell CZRC region.
+        - List of coverage clouds for each cell (for visualization)
     """
     from Gap_Analysis_EC7.solvers.czrc_geometry import (
         compute_zone_coverage_cloud,
@@ -1346,10 +1418,23 @@ def detect_cell_adjacencies(
     )
 
     # Step 1: Compute coverage cloud for each cell
+    # If clip_geometry provided, intersect cell with it before generating test points
+    # This ensures test points are only within actual zone shapefile, not full Tier 1 buffer
     clouds: List[BaseGeometry] = []
     for idx, cell_geom in enumerate(cell_geometries):
+        # Clip cell to actual zone geometry if provided
+        if clip_geometry is not None:
+            clipped_cell = cell_geom.intersection(clip_geometry)
+            if clipped_cell.is_empty:
+                # Cell doesn't intersect zone - use empty cloud
+                clouds.append(cell_geom.buffer(0))  # Empty but valid geometry
+                continue
+            cell_for_cloud = clipped_cell
+        else:
+            cell_for_cloud = cell_geom
+
         cloud = compute_zone_coverage_cloud(
-            zone_geometry=cell_geom,
+            zone_geometry=cell_for_cloud,
             max_spacing_m=spacing,
             grid_spacing=grid_spacing,
             logger=None,  # Suppress per-cell logging
@@ -1375,7 +1460,7 @@ def detect_cell_adjacencies(
 
     log.info(f"   🔗 Cell adjacency: {len(adjacencies)} pairs from {n} cells")
 
-    return adjacencies
+    return adjacencies, clouds
 
 
 def solve_cell_cell_czrc(
@@ -1525,6 +1610,7 @@ def run_cell_czrc_pass(
     cell_test_points: List[Dict[str, Any]],
     spacing: float,
     config: Dict[str, Any],
+    zones_clip_geometry: Optional[BaseGeometry] = None,
     logger: Optional[logging.Logger] = None,
     highs_log_folder: Optional[str] = None,
     cluster_idx: int = 0,
@@ -1540,6 +1626,7 @@ def run_cell_czrc_pass(
         cell_test_points: Test points from cell processing
         spacing: max_spacing_m (uniform for cells in cluster)
         config: Cell CZRC config section
+        zones_clip_geometry: Optional geometry to clip cells to (actual zone shapefile)
         logger: Optional logger
         highs_log_folder: Optional folder path for HiGHS solver logs
         cluster_idx: Cluster index for log file naming (0-based)
@@ -1568,8 +1655,8 @@ def run_cell_czrc_pass(
                 f"      📐 Cell {idx}: area={geom.area:.0f}m², bounds={geom.bounds}"
             )
 
-    adjacencies = detect_cell_adjacencies(
-        cell_geometries, spacing, test_spacing_mult, logger
+    adjacencies, cell_coverage_clouds = detect_cell_adjacencies(
+        cell_geometries, spacing, test_spacing_mult, zones_clip_geometry, logger
     )
 
     if log:
@@ -1584,22 +1671,12 @@ def run_cell_czrc_pass(
         f"   🔗 Cell CZRC (Third Pass): Processing {len(adjacencies)} cell-cell pairs"
     )
 
-    # Step 2b: Compute cell coverage clouds for visualization
+    # Step 2b: Use same clouds from adjacency detection for visualization consistency
+    # These are the clouds whose intersections create the blue overlap regions
     cell_clouds_wkt: Dict[int, str] = {}
-    for cell_idx, cell_geom in enumerate(cell_geometries):
-        # Find boreholes within this cell
-        cell_bhs = [
-            bh for bh in cell_boreholes if cell_geom.contains(Point(bh["x"], bh["y"]))
-        ]
-        if cell_bhs:
-            # Create union of borehole coverage circles clipped to cell
-            cell_circles = [
-                Point(bh["x"], bh["y"]).buffer(bh.get("coverage_radius", spacing))
-                for bh in cell_bhs
-            ]
-            cell_cloud = unary_union(cell_circles).intersection(cell_geom)
-            if not cell_cloud.is_empty:
-                cell_clouds_wkt[cell_idx] = cell_cloud.wkt
+    for cell_idx, cloud in enumerate(cell_coverage_clouds):
+        if not cloud.is_empty:
+            cell_clouds_wkt[cell_idx] = cloud.wkt
 
     # Step 2c: Store cell-cell intersection WKTs for visualization
     cell_intersections_wkt: Dict[str, str] = {}
@@ -1804,11 +1881,15 @@ def solve_czrc_ilp_for_cluster(
         )
 
     # Step 4: Prepare candidates using UNIFIED tier1 region (single grid)
-    # Get min spacing from all zones in all pairs
+    # Get aggregated spacing from all zones using config method
     all_zones = set()
     for pk in pair_keys:
         all_zones.update(pk.split("_"))
-    min_spacing = min(zone_spacings.get(z, 100.0) for z in all_zones)
+    # Use cross_zone_exclusion_method from config to aggregate spacings
+    exclusion_method = _get_cross_zone_exclusion_method(config)
+    min_spacing = _aggregate_zone_spacings(
+        zone_spacings, list(all_zones), exclusion_method
+    )
 
     candidates, _ = _prepare_candidates_for_ilp(
         unified_tier1, bh_candidates, overall_r_max, min_spacing, config

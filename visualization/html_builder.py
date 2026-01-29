@@ -481,6 +481,14 @@ def _add_single_combo_traces(
             fig, combo_key, third_pass_data, czrc_config
         )
 
+        # Add third pass test points (same as second pass - covers full Tier 1 + Tier 2)
+        # Third Pass reuses the same test points from cell processing
+        czrc_test_points = data.get("czrc_test_points", [])
+        if czrc_test_points:
+            ranges["third_pass_test_points"] = _add_third_pass_test_points_trace(
+                fig, combo_key, czrc_test_points, is_visible=False
+            )
+
     # Third Pass removed/added boreholes
     third_pass_removed = data.get("third_pass_removed", [])
     third_pass_added = data.get("third_pass_added", [])
@@ -968,15 +976,17 @@ def _add_third_pass_clouds_trace(
     if not cell_clouds_wkt:
         return (start_idx, len(fig.data))
 
-    opacity = czrc_config.get("czrc_cloud_opacity", 0.15)
+    # Cell clouds use separate opacity setting for better visibility
+    opacity = czrc_config.get("czrc_cell_cloud_opacity", 0.40)
 
-    # Colors for different cells (cycling through)
+    # Colors for different cells - same vibrant palette as zone clouds for visibility
     cell_colors = [
-        "rgba(255, 165, 0, {opacity})",  # Orange
-        "rgba(255, 192, 203, {opacity})",  # Pink
-        "rgba(144, 238, 144, {opacity})",  # Light green
-        "rgba(173, 216, 230, {opacity})",  # Light blue
-        "rgba(238, 130, 238, {opacity})",  # Violet
+        "rgba(255, 100, 100, {opacity})",  # Red (matches zone palette)
+        "rgba(100, 255, 100, {opacity})",  # Green
+        "rgba(100, 100, 255, {opacity})",  # Blue
+        "rgba(255, 255, 100, {opacity})",  # Yellow
+        "rgba(255, 100, 255, {opacity})",  # Magenta
+        "rgba(100, 255, 255, {opacity})",  # Cyan
     ]
 
     for cell_idx, (cell_name, cloud_wkt) in enumerate(cell_clouds_wkt.items()):
@@ -1024,7 +1034,8 @@ def _add_third_pass_intersections_trace(
     if not cell_intersections_wkt:
         return (start_idx, len(fig.data))
 
-    color = czrc_config.get("czrc_pairwise_color", "orange")
+    # Use same cyan color as zone pairwise for consistency
+    color = czrc_config.get("czrc_pairwise_color", "cyan")
     opacity = czrc_config.get("czrc_pairwise_opacity", 0.3)
     line_width = czrc_config.get("czrc_line_width", 2)
 
@@ -1041,7 +1052,7 @@ def _add_third_pass_intersections_trace(
                     y=y_coords,
                     mode="lines",
                     fill="toself",
-                    fillcolor=f"rgba(255, 165, 0, {opacity})",  # Orange
+                    fillcolor=f"rgba(0, 255, 255, {opacity})",  # Cyan - same as zone pairwise
                     line=dict(color=color, width=line_width, dash="dot"),
                     hoverinfo="text",
                     hovertext=f"Cell Intersection: {cells}",
@@ -1180,6 +1191,104 @@ def _add_third_pass_grid_trace(
             name=f"Cell Grid Tier 2 ({mult_str}× R_max)",
             legendgroup="third_pass_tier2",
             visible=False,  # Hidden by default, controlled by Third Pass Grid checkbox
+        )
+
+    return (start_idx, len(fig.data))
+
+
+def _add_third_pass_test_points_trace(
+    fig: go.Figure,
+    combo_key: str,  # noqa: ARG001 - kept for API consistency
+    czrc_test_points: List[Dict[str, Any]],
+    is_visible: bool = False,
+) -> Tuple[int, int]:
+    """
+    Add Third Pass test points as markers (Tier 1 + Tier 2 ring).
+
+    Third Pass uses the same test points as Second Pass (from cell processing).
+    These test points cover the full Tier 1 area (clipped to geometry) plus
+    sparse Tier 2 ring points, controlled by the same config settings.
+
+    Args:
+        fig: Plotly figure to add traces to
+        combo_key: Filter combination key for trace naming
+        czrc_test_points: List of {"x", "y", "zone"} test point coordinates
+        is_visible: Initial visibility state (default False - hidden)
+
+    Returns:
+        Tuple of (start_idx, end_idx) for the test points traces
+    """
+    from Gap_Analysis_EC7.config import CONFIG
+
+    ranges: Dict[str, Tuple[int, int]] = {}
+    start_idx = len(fig.data)
+
+    if not czrc_test_points:
+        return (start_idx, start_idx)
+
+    # Separate Tier 1 and Tier 2 ring test points (same logic as Second Pass)
+    tier1_pts = [tp for tp in czrc_test_points if tp.get("zone") != "tier2_ring"]
+    tier2_pts = [tp for tp in czrc_test_points if tp.get("zone") == "tier2_ring"]
+
+    print(
+        f"   🔶 _add_third_pass_test_points_trace: {len(tier1_pts)} Tier1, "
+        f"{len(tier2_pts)} Tier2 ring"
+    )
+
+    # Get colors from config (use orange tones for Third Pass to distinguish)
+    czrc_viz = CONFIG.get("visualization", {}).get("czrc_test_points", {})
+    tier1_color = czrc_viz.get("tier1_color", "rgba(255, 140, 0, 0.6)")  # Orange
+    tier2_color = czrc_viz.get("tier2_color", "rgba(255, 180, 50, 0.6)")  # Light orange
+    marker_size = czrc_viz.get("size", 4)
+
+    # Tier 1 test points trace (orange dots)
+    if tier1_pts:
+        fig.add_trace(
+            go.Scattergl(
+                x=[tp["x"] for tp in tier1_pts],
+                y=[tp["y"] for tp in tier1_pts],
+                mode="markers",
+                marker=dict(
+                    size=marker_size,
+                    color=tier1_color,
+                    symbol="circle",
+                ),
+                name=f"Third Pass Tier1 Test Points ({combo_key})",
+                visible=is_visible,
+                showlegend=False,
+                legendgroup="third_pass_test_points",
+                hovertemplate=(
+                    "<b>Tier 1 Test Point</b><br>"
+                    "Easting: %{x:,.0f}<br>"
+                    "Northing: %{y:,.0f}<br>"
+                    "<extra></extra>"
+                ),
+            )
+        )
+
+    # Tier 2 ring test points trace (lighter orange dots)
+    if tier2_pts:
+        fig.add_trace(
+            go.Scattergl(
+                x=[tp["x"] for tp in tier2_pts],
+                y=[tp["y"] for tp in tier2_pts],
+                mode="markers",
+                marker=dict(
+                    size=marker_size,
+                    color=tier2_color,
+                    symbol="circle",
+                ),
+                name=f"Third Pass Tier2 Ring Test Points ({combo_key})",
+                visible=is_visible,
+                showlegend=False,
+                legendgroup="third_pass_test_points",
+                hovertemplate=(
+                    "<b>Tier 2 Ring Test Point</b><br>"
+                    "Easting: %{x:,.0f}<br>"
+                    "Northing: %{y:,.0f}<br>"
+                    "<extra></extra>"
+                ),
+            )
         )
 
     return (start_idx, len(fig.data))
@@ -2483,6 +2592,15 @@ def _generate_sidebar_panels(
                 has_third_pass_grid = True
                 break
 
+    # Check if any combo has third pass test points data
+    has_third_pass_test_points = False
+    if coverage_trace_ranges:
+        for combo_ranges in coverage_trace_ranges.values():
+            third_test_points = combo_ranges.get("third_pass_test_points", (0, 0))
+            if third_test_points[0] != third_test_points[1]:
+                has_third_pass_test_points = True
+                break
+
     layers_panel_html = ""
     if (
         has_bgs
@@ -2497,6 +2615,7 @@ def _generate_sidebar_panels(
         or has_third_pass
         or has_third_pass_overlap
         or has_third_pass_grid
+        or has_third_pass_test_points
     ):
         layers_panel_html = _generate_layers_panel_html(
             bgs_layers=bgs_layers if has_bgs else None,
@@ -2514,6 +2633,7 @@ def _generate_sidebar_panels(
             has_third_pass=has_third_pass,
             has_third_pass_overlap=has_third_pass_overlap,
             has_third_pass_grid=has_third_pass_grid,
+            has_third_pass_test_points=has_third_pass_test_points,
         )
         _log_layers_panel(
             logger, has_satellite, has_bgs, bgs_layers, has_proposed, has_hexgrid

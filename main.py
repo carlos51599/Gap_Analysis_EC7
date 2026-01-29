@@ -69,20 +69,51 @@ def resolve_path(relative_path: str) -> str:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+def _get_testing_filter_combo_key() -> str:
+    """Generate combo key from testing mode filter settings.
+
+    Format: d{depth}stp{0|1}txt{0|1}txe{0|1} (no underscores for brevity)
+
+    Returns:
+        Compact combo key string (e.g., "d45spt0txt0txe0")
+    """
+    f = APP_CONFIG.testing_mode.filter
+    return (
+        f"d{f.min_depth}"
+        f"spt{int(f.require_spt)}"
+        f"txt{int(f.require_triaxial_total)}"
+        f"txe{int(f.require_triaxial_effective)}"
+    )
+
+
 def setup_logging() -> Tuple[logging.Logger, Path]:
     """Configure logging with file and console handlers.
 
     Returns:
         Tuple of (logger, run_log_folder) where run_log_folder is the path
         to store all logs for this run (main log + HiGHS solver output).
+
+    Folder naming convention:
+        - Testing mode: testing_{combo_key}_{MMDD}_{HHMM}
+          e.g., testing_d45spt0txt0txe0_0129_1028
+        - Production mode: production_{MMDD}_{HHMM}
+          e.g., production_0129_1028
     """
     log_dir = APP_CONFIG.file_paths.log_dir_path(WORKSPACE_ROOT)
     log_dir.mkdir(parents=True, exist_ok=True)
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Compact timestamp: MMDD_HHMM
+    timestamp = datetime.now().strftime("%m%d_%H%M")
+
+    # Build folder name based on mode
+    if APP_CONFIG.testing_mode.enabled:
+        combo_key = _get_testing_filter_combo_key()
+        folder_name = f"testing_{combo_key}_{timestamp}"
+    else:
+        folder_name = f"production_{timestamp}"
 
     # Create run-specific log folder for all logs (main + HiGHS)
-    run_log_folder = log_dir / f"ec7_analysis_{timestamp}"
+    run_log_folder = log_dir / folder_name
     run_log_folder.mkdir(parents=True, exist_ok=True)
 
     # Main log saved inside the run folder

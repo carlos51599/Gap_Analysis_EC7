@@ -248,6 +248,7 @@ def generate_layers_panel_html(
     has_third_pass: bool = False,
     has_third_pass_overlap: bool = False,
     has_third_pass_grid: bool = False,
+    has_third_pass_test_points: bool = False,
     panel_width: int = DEFAULT_LEFT_PANEL_WIDTH,
     vertical_gap: int = DEFAULT_PANEL_VERTICAL_GAP,
 ) -> str:
@@ -265,6 +266,7 @@ def generate_layers_panel_html(
     - Third Pass (removed/added from cell-cell CZRC optimization)
     - Cell Overlap (cell clouds and intersection regions)
     - Cell Grid (hexagonal candidate grid for third pass)
+    - Third Pass Test Points (test points used in cell-cell optimization)
     - Candidate grid (hexagonal grid overlay showing placement grid)
 
     Args:
@@ -281,6 +283,7 @@ def generate_layers_panel_html(
         has_third_pass: Whether third pass traces (cell-cell removed/added) are available
         has_third_pass_overlap: Whether third pass overlap traces (cell clouds/intersections) exist
         has_third_pass_grid: Whether third pass grid traces (cell-cell candidate grid) exist
+        has_third_pass_test_points: Whether third pass test points trace is available
         panel_width: Panel width in pixels
         vertical_gap: Vertical gap from previous panel
 
@@ -304,6 +307,7 @@ def generate_layers_panel_html(
         and not has_third_pass
         and not has_third_pass_overlap
         and not has_third_pass_grid
+        and not has_third_pass_test_points
     ):
         return ""
 
@@ -417,16 +421,6 @@ def generate_layers_panel_html(
     </label>"""
         )
 
-    # Add third pass checkbox (cell-cell CZRC removed/added boreholes) - unchecked by default
-    if has_third_pass:
-        checkbox_items.append(
-            """
-    <label style="display: flex; align-items: center; cursor: pointer; margin: 5px 0;">
-        <input type="checkbox" id="thirdPassCheckbox" style="margin-right: 8px;">
-        <span style="font-size: 11px;">Third Pass</span>
-    </label>"""
-        )
-
     # Add third pass overlap checkbox (cell clouds/intersections) - unchecked by default
     if has_third_pass_overlap:
         checkbox_items.append(
@@ -437,6 +431,16 @@ def generate_layers_panel_html(
     </label>"""
         )
 
+    # Add third pass checkbox (cell-cell CZRC removed/added boreholes) - unchecked by default
+    if has_third_pass:
+        checkbox_items.append(
+            """
+    <label style="display: flex; align-items: center; cursor: pointer; margin: 5px 0;">
+        <input type="checkbox" id="thirdPassCheckbox" style="margin-right: 8px;">
+        <span style="font-size: 11px;">Third Pass</span>
+    </label>"""
+        )
+
     # Add third pass grid checkbox (cell-cell candidate grid) - unchecked by default
     if has_third_pass_grid:
         checkbox_items.append(
@@ -444,6 +448,16 @@ def generate_layers_panel_html(
     <label style="display: flex; align-items: center; cursor: pointer; margin: 5px 0;">
         <input type="checkbox" id="thirdPassGridCheckbox" style="margin-right: 8px;">
         <span style="font-size: 11px;">Cell Grid</span>
+    </label>"""
+        )
+
+    # Add third pass test points checkbox - unchecked by default
+    if has_third_pass_test_points:
+        checkbox_items.append(
+            """
+    <label style="display: flex; align-items: center; cursor: pointer; margin: 5px 0;">
+        <input type="checkbox" id="thirdPassTestPointsCheckbox" style="margin-right: 8px;">
+        <span style="font-size: 11px;">Third Pass Test Points</span>
     </label>"""
         )
 
@@ -459,6 +473,7 @@ def generate_layers_panel_html(
         has_third_pass=has_third_pass,
         has_third_pass_overlap=has_third_pass_overlap,
         has_third_pass_grid=has_third_pass_grid,
+        has_third_pass_test_points=has_third_pass_test_points,
     )
 
     checkbox_html = f"""

@@ -40,6 +40,7 @@ def generate_layer_toggle_scripts(
     has_third_pass: bool = False,
     has_third_pass_overlap: bool = False,
     has_third_pass_grid: bool = False,
+    has_third_pass_test_points: bool = False,
 ) -> str:
     """
     Generate JavaScript for layer visibility toggles.
@@ -52,6 +53,10 @@ def generate_layer_toggle_scripts(
     - CZRC second pass checkbox (shows/hides CZRC removed/added traces)
     - CZRC zone overlap checkbox (shows/hides coverage clouds, pairwise, triple overlaps)
     - CZRC grid checkbox (shows/hides visibility boundary and hex candidate grid)
+    - Third pass checkbox (shows/hides cell-cell CZRC removed/added traces)
+    - Third pass overlap checkbox (shows/hides cell clouds and intersections)
+    - Third pass grid checkbox (shows/hides cell-cell candidate grid)
+    - Third pass test points checkbox (shows/hides test points used in cell-cell optimization)
     - Candidate grid checkbox (shows/hides hexagon overlay)
 
     Args:
@@ -65,6 +70,7 @@ def generate_layer_toggle_scripts(
         has_third_pass: Whether third pass traces (cell-cell CZRC) are available
         has_third_pass_overlap: Whether third pass overlap traces (cell clouds/intersections) are available
         has_third_pass_grid: Whether third pass grid traces (cell-cell candidate grid) are available
+        has_third_pass_test_points: Whether third pass test points trace is available
 
     Returns:
         JavaScript code block as string (without <script> tags)
@@ -382,6 +388,37 @@ def generate_layer_toggle_scripts(
     }
 """
 
+    # Generate Third Pass Test Points toggle script if needed
+    third_pass_test_points_script = ""
+    if has_third_pass_test_points:
+        third_pass_test_points_script = """
+    // Third Pass Test Points checkbox handler
+    const thirdPassTestPointsCheckbox = document.getElementById('thirdPassTestPointsCheckbox');
+    if (thirdPassTestPointsCheckbox) {
+        thirdPassTestPointsCheckbox.addEventListener('change', function() {
+            const plotDiv = document.querySelector('.plotly-graph-div');
+            if (!plotDiv) return;
+            
+            const traceIndices = [];
+            
+            if (typeof COVERAGE_TRACE_RANGES !== 'undefined' && typeof currentCoverageCombo !== 'undefined') {
+                const ranges = COVERAGE_TRACE_RANGES[currentCoverageCombo];
+                // Toggle third pass test points (cell-cell CZRC test points)
+                if (ranges && ranges.third_pass_test_points) {
+                    const [startIdx, endIdx] = ranges.third_pass_test_points;
+                    for (let i = startIdx; i < endIdx; i++) {
+                        traceIndices.push(i);
+                    }
+                }
+            }
+            
+            if (traceIndices.length > 0) {
+                Plotly.restyle(plotDiv, {'visible': this.checked}, traceIndices);
+            }
+        });
+    }
+"""
+
     return f"""
     // === LAYER STATE ===
     const bgsLayers = {bgs_layers_json};
@@ -508,6 +545,7 @@ def generate_layer_toggle_scripts(
 {third_pass_script}
 {third_pass_overlap_script}
 {third_pass_grid_script}
+{third_pass_test_points_script}
 """
 
 
