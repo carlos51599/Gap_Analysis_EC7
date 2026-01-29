@@ -121,7 +121,7 @@ CONFIG: Dict[str, Any] = {
         "enabled": True,  # Disabled for CZRC cross-worker cache testing
         # Fixed filter settings for testing (creates maximum gap scenario)
         "filter": {
-            "min_depth": 45,  # Depth >= x (creates good test gaps)
+            "min_depth": 50,  # Depth >= x (creates good test gaps)
             "require_spt": False,  # No SPT requirement
             "require_triaxial_total": False,  # No TxT requirement
             "require_triaxial_effective": False,  # No TxE requirement
@@ -764,6 +764,10 @@ CONFIG: Dict[str, Any] = {
         #
         # This is mathematically identical to zone-zone CZRC but operates on
         # cells within the same cluster (uniform spacing).
+        #
+        # ILP SETTINGS INHERITANCE: Third Pass automatically inherits ILP settings
+        # (exclusion_factor, coverage_target_pct, etc.) from czrc_optimization.ilp
+        # unless explicitly overridden in this section's "ilp" subsection.
         "cell_boundary_consolidation": {
             # Master switch for third pass cell-cell CZRC
             "enabled": True,
@@ -773,6 +777,9 @@ CONFIG: Dict[str, Any] = {
             "tier2_rmax_multiplier": 2.0,
             # Test point spacing multiplier (same as zone CZRC)
             "test_spacing_mult": 0.2,
+            # NOTE: ILP settings (exclusion_factor, coverage_target_pct, etc.)
+            # are inherited from czrc_optimization.ilp section automatically.
+            # Only add an "ilp" subsection here to override specific settings.
         },
     },
     # ═══════════════════════════════════════════════════════════════════════

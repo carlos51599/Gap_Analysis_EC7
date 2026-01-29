@@ -1303,6 +1303,11 @@ def check_and_split_large_cluster(
 
     # === THIRD PASS: Cell-Cell CZRC Boundary Consolidation ===
     cell_czrc_config = config.get("cell_boundary_consolidation", {})
+    # Inherit ILP config from parent if not explicitly set in cell_boundary_consolidation
+    # This ensures Third Pass respects exclusion_factor and other ILP settings from config
+    if "ilp" not in cell_czrc_config:
+        cell_czrc_config = dict(cell_czrc_config)  # Don't mutate original
+        cell_czrc_config["ilp"] = config.get("ilp", {})
     cell_czrc_enabled = cell_czrc_config.get("enabled", True)
     cell_czrc_stats: Dict[str, Any] = {"status": "disabled"}
 
@@ -1310,8 +1315,9 @@ def check_and_split_large_cluster(
     log.info(f"   🔗 Third pass: enabled={cell_czrc_enabled}, {len(cells)} cells")
 
     if cell_czrc_enabled and len(cells) > 1:
-        # Reuse already-aggregated test points from above
-        all_cell_test_points = all_czrc_test_points
+        # Use First Pass test points (all_test_points), NOT Second Pass test points
+        # Third Pass should filter First Pass test points to its Tier 1 area
+        # and generate fresh Tier 2 ring test points for its Tier 2 area
 
         # Get spacing from cluster (use overall_r_max as uniform spacing for cells)
         cell_spacing = cluster.get("overall_r_max", 100.0)
@@ -1325,7 +1331,7 @@ def check_and_split_large_cluster(
         ) = run_cell_czrc_pass(
             cell_wkts=cell_wkts,
             cell_boreholes=all_selected,
-            cell_test_points=all_cell_test_points,
+            cell_test_points=all_test_points,  # CRITICAL: Use First Pass test points
             spacing=cell_spacing,
             config=cell_czrc_config,
             zones_clip_geometry=zones_clip_geometry,
@@ -1471,6 +1477,7 @@ def solve_cell_cell_czrc(
     cell_test_points: List[Dict[str, Any]],
     spacing: float,
     config: Dict[str, Any],
+    zones_clip_geometry: Optional[BaseGeometry] = None,
     logger: Optional[logging.Logger] = None,
     highs_log_file: Optional[str] = None,
 ) -> Tuple[
@@ -1492,6 +1499,7 @@ def solve_cell_cell_czrc(
         cell_test_points: Test points from cell processing
         spacing: max_spacing_m (uniform for cells in same cluster)
         config: Cell CZRC config section
+        zones_clip_geometry: Optional geometry to clip test points to (actual zone shapefile)
         logger: Optional logger
         highs_log_file: Optional path to write HiGHS solver log
 
@@ -1518,6 +1526,23 @@ def solve_cell_cell_czrc(
             [],
             [],
             {"status": "skipped", "reason": "no_tier1_test_points"},
+        )
+
+    # Step 2b: Generate Tier 2 ring test points (sparse) for this cell-cell pair
+    t2_protection = config.get("tier2_test_point_protection", {})
+    t2_enabled = t2_protection.get("enabled", True)
+    t2_multiplier = t2_protection.get("tier2_test_spacing_multiplier", 3.0)
+    base_test_mult = config.get("test_spacing_mult", 0.2)
+
+    tier2_ring_test_points: List[Dict[str, Any]] = []
+    if t2_enabled:
+        tier2_ring_test_points = generate_tier2_ring_test_points(
+            tier1_region,
+            tier2_region,
+            r_max,
+            tier2_spacing_multiplier=t2_multiplier,
+            base_test_spacing_mult=base_test_mult,
+            clip_geometry=zones_clip_geometry,
         )
 
     # Step 3: Classify boreholes (REUSE)
@@ -1591,6 +1616,7 @@ def solve_cell_cell_czrc(
             "pair_key": pair_key,
             "tier1_test_points": len(tier1_test_points),
             "tier1_unsatisfied": len(tier1_unsatisfied) if tier1_unsatisfied else 0,
+            "tier2_ring_test_points": len(tier2_ring_test_points),
             "precovered": precovered_ct,
             "candidates": len(candidates),
             "bh_candidates": len(bh_candidates),
@@ -1600,6 +1626,11 @@ def solve_cell_cell_czrc(
             "added": len(added),
             "solve_time": elapsed,
             "ilp_stats": ilp_stats,
+            # Visualization data: test points used for this cell-cell pair
+            "viz_tier1_test_points": tier1_test_points,
+            "viz_tier2_ring_test_points": tier2_ring_test_points,
+            # Visualization data: existing boreholes (candidates + locked from Second Pass output)
+            "viz_existing_boreholes": bh_candidates + locked,
         },
     )
 
@@ -1713,8 +1744,9 @@ def run_cell_czrc_pass(
             cell_test_points,
             spacing,
             config,
-            logger,
-            highs_log_file,
+            zones_clip_geometry=zones_clip_geometry,
+            logger=logger,
+            highs_log_file=highs_log_file,
         )
 
         if stats.get("status") == "success":
@@ -1747,6 +1779,33 @@ def run_cell_czrc_pass(
             deduped_removed.append(bh)
             removed_positions.add(pos)
 
+    # Collect test points from all pairs for visualization (deduplicated)
+    all_third_pass_test_points: List[Dict[str, Any]] = []
+    seen_test_point_positions: set = set()
+    for ps in pair_stats:
+        # Tier 1 test points (from first pass, filtered to Third Pass Tier 1 area)
+        for tp in ps.get("viz_tier1_test_points", []):
+            pos = (tp["x"], tp["y"])
+            if pos not in seen_test_point_positions:
+                all_third_pass_test_points.append(tp)
+                seen_test_point_positions.add(pos)
+        # Tier 2 ring test points (freshly generated for Third Pass)
+        for tp in ps.get("viz_tier2_ring_test_points", []):
+            pos = (tp["x"], tp["y"])
+            if pos not in seen_test_point_positions:
+                all_third_pass_test_points.append(tp)
+                seen_test_point_positions.add(pos)
+
+    # Collect existing boreholes (from Second Pass output) for visualization
+    all_existing_boreholes: List[Dict[str, Any]] = []
+    seen_existing_positions: set = set()
+    for ps in pair_stats:
+        for bh in ps.get("viz_existing_boreholes", []):
+            pos = (bh["x"], bh["y"])
+            if pos not in seen_existing_positions:
+                all_existing_boreholes.append(bh)
+                seen_existing_positions.add(pos)
+
     elapsed = time.perf_counter() - start_time
 
     log.info(
@@ -1769,6 +1828,10 @@ def run_cell_czrc_pass(
             # Visualization data for Third Pass layers
             "cell_clouds_wkt": cell_clouds_wkt,
             "cell_intersections_wkt": cell_intersections_wkt,
+            # Third Pass test points (Tier 1 filtered + Tier 2 ring generated)
+            "third_pass_test_points": all_third_pass_test_points,
+            # Existing boreholes (from Second Pass output) for grey marker display
+            "third_pass_existing_boreholes": all_existing_boreholes,
         },
     )
 
@@ -2079,6 +2142,10 @@ def run_czrc_optimization(
     # Third pass visualization data
     all_cell_clouds_wkt: Dict[str, str] = {}  # Cell coverage clouds for viz
     all_cell_intersections_wkt: Dict[str, str] = {}  # Cell-cell intersections for viz
+    all_third_pass_test_points: List[Dict[str, Any]] = []  # Third pass test points
+    seen_third_pass_test_points: set = set()  # Track unique third pass test points
+    all_third_pass_existing: List[Dict[str, Any]] = []  # Third pass existing boreholes
+    seen_third_pass_existing: set = set()  # Track unique existing boreholes
     cluster_idx = 0  # For unique log file naming
 
     for cluster in clusters:
@@ -2121,6 +2188,18 @@ def run_czrc_optimization(
                 for pair_key, wkt_str in cell_ints.items():
                     prefixed_key = f"cluster_{cluster_idx}_{pair_key}"
                     all_cell_intersections_wkt[prefixed_key] = wkt_str
+                # Collect Third Pass test points (Tier 1 filtered + Tier 2 ring)
+                for tp in cell_czrc_stats.get("third_pass_test_points", []):
+                    pos = (tp["x"], tp["y"])
+                    if pos not in seen_third_pass_test_points:
+                        all_third_pass_test_points.append(tp)
+                        seen_third_pass_test_points.add(pos)
+                # Collect Third Pass existing boreholes (from Second Pass output)
+                for bh in cell_czrc_stats.get("third_pass_existing_boreholes", []):
+                    pos = (bh["x"], bh["y"])
+                    if pos not in seen_third_pass_existing:
+                        all_third_pass_existing.append(bh)
+                        seen_third_pass_existing.add(pos)
 
         # Collect unique first-pass candidates across all clusters
         for bh in cluster_stats.get("first_pass_candidates", []):
@@ -2191,13 +2270,18 @@ def run_czrc_optimization(
         "cell_wkts": all_cell_wkts,  # Cell boundaries from split clusters
         "third_pass_removed": all_third_pass_removed,  # Third pass removed for viz
         "third_pass_added": all_third_pass_added,  # Third pass added for viz
-        # Third pass visualization data (cell clouds and intersections)
+        # Third pass visualization data (cell clouds, intersections, test points, existing boreholes)
         "third_pass_data": (
             {
                 "cell_clouds_wkt": all_cell_clouds_wkt,
                 "cell_intersections_wkt": all_cell_intersections_wkt,
+                "third_pass_test_points": all_third_pass_test_points,
+                "third_pass_existing_boreholes": all_third_pass_existing,
             }
-            if all_cell_clouds_wkt or all_cell_intersections_wkt
+            if all_cell_clouds_wkt
+            or all_cell_intersections_wkt
+            or all_third_pass_test_points
+            or all_third_pass_existing
             else None
         ),
         "solve_time": elapsed,
