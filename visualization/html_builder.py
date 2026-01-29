@@ -1200,7 +1200,9 @@ def _add_third_pass_grid_trace(
             "first_pass_candidate_marker",
             {"size": 10, "color": "black", "symbol": "x", "line_width": 2},
         )
-        marker_color = _normalize_color_for_scattergl(marker_config.get("color", "black"))
+        marker_color = _normalize_color_for_scattergl(
+            marker_config.get("color", "black")
+        )
 
         fig.add_trace(
             go.Scattergl(

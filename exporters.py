@@ -194,6 +194,148 @@ def export_proposed_boreholes_to_csv(
     return exported_files
 
 
+def export_per_pass_boreholes_to_csv(
+    precomputed_coverages: Dict[str, Dict[str, Any]],
+    output_dir: Path,
+    is_testing_mode: bool,
+    log: logging.Logger = None,
+) -> Dict[str, str]:
+    """
+    Export per-pass borehole data to timestamped folder structure.
+
+    Folder naming:
+    - Testing mode: testing_d50spt0txt0txe0_MMDD_HHMM/
+    - Production mode: production_MMDD_HHMM/ with subfolders for each combo
+
+    Files per folder:
+    - first_pass.csv: Boreholes after Zone Decomposition
+    - second_pass.csv: Boreholes after CZRC per-cell optimization
+    - third_pass.csv: Boreholes after Cell-Cell boundary consolidation
+    - final_proposed.csv: Same data object used by HTML (result["proposed"])
+
+    Args:
+        precomputed_coverages: Dict mapping combo_key -> coverage result dict
+        output_dir: Base output directory
+        is_testing_mode: Whether running in testing mode (single combo)
+        log: Logger instance (optional)
+
+    Returns:
+        Dict mapping combo_key -> folder path
+    """
+    from datetime import datetime
+
+    if log is None:
+        log = logger
+
+    # Generate timestamp: MMDD_HHMM
+    timestamp = datetime.now().strftime("%m%d_%H%M")
+
+    exported_folders: Dict[str, str] = {}
+
+    for combo_key, coverage_data in precomputed_coverages.items():
+        # Skip if no proposed boreholes (nothing to export)
+        proposed = coverage_data.get("proposed", [])
+        if not proposed:
+            continue
+
+        # Create folder name based on mode
+        if is_testing_mode:
+            folder_name = f"testing_{combo_key}_{timestamp}"
+            combo_folder = output_dir / folder_name
+        else:
+            # Production mode: production_MMDD_HHMM/combo_key/
+            prod_folder = output_dir / f"production_{timestamp}"
+            combo_folder = prod_folder / combo_key
+
+        combo_folder.mkdir(parents=True, exist_ok=True)
+
+        # Extract per-pass data
+        first_pass_bhs = coverage_data.get("first_pass_boreholes", [])
+        second_pass_bhs = coverage_data.get("second_pass_boreholes", [])
+        # Third pass is final proposed (same as HTML)
+        third_pass_bhs = proposed
+
+        # Export first_pass.csv
+        _write_borehole_csv(
+            boreholes=first_pass_bhs,
+            csv_path=combo_folder / "first_pass.csv",
+            id_prefix="FP",
+            log=log,
+        )
+
+        # Export second_pass.csv
+        _write_borehole_csv(
+            boreholes=second_pass_bhs,
+            csv_path=combo_folder / "second_pass.csv",
+            id_prefix="SP",
+            log=log,
+        )
+
+        # Export third_pass.csv (Cell-Cell CZRC)
+        _write_borehole_csv(
+            boreholes=third_pass_bhs,
+            csv_path=combo_folder / "third_pass.csv",
+            id_prefix="TP",
+            log=log,
+        )
+
+        # Export final_proposed.csv (same data as HTML uses)
+        _write_borehole_csv(
+            boreholes=proposed,
+            csv_path=combo_folder / "final_proposed.csv",
+            id_prefix="PROP",
+            log=log,
+        )
+
+        exported_folders[combo_key] = str(combo_folder)
+
+        log.info(
+            f"   📁 {combo_folder.name}: "
+            f"P1={len(first_pass_bhs)}, P2={len(second_pass_bhs)}, "
+            f"P3={len(third_pass_bhs)}, Final={len(proposed)}"
+        )
+
+    return exported_folders
+
+
+def _write_borehole_csv(
+    boreholes: List[Dict[str, Any]],
+    csv_path: Path,
+    id_prefix: str,
+    log: logging.Logger,
+) -> None:
+    """
+    Write borehole list to CSV with standard format.
+
+    Args:
+        boreholes: List of {"x", "y", "coverage_radius"} dicts
+        csv_path: Path to output CSV file
+        id_prefix: Prefix for Location_ID (e.g., "FP", "SP", "TP", "PROP")
+        log: Logger instance
+    """
+    if not boreholes:
+        # Create empty CSV with headers only
+        df = pd.DataFrame(
+            columns=["Location_ID", "Easting", "Northing", "Coverage_Radius"]
+        )
+        df.to_csv(csv_path, index=False)
+        return
+
+    rows = []
+    for i, bh in enumerate(boreholes, start=1):
+        rows.append(
+            {
+                "Location_ID": f"{id_prefix}_{i:03d}",
+                "Easting": round(bh.get("x", 0), 2),
+                "Northing": round(bh.get("y", 0), 2),
+                "Coverage_Radius": round(bh.get("coverage_radius", 100.0), 1),
+            }
+        )
+
+    df = pd.DataFrame(rows)
+    df.to_csv(csv_path, index=False)
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 📷 PNG EXPORT HELPERS
 # ═══════════════════════════════════════════════════════════════════════════

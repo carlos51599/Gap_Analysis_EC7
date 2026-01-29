@@ -1301,6 +1301,16 @@ def check_and_split_large_cluster(
                 all_czrc_test_points.append(tp)
                 seen_test_points_for_viz.add(pos)
 
+    # Store Second Pass boreholes before Third Pass for per-pass CSV export
+    second_pass_boreholes = [
+        {
+            "x": bh["x"],
+            "y": bh["y"],
+            "coverage_radius": bh.get("coverage_radius", 100.0),
+        }
+        for bh in all_selected
+    ]
+
     # === THIRD PASS: Cell-Cell CZRC Boundary Consolidation ===
     cell_czrc_config = config.get("cell_boundary_consolidation", {})
     # Inherit ILP config from parent if not explicitly set in cell_boundary_consolidation
@@ -1376,6 +1386,8 @@ def check_and_split_large_cluster(
             # Aggregated from all cells for visualization (grey markers in Second Pass Grid)
             "first_pass_candidates": all_first_pass_candidates,
             "czrc_test_points": all_czrc_test_points,
+            # Second Pass boreholes (before Third Pass) for per-pass CSV export
+            "second_pass_boreholes": second_pass_boreholes,
         },
     )
 
@@ -2054,6 +2066,15 @@ def solve_czrc_ilp_for_cluster(
         "first_pass_candidates": bh_candidates,
         # CZRC test points for visualization (all points, not just unsatisfied)
         "czrc_test_points": tier1_test_points + tier2_ring_test_points,
+        # Second Pass output = selected (for direct ILP, this is final; for split, Third Pass comes after)
+        "second_pass_boreholes": [
+            {
+                "x": bh["x"],
+                "y": bh["y"],
+                "coverage_radius": bh.get("coverage_radius", min_spacing),
+            }
+            for bh in selected
+        ],
     }
     return selected, removed, added, stats
 
@@ -2147,6 +2168,10 @@ def run_czrc_optimization(
     seen_third_pass_test_points: set = set()  # Track unique third pass test points
     all_third_pass_existing: List[Dict[str, Any]] = []  # Third pass existing boreholes
     seen_third_pass_existing: set = set()  # Track unique existing boreholes
+    all_second_pass_boreholes: List[Dict[str, Any]] = (
+        []
+    )  # Second pass output (before third pass)
+    seen_second_pass: set = set()  # Track unique second pass boreholes by (x, y)
     cluster_idx = 0  # For unique log file naming
 
     for cluster in clusters:
@@ -2216,6 +2241,61 @@ def run_czrc_optimization(
                 all_czrc_test_points.append(tp)
                 seen_test_points.add(pos)
 
+        # Collect Second Pass boreholes (before Third Pass) for per-pass CSV export
+        sp_bhs = cluster_stats.get("second_pass_boreholes", [])
+        for bh in sp_bhs:
+            pos = (bh["x"], bh["y"])
+            if pos not in seen_second_pass:
+                all_second_pass_boreholes.append(bh)
+                seen_second_pass.add(pos)
+
+    # Compute true Second Pass output:
+    # = First Pass boreholes not removed by Second Pass
+    # + boreholes added by Second Pass (before Third Pass)
+    #
+    # For split clusters: second_pass_boreholes already captures this (all_selected before Third Pass)
+    # For unsplit clusters: second_pass_boreholes = CZRC output
+    # But we also need First Pass boreholes that weren't in any overlap region!
+    #
+    # Strategy: Build Second Pass from (First Pass - Second Pass removed) + Second Pass added
+    # Note: For split clusters, Third Pass removed/added are separate from Second Pass removed/added
+
+    # Build sets of removed/added from Second Pass only (exclude Third Pass changes)
+    second_pass_removed_positions: set = set()
+    for bh in all_removed:
+        pos = (bh["x"], bh["y"])
+        # Check if this removal came from Third Pass
+        is_third_pass = any(
+            (tp_bh["x"], tp_bh["y"]) == pos for tp_bh in all_third_pass_removed
+        )
+        if not is_third_pass:
+            second_pass_removed_positions.add(pos)
+
+    # Build Second Pass output: First Pass survivors + Second Pass additions
+    # Start with First Pass boreholes not removed by Second Pass
+    computed_second_pass: List[Dict[str, Any]] = []
+    for bh in first_pass_boreholes:
+        pos = (bh["x"], bh["y"])
+        if pos not in second_pass_removed_positions:
+            computed_second_pass.append(
+                {
+                    "x": bh["x"],
+                    "y": bh["y"],
+                    "coverage_radius": bh.get("coverage_radius", 100.0),
+                }
+            )
+
+    # Add Second Pass additions (from all_second_pass_boreholes that aren't in First Pass)
+    existing_second_pass_pos = {(bh["x"], bh["y"]) for bh in computed_second_pass}
+    for bh in all_second_pass_boreholes:
+        pos = (bh["x"], bh["y"])
+        if pos not in existing_second_pass_pos:
+            computed_second_pass.append(bh)
+            existing_second_pass_pos.add(pos)
+
+    # Replace the aggregated second pass with the computed one
+    all_second_pass_boreholes = computed_second_pass
+
     # Assemble result: first-pass + new boreholes (deduplicated), minus removed
     # Build set of removed positions for efficient filtering
     removed_positions = {(bh["x"], bh["y"]) for bh in all_removed}
@@ -2271,6 +2351,8 @@ def run_czrc_optimization(
         "cell_wkts": all_cell_wkts,  # Cell boundaries from split clusters
         "third_pass_removed": all_third_pass_removed,  # Third pass removed for viz
         "third_pass_added": all_third_pass_added,  # Third pass added for viz
+        # Second Pass boreholes (before Third Pass) for per-pass CSV export
+        "second_pass_boreholes": all_second_pass_boreholes,
         # Third pass visualization data (cell clouds, intersections, test points, existing boreholes)
         "third_pass_data": (
             {

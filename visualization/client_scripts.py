@@ -940,15 +940,25 @@ def generate_click_to_copy_script() -> str:
             if (data && data.points && data.points.length > 0) {
                 const point = data.points[0];
                 let clickText = '';
+                const traceName = point.data && point.data.name ? point.data.name : '';
+                const x = point.x !== undefined ? point.x.toFixed(1) : '?';
+                const y = point.y !== undefined ? point.y.toFixed(1) : '?';
                 
-                // Build text similar to hover
+                // Build text similar to hover - prioritize hovertext which has full formatting
                 if (point.hovertext) {
                     clickText = point.hovertext;
                 } else if (point.text) {
                     clickText = point.text;
+                } else if (lastHoverText) {
+                    // Use captured hover text which has proper formatting from hovertemplate
+                    clickText = lastHoverText;
                 } else if (point.customdata) {
                     const cd = point.customdata;
-                    if (Array.isArray(cd)) {
+                    // Check if this is a Proposed Boreholes trace (customdata is [borehole_number])
+                    if (traceName.includes('Proposed') && Array.isArray(cd) && cd.length === 1) {
+                        clickText = `Proposed Borehole #${cd[0]}\\nEasting: ${x}\\nNorthing: ${y}`;
+                    } else if (Array.isArray(cd)) {
+                        // Existing borehole format: [location_id, depth, has_spt, has_tx_total, has_tx_eff]
                         clickText = `Location: ${cd[0] || 'Unknown'}`;
                         if (cd.length > 1 && cd[1] !== null) {
                             clickText += `\\nDepth: ${cd[1]}m`;
@@ -965,14 +975,10 @@ def generate_click_to_copy_script() -> str:
                     } else {
                         clickText = String(cd);
                     }
-                } else if (lastHoverText) {
-                    clickText = lastHoverText;
                 } else {
-                    const x = point.x !== undefined ? point.x.toFixed(1) : '?';
-                    const y = point.y !== undefined ? point.y.toFixed(1) : '?';
                     clickText = `Easting: ${x}\\nNorthing: ${y}`;
-                    if (point.data && point.data.name) {
-                        clickText = `${point.data.name}\\n${clickText}`;
+                    if (traceName) {
+                        clickText = `${traceName}\\n${clickText}`;
                     }
                 }
                 

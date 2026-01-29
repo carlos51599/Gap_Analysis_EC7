@@ -449,9 +449,6 @@ def worker_process_filter_combination(
         # Include removed boreholes from consolidation (for visualization)
         consol_stats = optimization_stats.get("consolidation", {})
         removed_boreholes = consol_stats.get("removed_boreholes", [])
-        print(
-            f"🔍 DEBUG removed_boreholes: consol_stats.keys={list(consol_stats.keys())}, removed_count={len(removed_boreholes)}"
-        )
         if removed_boreholes:
             result["removed"] = [
                 {
@@ -576,6 +573,18 @@ def worker_process_filter_combination(
                                 f"   🔍 test_point[0]: x={tp_sample.get('x')}, y={tp_sample.get('y')}, r={tp_sample.get('required_radius')}"
                             )
 
+                        # Store First Pass boreholes before CZRC optimization
+                        first_pass_bhs = [
+                            {
+                                "x": bh["x"],
+                                "y": bh["y"],
+                                "coverage_radius": bh.get(
+                                    "coverage_radius", max_spacing
+                                ),
+                            }
+                            for bh in proposed
+                        ]
+
                         optimized_bhs, czrc_opt_stats = run_czrc_optimization(
                             first_pass_boreholes=proposed,
                             all_test_points=all_test_points,
@@ -629,6 +638,15 @@ def worker_process_filter_combination(
                         # Add third pass visualization data (cell clouds/intersections)
                         if third_pass_viz_data:
                             result["third_pass_data"] = third_pass_viz_data
+                        # Store first pass boreholes for per-pass CSV export
+                        if first_pass_bhs:
+                            result["first_pass_boreholes"] = first_pass_bhs
+                        # Store second pass boreholes for per-pass CSV export
+                        second_pass_bhs = czrc_opt_stats.get(
+                            "second_pass_boreholes", []
+                        )
+                        if second_pass_bhs:
+                            result["second_pass_boreholes"] = second_pass_bhs
 
                         print(
                             f"   ✅ CZRC Optimization: {czrc_opt_stats.get('original_count', 0)} → "

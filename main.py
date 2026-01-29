@@ -894,6 +894,7 @@ def _export_analysis_outputs(
     """Export CSV, GeoJSON (testing mode), and PNG outputs."""
     from Gap_Analysis_EC7.exporters import (
         export_proposed_boreholes_to_csv,
+        export_per_pass_boreholes_to_csv,
         export_coverage_polygons_to_geojson,
     )
 
@@ -902,7 +903,7 @@ def _export_analysis_outputs(
     # Log solver summary (first pass + consolidation results)
     _log_solver_summary(precomputed_coverages, logger)
 
-    # Step 5.6: Export CSV
+    # Step 5.6: Export CSV (legacy single file per combo)
     logger.info("\nSTEP 5.6: Exporting proposed borehole coordinates to CSV")
     step_start = time.perf_counter()
     _ = export_proposed_boreholes_to_csv(
@@ -911,8 +912,22 @@ def _export_analysis_outputs(
     timings["5.6_export_csv"] = time.perf_counter() - step_start
     logger.info(f"   ⏱️ Step 5.6 completed in {timings['5.6_export_csv']:.2f}s")
 
-    # Step 5.7: Export GeoJSON (testing mode only)
+    # Step 5.6b: Export per-pass CSV (timestamped folders)
     testing_enabled = config.get("testing_mode", {}).get("enabled", False)
+    logger.info("\nSTEP 5.6b: Exporting per-pass borehole CSVs")
+    step_start = time.perf_counter()
+    _ = export_per_pass_boreholes_to_csv(
+        precomputed_coverages=precomputed_coverages,
+        output_dir=output_dir,
+        is_testing_mode=testing_enabled,
+        log=logger,
+    )
+    timings["5.6b_export_per_pass_csv"] = time.perf_counter() - step_start
+    logger.info(
+        f"   ⏱️ Step 5.6b completed in {timings['5.6b_export_per_pass_csv']:.2f}s"
+    )
+
+    # Step 5.7: Export GeoJSON (testing mode only)
     if testing_enabled:
         logger.info("\nSTEP 5.7: Exporting coverage polygons to GeoJSON (testing mode)")
         step_start = time.perf_counter()
