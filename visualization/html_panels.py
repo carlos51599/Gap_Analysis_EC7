@@ -390,6 +390,15 @@ def generate_layers_panel_html(
     </label>"""
         )
 
+    # Add "Second Pass" subheading before Second Pass controls
+    if has_czrc_second_pass or has_czrc_grid or has_czrc_test_points:
+        checkbox_items.append(
+            """
+    <div style="font-size: 10px; font-weight: bold; color: #666; margin: 10px 0 5px 0; border-top: 1px solid #ddd; padding-top: 8px;">
+        Second Pass
+    </div>"""
+        )
+
     # Add Second Pass checkbox (removed/added from cross-zone optimization) - unchecked by default
     if has_czrc_second_pass:
         checkbox_items.append(
@@ -429,6 +438,15 @@ def generate_layers_panel_html(
         <input type="checkbox" id="thirdPassOverlapCheckbox" style="margin-right: 8px;">
         <span style="font-size: 11px;">Cell Overlap</span>
     </label>"""
+        )
+
+    # Add "Third Pass" subheading before Third Pass controls
+    if has_third_pass or has_third_pass_grid or has_third_pass_test_points:
+        checkbox_items.append(
+            """
+    <div style="font-size: 10px; font-weight: bold; color: #666; margin: 10px 0 5px 0; border-top: 1px solid #ddd; padding-top: 8px;">
+        Third Pass
+    </div>"""
         )
 
     # Add third pass checkbox (cell-cell CZRC removed/added boreholes) - unchecked by default
