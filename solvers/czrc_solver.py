@@ -1213,24 +1213,38 @@ def check_and_split_large_cluster(
             deduped_added.append(bh)
             added_positions.add(pos)
 
+    # Aggregate first_pass_candidates from all cell stats for visualization
+    # These are the Tier 1 boreholes that were used as ILP candidates in each cell
+    all_first_pass_candidates: List[Dict[str, Any]] = []
+    seen_candidates: set = set()
+    for cs in cell_stats:
+        for bh in cs.get("first_pass_candidates", []):
+            pos = (bh["x"], bh["y"])
+            if pos not in seen_candidates:
+                all_first_pass_candidates.append(bh)
+                seen_candidates.add(pos)
+
+    # Aggregate czrc_test_points from all cell stats for visualization
+    all_czrc_test_points: List[Dict[str, Any]] = []
+    seen_test_points_for_viz: set = set()
+    for cs in cell_stats:
+        for tp in cs.get("czrc_test_points", []):
+            pos = (tp["x"], tp["y"])
+            if pos not in seen_test_points_for_viz:
+                all_czrc_test_points.append(tp)
+                seen_test_points_for_viz.add(pos)
+
     # === THIRD PASS: Cell-Cell CZRC Boundary Consolidation ===
     cell_czrc_config = config.get("cell_boundary_consolidation", {})
     cell_czrc_enabled = cell_czrc_config.get("enabled", True)
     cell_czrc_stats: Dict[str, Any] = {"status": "disabled"}
-    
+
     # Debug: Check third pass conditions
     log.info(f"   🔗 Third pass: enabled={cell_czrc_enabled}, {len(cells)} cells")
 
     if cell_czrc_enabled and len(cells) > 1:
-        # Collect test points from all cell stats (for ILP constraints)
-        all_cell_test_points: List[Dict[str, Any]] = []
-        seen_test_points: set = set()
-        for cs in cell_stats:
-            for tp in cs.get("czrc_test_points", []):
-                pos = (tp["x"], tp["y"])
-                if pos not in seen_test_points:
-                    all_cell_test_points.append(tp)
-                    seen_test_points.add(pos)
+        # Reuse already-aggregated test points from above
+        all_cell_test_points = all_czrc_test_points
 
         # Get spacing from cluster (use overall_r_max as uniform spacing for cells)
         cell_spacing = cluster.get("overall_r_max", 100.0)
@@ -1285,6 +1299,9 @@ def check_and_split_large_cluster(
             "cell_stats": cell_stats,
             "selected_count": len(all_selected),
             "cell_czrc_stats": cell_czrc_stats,  # Third pass stats
+            # Aggregated from all cells for visualization (grey markers in Second Pass Grid)
+            "first_pass_candidates": all_first_pass_candidates,
+            "czrc_test_points": all_czrc_test_points,
         },
     )
 
@@ -1322,9 +1339,11 @@ def detect_cell_adjacencies(
     )
 
     grid_spacing = spacing * test_spacing_mult
-    
+
     log = logger or _logger  # Use module logger as fallback
-    log.info(f"   🔍 Cell adjacency detection: {len(cell_geometries)} cells, spacing={spacing}m")
+    log.info(
+        f"   🔍 Cell adjacency detection: {len(cell_geometries)} cells, spacing={spacing}m"
+    )
 
     # Step 1: Compute coverage cloud for each cell
     clouds: List[BaseGeometry] = []
@@ -1541,18 +1560,22 @@ def run_cell_czrc_pass(
 
     # Step 2: Detect cell adjacencies
     test_spacing_mult = config.get("test_spacing_mult", 0.2)
-    
+
     # Debug: log cell geometry info
     if log:
         for idx, geom in enumerate(cell_geometries):
-            log.info(f"      📐 Cell {idx}: area={geom.area:.0f}m², bounds={geom.bounds}")
-    
+            log.info(
+                f"      📐 Cell {idx}: area={geom.area:.0f}m², bounds={geom.bounds}"
+            )
+
     adjacencies = detect_cell_adjacencies(
         cell_geometries, spacing, test_spacing_mult, logger
     )
-    
+
     if log:
-        log.info(f"   🔗 detect_cell_adjacencies found {len(adjacencies)} pairs from {len(cell_geometries)} cells with spacing={spacing}m")
+        log.info(
+            f"   🔗 detect_cell_adjacencies found {len(adjacencies)} pairs from {len(cell_geometries)} cells with spacing={spacing}m"
+        )
 
     if not adjacencies:
         return cell_boreholes, [], [], {"status": "skipped", "reason": "no_adjacencies"}
@@ -1560,6 +1583,30 @@ def run_cell_czrc_pass(
     log.info(
         f"   🔗 Cell CZRC (Third Pass): Processing {len(adjacencies)} cell-cell pairs"
     )
+
+    # Step 2b: Compute cell coverage clouds for visualization
+    cell_clouds_wkt: Dict[int, str] = {}
+    for cell_idx, cell_geom in enumerate(cell_geometries):
+        # Find boreholes within this cell
+        cell_bhs = [
+            bh for bh in cell_boreholes if cell_geom.contains(Point(bh["x"], bh["y"]))
+        ]
+        if cell_bhs:
+            # Create union of borehole coverage circles clipped to cell
+            cell_circles = [
+                Point(bh["x"], bh["y"]).buffer(bh.get("coverage_radius", spacing))
+                for bh in cell_bhs
+            ]
+            cell_cloud = unary_union(cell_circles).intersection(cell_geom)
+            if not cell_cloud.is_empty:
+                cell_clouds_wkt[cell_idx] = cell_cloud.wkt
+
+    # Step 2c: Store cell-cell intersection WKTs for visualization
+    cell_intersections_wkt: Dict[str, str] = {}
+    for cell_i, cell_j, czrc_region in adjacencies:
+        pair_key = f"Cell_{cell_i}_Cell_{cell_j}"
+        if not czrc_region.is_empty:
+            cell_intersections_wkt[pair_key] = czrc_region.wkt
 
     # Step 3: Process each adjacent pair
     all_removed: List[Dict[str, Any]] = []
@@ -1576,8 +1623,10 @@ def run_cell_czrc_pass(
                 highs_log_folder,
                 f"third_c{cluster_idx + 1:02d}_p{pair_idx + 1:02d}.log",
             )
-        
-        log.info(f"      🔄 Cell_{cell_i} ↔ Cell_{cell_j} (pair {pair_idx+1}/{len(adjacencies)})")
+
+        log.info(
+            f"      🔄 Cell_{cell_i} ↔ Cell_{cell_j} (pair {pair_idx+1}/{len(adjacencies)})"
+        )
 
         selected, removed, added, stats = solve_cell_cell_czrc(
             cell_i,
@@ -1592,20 +1641,23 @@ def run_cell_czrc_pass(
         )
 
         if stats.get("status") == "success":
-            # FIX: Instead of replacing current_boreholes with selected (which only contains 
+            # FIX: Instead of replacing current_boreholes with selected (which only contains
             # boreholes from this pair's Tier1+Tier2), we need to:
             # 1. Remove the 'removed' boreholes from current_boreholes
             # 2. Add the 'added' boreholes to current_boreholes
             removed_positions = {(bh["x"], bh["y"]) for bh in removed}
             current_boreholes = [
-                bh for bh in current_boreholes 
+                bh
+                for bh in current_boreholes
                 if (bh["x"], bh["y"]) not in removed_positions
             ]
             current_boreholes.extend(added)
             all_removed.extend(removed)
             all_added.extend(added)
         else:
-            log.info(f"      ⏭️ Pair {pair_idx+1}: {stats.get('status')}, reason={stats.get('reason')}")
+            log.info(
+                f"      ⏭️ Pair {pair_idx+1}: {stats.get('status')}, reason={stats.get('reason')}"
+            )
 
         pair_stats.append(stats)
 
@@ -1637,6 +1689,9 @@ def run_cell_czrc_pass(
             "total_added": len(all_added),
             "pair_stats": pair_stats,
             "solve_time": elapsed,
+            # Visualization data for Third Pass layers
+            "cell_clouds_wkt": cell_clouds_wkt,
+            "cell_intersections_wkt": cell_intersections_wkt,
         },
     )
 
@@ -1938,6 +1993,11 @@ def run_czrc_optimization(
     seen_candidates: set = set()  # Track unique first-pass candidates by (x, y)
     seen_test_points: set = set()  # Track unique test points by (x, y)
     all_cell_wkts: List[str] = []  # Collect cell geometries from split clusters
+    all_third_pass_removed: List[Dict[str, Any]] = []  # Third pass removed boreholes
+    all_third_pass_added: List[Dict[str, Any]] = []  # Third pass added boreholes
+    # Third pass visualization data
+    all_cell_clouds_wkt: Dict[str, str] = {}  # Cell coverage clouds for viz
+    all_cell_intersections_wkt: Dict[str, str] = {}  # Cell-cell intersections for viz
     cluster_idx = 0  # For unique log file naming
 
     for cluster in clusters:
@@ -1964,6 +2024,22 @@ def run_czrc_optimization(
         # Collect cell geometries from split clusters (for visualization)
         if cluster_stats.get("was_split", False):
             all_cell_wkts.extend(cluster_stats.get("cell_wkts", []))
+            # Collect third pass data from split clusters
+            cell_czrc_stats = cluster_stats.get("cell_czrc_stats", {})
+            if cell_czrc_stats.get("status") == "success":
+                all_third_pass_removed.extend(
+                    cell_czrc_stats.get("third_pass_removed", [])
+                )
+                all_third_pass_added.extend(cell_czrc_stats.get("third_pass_added", []))
+                # Collect visualization data with cluster prefix to avoid key collisions
+                cell_clouds = cell_czrc_stats.get("cell_clouds_wkt", {})
+                for cell_key, wkt_str in cell_clouds.items():
+                    prefixed_key = f"cluster_{cluster_idx}_{cell_key}"
+                    all_cell_clouds_wkt[prefixed_key] = wkt_str
+                cell_ints = cell_czrc_stats.get("cell_intersections_wkt", {})
+                for pair_key, wkt_str in cell_ints.items():
+                    prefixed_key = f"cluster_{cluster_idx}_{pair_key}"
+                    all_cell_intersections_wkt[prefixed_key] = wkt_str
 
         # Collect unique first-pass candidates across all clusters
         for bh in cluster_stats.get("first_pass_candidates", []):
@@ -2032,6 +2108,17 @@ def run_czrc_optimization(
         "first_pass_candidates": all_first_pass_candidates,
         "czrc_test_points": all_czrc_test_points,  # For visualization
         "cell_wkts": all_cell_wkts,  # Cell boundaries from split clusters
+        "third_pass_removed": all_third_pass_removed,  # Third pass removed for viz
+        "third_pass_added": all_third_pass_added,  # Third pass added for viz
+        # Third pass visualization data (cell clouds and intersections)
+        "third_pass_data": (
+            {
+                "cell_clouds_wkt": all_cell_clouds_wkt,
+                "cell_intersections_wkt": all_cell_intersections_wkt,
+            }
+            if all_cell_clouds_wkt or all_cell_intersections_wkt
+            else None
+        ),
         "solve_time": elapsed,
         "stall_detection": stall_detection,  # Aggregated gap stats
     }

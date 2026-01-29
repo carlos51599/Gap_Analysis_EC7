@@ -605,6 +605,12 @@ def worker_process_filter_combination(
                         )
                         czrc_test_points = czrc_opt_stats.get("czrc_test_points", [])
                         czrc_cell_wkts = czrc_opt_stats.get("cell_wkts", [])
+                        # Extract third pass data for Cell-Cell CZRC visualization
+                        third_pass_removed = czrc_opt_stats.get(
+                            "third_pass_removed", []
+                        )
+                        third_pass_added = czrc_opt_stats.get("third_pass_added", [])
+                        third_pass_viz_data = czrc_opt_stats.get("third_pass_data")
                         if czrc_removed:
                             result["czrc_removed"] = czrc_removed
                         if czrc_added:
@@ -617,6 +623,14 @@ def worker_process_filter_combination(
                             result["czrc_test_points"] = czrc_test_points
                         if czrc_cell_wkts:
                             result["czrc_cell_wkts"] = czrc_cell_wkts
+                        # Add third pass data to result for visualization
+                        if third_pass_removed:
+                            result["third_pass_removed"] = third_pass_removed
+                        if third_pass_added:
+                            result["third_pass_added"] = third_pass_added
+                        # Add third pass visualization data (cell clouds/intersections)
+                        if third_pass_viz_data:
+                            result["third_pass_data"] = third_pass_viz_data
 
                         print(
                             f"   ✅ CZRC Optimization: {czrc_opt_stats.get('original_count', 0)} → "

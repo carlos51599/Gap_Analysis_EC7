@@ -455,6 +455,63 @@ def _add_single_combo_traces(
             )
         )
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # 🔶 THIRD PASS (Cell-Cell CZRC) VISUALIZATION
+    # ═══════════════════════════════════════════════════════════════════════
+    # Shows cell clouds, intersections, grid, and removed/added boreholes
+    # from the cell-cell CZRC third pass optimization
+    third_pass_data = data.get("third_pass_data")
+    if third_pass_data:
+        from Gap_Analysis_EC7.config import CONFIG
+
+        czrc_config = CONFIG.get("border_consolidation", {})
+
+        # Add cell coverage clouds (per-cell coverage areas) - hidden by default
+        ranges["third_pass_clouds"] = _add_third_pass_clouds_trace(
+            fig, combo_key, third_pass_data, czrc_config
+        )
+
+        # Add cell-cell intersection regions - hidden by default
+        ranges["third_pass_intersections"] = _add_third_pass_intersections_trace(
+            fig, combo_key, third_pass_data, czrc_config
+        )
+
+        # Add cell-cell candidate grid
+        ranges["third_pass_grid"] = _add_third_pass_grid_trace(
+            fig, combo_key, third_pass_data, czrc_config
+        )
+
+    # Third Pass removed/added boreholes
+    third_pass_removed = data.get("third_pass_removed", [])
+    third_pass_added = data.get("third_pass_added", [])
+    if third_pass_removed or third_pass_added:
+        # Third Pass removed boreholes (red) - initially hidden
+        if third_pass_removed:
+            ranges.update(
+                _add_removed_traces(
+                    fig,
+                    combo_key,
+                    third_pass_removed,
+                    False,
+                    max_spacing,
+                    zones_gdf,
+                    trace_prefix="third_pass_",
+                )
+            )
+        # Third Pass added boreholes (green) - initially hidden
+        if third_pass_added:
+            ranges.update(
+                _add_added_traces(
+                    fig,
+                    combo_key,
+                    third_pass_added,
+                    False,
+                    max_spacing,
+                    zones_gdf,
+                    trace_prefix="third_pass_",
+                )
+            )
+
     return ranges
 
 
@@ -890,6 +947,242 @@ def _add_czrc_test_points_trace(
     ranges["czrc_test_points"] = (start_idx, len(fig.data))
 
     return ranges
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 🔶 THIRD PASS (Cell-Cell CZRC) TRACE FUNCTIONS
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _add_third_pass_clouds_trace(
+    fig: go.Figure,
+    combo_key: str,  # noqa: ARG001 - kept for API consistency
+    third_pass_data: Dict[str, Any],
+    czrc_config: Dict[str, Any],
+) -> Tuple[int, int]:
+    """Add cell coverage cloud fills (light fill showing per-cell reachability)."""
+    from shapely import wkt
+
+    start_idx = len(fig.data)
+    cell_clouds_wkt = third_pass_data.get("cell_clouds_wkt", {})
+    if not cell_clouds_wkt:
+        return (start_idx, len(fig.data))
+
+    opacity = czrc_config.get("czrc_cloud_opacity", 0.15)
+
+    # Colors for different cells (cycling through)
+    cell_colors = [
+        "rgba(255, 165, 0, {opacity})",  # Orange
+        "rgba(255, 192, 203, {opacity})",  # Pink
+        "rgba(144, 238, 144, {opacity})",  # Light green
+        "rgba(173, 216, 230, {opacity})",  # Light blue
+        "rgba(238, 130, 238, {opacity})",  # Violet
+    ]
+
+    for cell_idx, (cell_name, cloud_wkt) in enumerate(cell_clouds_wkt.items()):
+        try:
+            cloud_geom = wkt.loads(cloud_wkt)
+            if cloud_geom.is_empty:
+                continue
+            x_coords, y_coords = _extract_polygon_coords(cloud_geom)
+            color_tmpl = cell_colors[cell_idx % len(cell_colors)]
+            fill_color = color_tmpl.format(opacity=opacity)
+            line_color = color_tmpl.format(opacity=0.5)
+            fig.add_trace(
+                go.Scattergl(
+                    x=x_coords,
+                    y=y_coords,
+                    mode="lines",
+                    fill="toself",
+                    fillcolor=fill_color,
+                    line=dict(color=line_color, width=1),
+                    hoverinfo="text",
+                    hovertext=f"Cell Cloud: {cell_name}",
+                    name=f"Cell Cloud: {cell_name}",
+                    legendgroup="third_pass_clouds",
+                    showlegend=False,
+                    visible=False,  # Hidden by default
+                )
+            )
+        except Exception:  # noqa: BLE001 - WKT parsing can fail
+            pass
+
+    return (start_idx, len(fig.data))
+
+
+def _add_third_pass_intersections_trace(
+    fig: go.Figure,
+    combo_key: str,  # noqa: ARG001 - kept for API consistency
+    third_pass_data: Dict[str, Any],
+    czrc_config: Dict[str, Any],
+) -> Tuple[int, int]:
+    """Add cell-cell intersection regions (overlap between adjacent cells)."""
+    from shapely import wkt
+
+    start_idx = len(fig.data)
+    cell_intersections_wkt = third_pass_data.get("cell_intersections_wkt", {})
+    if not cell_intersections_wkt:
+        return (start_idx, len(fig.data))
+
+    color = czrc_config.get("czrc_pairwise_color", "orange")
+    opacity = czrc_config.get("czrc_pairwise_opacity", 0.3)
+    line_width = czrc_config.get("czrc_line_width", 2)
+
+    for pair_key, region_wkt in cell_intersections_wkt.items():
+        try:
+            region_geom = wkt.loads(region_wkt)
+            if region_geom.is_empty:
+                continue
+            x_coords, y_coords = _extract_polygon_coords(region_geom)
+            cells = pair_key.replace("_", " + ")
+            fig.add_trace(
+                go.Scattergl(
+                    x=x_coords,
+                    y=y_coords,
+                    mode="lines",
+                    fill="toself",
+                    fillcolor=f"rgba(255, 165, 0, {opacity})",  # Orange
+                    line=dict(color=color, width=line_width, dash="dot"),
+                    hoverinfo="text",
+                    hovertext=f"Cell Intersection: {cells}",
+                    name=f"Cell CZRC: {cells}",
+                    legendgroup="third_pass_intersections",
+                    showlegend=False,
+                    visible=False,  # Hidden by default
+                )
+            )
+        except Exception:  # noqa: BLE001 - WKT parsing can fail
+            pass
+
+    return (start_idx, len(fig.data))
+
+
+def _add_third_pass_grid_trace(
+    fig: go.Figure,
+    combo_key: str,  # noqa: ARG001 - kept for API consistency
+    third_pass_data: Dict[str, Any],
+    czrc_config: Dict[str, Any],  # noqa: ARG001 - kept for API consistency
+) -> Tuple[int, int]:
+    """
+    Add hexagonal candidate grid for cell-cell CZRC regions (third pass).
+
+    Generates hexagon grid on-the-fly from cell_intersections_wkt data,
+    similar to how _add_czrc_candidate_grid_trace works for second pass.
+
+    The grid is generated within the unified cell-cell intersection regions
+    (buffered by tier1 multiplier × spacing for consistency with solver).
+    """
+    from shapely import wkt as shapely_wkt
+    from shapely.geometry import Polygon
+    from shapely.ops import unary_union
+
+    from Gap_Analysis_EC7.config import CONFIG
+    from Gap_Analysis_EC7.solvers.optimization_geometry import (
+        generate_hexagon_grid_polygons,
+    )
+    from Gap_Analysis_EC7.visualization.plotly_traces import build_hexagon_grid_trace
+
+    start_idx = len(fig.data)
+
+    # Get cell intersection WKTs (these are the CZRC regions for third pass)
+    cell_intersections = third_pass_data.get("cell_intersections_wkt", {})
+    if not cell_intersections:
+        return (start_idx, len(fig.data))
+
+    # Parse all intersection geometries and unify them
+    intersection_geoms = []
+    for _pair_key, wkt_str in cell_intersections.items():
+        try:
+            geom = shapely_wkt.loads(wkt_str)
+            if not geom.is_empty:
+                intersection_geoms.append(geom)
+        except Exception:  # noqa: BLE001
+            pass
+
+    if not intersection_geoms:
+        return (start_idx, len(fig.data))
+
+    # Unify all intersection regions
+    unified_czrc = unary_union(intersection_geoms)
+    if unified_czrc.is_empty:
+        return (start_idx, len(fig.data))
+
+    # Get spacing and tier1 multiplier from config
+    czrc_cfg = CONFIG.get("czrc_solver", {})
+    tier1_mult = czrc_cfg.get("tier1_rmax_multiplier", 1.0)
+
+    # Estimate spacing from cell_intersections (use first available)
+    # For cells, we use the cluster spacing which is typically the max zone spacing
+    ilp_cfg = CONFIG.get("ilp_solver", {})
+    spacing_mult = ilp_cfg.get("candidate_spacing_mult", 0.5)
+
+    # Get default spacing from the third pass data or config
+    default_spacing = czrc_cfg.get("default_spacing", 100.0)
+    grid_spacing = default_spacing * spacing_mult
+
+    # Buffer the unified CZRC region to Tier 1 (CZRC + tier1_mult × spacing)
+    tier1_region = unified_czrc.buffer(tier1_mult * default_spacing)
+    if tier1_region.is_empty:
+        return (start_idx, len(fig.data))
+
+    # Generate hexagon grid within Tier 1
+    search_bounds = tier1_region.bounds
+    grid_origin = (search_bounds[0], search_bounds[1])
+
+    hexagons: List[Polygon] = generate_hexagon_grid_polygons(
+        bounds=search_bounds,
+        grid_spacing=grid_spacing,
+        clip_geometry=tier1_region,
+        origin=grid_origin,
+        logger=None,
+    )
+
+    if not hexagons:
+        return (start_idx, len(fig.data))
+
+    # Get third pass grid styling (use distinct color from second pass)
+    third_pass_style = CONFIG.get("visualization", {}).get("third_pass_grid", {})
+    grid_color = third_pass_style.get("color", "rgba(128, 0, 128, 0.55)")  # Purple
+    grid_line_width = third_pass_style.get("line_width", 0.5)
+
+    # Build unified hexagon grid trace
+    hexgrid_trace = build_hexagon_grid_trace(
+        hexagon_polygons=hexagons,
+        grid_color=grid_color,
+        grid_line_width=grid_line_width,
+        visible=False,  # Hidden by default, controlled by Third Pass Grid checkbox
+        name=f"Third Pass Grid ({len(hexagons)} cells)",
+    )
+
+    if hexgrid_trace:
+        fig.add_trace(hexgrid_trace)
+
+    # Add Tier 2 visibility boundary line (same as Second Pass Grid has)
+    tier2_mult = czrc_cfg.get("tier2_rmax_multiplier", 2.0)
+    tier2_region = unified_czrc.buffer(tier2_mult * default_spacing)
+
+    if tier2_region is not None and not tier2_region.is_empty:
+        # Get Tier 2 styling from config (same as CZRC uses)
+        vis_cfg = CONFIG.get("visualization", {})
+        ilp_style = vis_cfg.get("czrc_ilp_visibility", {})
+        tier2_color = ilp_style.get("tier2_color", "rgba(138, 43, 226, 0.8)")
+        tier2_dash = ilp_style.get("tier2_dash", "longdash")
+        tier2_line_width = ilp_style.get("line_width", 2)
+
+        # Format multiplier for legend (remove trailing zeros)
+        mult_str = f"{tier2_mult:g}"
+        _add_boundary_trace(
+            fig=fig,
+            geometry=tier2_region,
+            color=tier2_color,
+            dash=tier2_dash,
+            line_width=tier2_line_width,
+            name=f"Cell Grid Tier 2 ({mult_str}× R_max)",
+            legendgroup="third_pass_tier2",
+            visible=False,  # Hidden by default, controlled by Third Pass Grid checkbox
+        )
+
+    return (start_idx, len(fig.data))
 
 
 def _add_hexgrid_trace(
@@ -2158,6 +2451,38 @@ def _generate_sidebar_panels(
                 has_czrc_grid = True
                 break
 
+    # Check if any combo has third pass data (cell-cell CZRC removed/added)
+    has_third_pass = False
+    if coverage_trace_ranges:
+        for combo_ranges in coverage_trace_ranges.values():
+            third_removed = combo_ranges.get("third_pass_removed_buffers", (0, 0))
+            third_added = combo_ranges.get("third_pass_added_buffers", (0, 0))
+            if third_removed[0] != third_removed[1] or third_added[0] != third_added[1]:
+                has_third_pass = True
+                break
+
+    # Check if any combo has third pass overlap data (cell clouds/intersections)
+    has_third_pass_overlap = False
+    if coverage_trace_ranges:
+        for combo_ranges in coverage_trace_ranges.values():
+            third_clouds = combo_ranges.get("third_pass_clouds", (0, 0))
+            third_intersections = combo_ranges.get("third_pass_intersections", (0, 0))
+            if (
+                third_clouds[0] != third_clouds[1]
+                or third_intersections[0] != third_intersections[1]
+            ):
+                has_third_pass_overlap = True
+                break
+
+    # Check if any combo has third pass grid data (cell-cell candidate grid)
+    has_third_pass_grid = False
+    if coverage_trace_ranges:
+        for combo_ranges in coverage_trace_ranges.values():
+            third_grid = combo_ranges.get("third_pass_grid", (0, 0))
+            if third_grid[0] != third_grid[1]:
+                has_third_pass_grid = True
+                break
+
     layers_panel_html = ""
     if (
         has_bgs
@@ -2169,6 +2494,9 @@ def _generate_sidebar_panels(
         or has_czrc_test_points
         or has_czrc_zone_overlap
         or has_czrc_grid
+        or has_third_pass
+        or has_third_pass_overlap
+        or has_third_pass_grid
     ):
         layers_panel_html = _generate_layers_panel_html(
             bgs_layers=bgs_layers if has_bgs else None,
@@ -2183,6 +2511,9 @@ def _generate_sidebar_panels(
             has_czrc_test_points=has_czrc_test_points,
             has_czrc_zone_overlap=has_czrc_zone_overlap,
             has_czrc_grid=has_czrc_grid,
+            has_third_pass=has_third_pass,
+            has_third_pass_overlap=has_third_pass_overlap,
+            has_third_pass_grid=has_third_pass_grid,
         )
         _log_layers_panel(
             logger, has_satellite, has_bgs, bgs_layers, has_proposed, has_hexgrid

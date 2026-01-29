@@ -245,6 +245,9 @@ def generate_layers_panel_html(
     has_czrc_test_points: bool = False,
     has_czrc_zone_overlap: bool = False,
     has_czrc_grid: bool = False,
+    has_third_pass: bool = False,
+    has_third_pass_overlap: bool = False,
+    has_third_pass_grid: bool = False,
     panel_width: int = DEFAULT_LEFT_PANEL_WIDTH,
     vertical_gap: int = DEFAULT_PANEL_VERTICAL_GAP,
 ) -> str:
@@ -255,24 +258,29 @@ def generate_layers_panel_html(
     - Satellite imagery toggle (background layer)
     - Multiple BGS Geology layers (independent toggles)
     - Proposed boreholes (ILP-optimized locations with buffer zones)
-    - Second Pass (removed/added boreholes from border consolidation)
-    - CZRC Second Pass (removed/added from cross-zone redundancy check)
-    - CZRC Test Points (test points used in CZRC optimization)
-    - CZRC Zone Overlap (coverage clouds, pairwise, triple overlap regions)
-    - CZRC Grid (visibility boundary and hexagonal candidate grid)
+    - Second Pass (removed/added boreholes from cross-zone redundancy check)
+    - Second Pass Zone Overlap (coverage clouds, pairwise, triple overlap regions)
+    - Second Pass Grid (visibility boundary and hexagonal candidate grid)
+    - Second Pass Test Points (test points used in optimization)
+    - Third Pass (removed/added from cell-cell CZRC optimization)
+    - Cell Overlap (cell clouds and intersection regions)
+    - Cell Grid (hexagonal candidate grid for third pass)
     - Candidate grid (hexagonal grid overlay showing placement grid)
 
     Args:
         bgs_layers: Dict mapping layer_name -> (start_idx, end_idx) for BGS layers
         has_satellite: Whether satellite imagery is available
         proposed_trace_range: Tuple of (start_idx, end_idx) for proposed boreholes+buffers
-        hexgrid_trace_range: Tuple of (start_idx, end_idx) for candidate grid hexagons
+        hexgrid_range_json: Tuple of (start_idx, end_idx) for candidate grid hexagons
         uses_precomputed_coverages: Whether using precomputed coverage traces
         has_second_pass: Whether second pass traces (removed/added) are available
-        has_czrc_second_pass: Whether CZRC second pass traces are available
-        has_czrc_test_points: Whether CZRC test points trace is available
-        has_czrc_zone_overlap: Whether CZRC zone overlap traces (clouds/pairwise/triple) exist
-        has_czrc_grid: Whether CZRC grid traces (visibility boundary, hex grid) exist
+        has_czrc_second_pass: Whether Second Pass traces (cross-zone optimization) are available
+        has_czrc_test_points: Whether Second Pass test points trace is available
+        has_czrc_zone_overlap: Whether Second Pass zone overlap traces (clouds/pairwise/triple) exist
+        has_czrc_grid: Whether Second Pass grid traces (visibility boundary, hex grid) exist
+        has_third_pass: Whether third pass traces (cell-cell removed/added) are available
+        has_third_pass_overlap: Whether third pass overlap traces (cell clouds/intersections) exist
+        has_third_pass_grid: Whether third pass grid traces (cell-cell candidate grid) exist
         panel_width: Panel width in pixels
         vertical_gap: Vertical gap from previous panel
 
@@ -293,6 +301,9 @@ def generate_layers_panel_html(
         and not has_czrc_second_pass
         and not has_czrc_zone_overlap
         and not has_czrc_grid
+        and not has_third_pass
+        and not has_third_pass_overlap
+        and not has_third_pass_grid
     ):
         return ""
 
@@ -375,34 +386,64 @@ def generate_layers_panel_html(
     </label>"""
         )
 
-    # Add CZRC grid checkbox (hexagon overlay for CZRC candidates) - unchecked by default
+    # Add Second Pass checkbox (removed/added from cross-zone optimization) - unchecked by default
+    if has_czrc_second_pass:
+        checkbox_items.append(
+            """
+    <label style="display: flex; align-items: center; cursor: pointer; margin: 5px 0;">
+        <input type="checkbox" id="czrcSecondPassCheckbox" style="margin-right: 8px;">
+        <span style="font-size: 11px;">Second Pass</span>
+    </label>"""
+        )
+
+    # Add Second Pass grid checkbox (hexagon overlay for CZRC candidates) - unchecked by default
     # Show when grid data exists (even with skip_ilp=True)
     if has_czrc_grid:
         checkbox_items.append(
             """
     <label style="display: flex; align-items: center; cursor: pointer; margin: 5px 0;">
         <input type="checkbox" id="czrcGridCheckbox" style="margin-right: 8px;">
-        <span style="font-size: 11px;">CZRC Grid</span>
+        <span style="font-size: 11px;">Second Pass Grid</span>
     </label>"""
         )
 
-    # Add CZRC second pass checkbox (removed/added from cross-zone optimization) - unchecked by default
-    if has_czrc_second_pass:
-        checkbox_items.append(
-            """
-    <label style="display: flex; align-items: center; cursor: pointer; margin: 5px 0;">
-        <input type="checkbox" id="czrcSecondPassCheckbox" style="margin-right: 8px;">
-        <span style="font-size: 11px;">CZRC Second Pass</span>
-    </label>"""
-        )
-
-    # Add CZRC test points checkbox (test points used in CZRC optimization) - unchecked by default
+    # Add Second Pass test points checkbox (test points used in CZRC optimization) - unchecked by default
     if has_czrc_test_points:
         checkbox_items.append(
             """
     <label style="display: flex; align-items: center; cursor: pointer; margin: 5px 0;">
         <input type="checkbox" id="czrcTestPointsCheckbox" style="margin-right: 8px;">
-        <span style="font-size: 11px;">CZRC Test Points</span>
+        <span style="font-size: 11px;">Second Pass Test Points</span>
+    </label>"""
+        )
+
+    # Add third pass checkbox (cell-cell CZRC removed/added boreholes) - unchecked by default
+    if has_third_pass:
+        checkbox_items.append(
+            """
+    <label style="display: flex; align-items: center; cursor: pointer; margin: 5px 0;">
+        <input type="checkbox" id="thirdPassCheckbox" style="margin-right: 8px;">
+        <span style="font-size: 11px;">Third Pass</span>
+    </label>"""
+        )
+
+    # Add third pass overlap checkbox (cell clouds/intersections) - unchecked by default
+    if has_third_pass_overlap:
+        checkbox_items.append(
+            """
+    <label style="display: flex; align-items: center; cursor: pointer; margin: 5px 0;">
+        <input type="checkbox" id="thirdPassOverlapCheckbox" style="margin-right: 8px;">
+        <span style="font-size: 11px;">Cell Overlap</span>
+    </label>"""
+        )
+
+    # Add third pass grid checkbox (cell-cell candidate grid) - unchecked by default
+    if has_third_pass_grid:
+        checkbox_items.append(
+            """
+    <label style="display: flex; align-items: center; cursor: pointer; margin: 5px 0;">
+        <input type="checkbox" id="thirdPassGridCheckbox" style="margin-right: 8px;">
+        <span style="font-size: 11px;">Cell Grid</span>
     </label>"""
         )
 
@@ -415,6 +456,9 @@ def generate_layers_panel_html(
         has_czrc_second_pass=has_czrc_second_pass,
         has_czrc_zone_overlap=has_czrc_zone_overlap,
         has_czrc_grid=has_czrc_grid,
+        has_third_pass=has_third_pass,
+        has_third_pass_overlap=has_third_pass_overlap,
+        has_third_pass_grid=has_third_pass_grid,
     )
 
     checkbox_html = f"""

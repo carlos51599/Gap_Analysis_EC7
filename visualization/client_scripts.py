@@ -37,6 +37,9 @@ def generate_layer_toggle_scripts(
     has_czrc_second_pass: bool = False,
     has_czrc_zone_overlap: bool = False,
     has_czrc_grid: bool = False,
+    has_third_pass: bool = False,
+    has_third_pass_overlap: bool = False,
+    has_third_pass_grid: bool = False,
 ) -> str:
     """
     Generate JavaScript for layer visibility toggles.
@@ -59,6 +62,9 @@ def generate_layer_toggle_scripts(
         has_czrc_second_pass: Whether CZRC second pass traces are available
         has_czrc_zone_overlap: Whether CZRC zone overlap traces are available
         has_czrc_grid: Whether CZRC grid traces are available
+        has_third_pass: Whether third pass traces (cell-cell CZRC) are available
+        has_third_pass_overlap: Whether third pass overlap traces (cell clouds/intersections) are available
+        has_third_pass_grid: Whether third pass grid traces (cell-cell candidate grid) are available
 
     Returns:
         JavaScript code block as string (without <script> tags)
@@ -259,6 +265,123 @@ def generate_layer_toggle_scripts(
         });
     }
 """
+
+    # Generate Third Pass (cell-cell CZRC) toggle script if needed
+    third_pass_script = ""
+    if has_third_pass:
+        third_pass_script = """
+    // Third Pass (cell-cell CZRC) checkbox handler
+    const thirdPassCheckbox = document.getElementById('thirdPassCheckbox');
+    if (thirdPassCheckbox) {
+        thirdPassCheckbox.addEventListener('change', function() {
+            const plotDiv = document.querySelector('.plotly-graph-div');
+            if (!plotDiv) return;
+            
+            const traceIndices = [];
+            
+            if (typeof COVERAGE_TRACE_RANGES !== 'undefined' && typeof currentCoverageCombo !== 'undefined') {
+                const ranges = COVERAGE_TRACE_RANGES[currentCoverageCombo];
+                if (ranges) {
+                    // Collect Third Pass removed buffer and marker traces
+                    const thirdPassRemovedBufferRange = ranges.third_pass_removed_buffers || [0, 0];
+                    const thirdPassRemovedMarkerRange = ranges.third_pass_removed_markers || [0, 0];
+                    for (let i = thirdPassRemovedBufferRange[0]; i < thirdPassRemovedBufferRange[1]; i++) {
+                        traceIndices.push(i);
+                    }
+                    for (let i = thirdPassRemovedMarkerRange[0]; i < thirdPassRemovedMarkerRange[1]; i++) {
+                        traceIndices.push(i);
+                    }
+                    
+                    // Collect Third Pass added buffer and marker traces
+                    const thirdPassAddedBufferRange = ranges.third_pass_added_buffers || [0, 0];
+                    const thirdPassAddedMarkerRange = ranges.third_pass_added_markers || [0, 0];
+                    for (let i = thirdPassAddedBufferRange[0]; i < thirdPassAddedBufferRange[1]; i++) {
+                        traceIndices.push(i);
+                    }
+                    for (let i = thirdPassAddedMarkerRange[0]; i < thirdPassAddedMarkerRange[1]; i++) {
+                        traceIndices.push(i);
+                    }
+                }
+            }
+            
+            if (traceIndices.length > 0) {
+                Plotly.restyle(plotDiv, {'visible': this.checked}, traceIndices);
+            }
+        });
+    }
+"""
+
+    # Generate Third Pass Overlap (cell clouds + intersections) toggle script if needed
+    third_pass_overlap_script = ""
+    if has_third_pass_overlap:
+        third_pass_overlap_script = """
+    // Third Pass Overlap (cell clouds + intersections) checkbox handler
+    const thirdPassOverlapCheckbox = document.getElementById('thirdPassOverlapCheckbox');
+    if (thirdPassOverlapCheckbox) {
+        thirdPassOverlapCheckbox.addEventListener('change', function() {
+            const plotDiv = document.querySelector('.plotly-graph-div');
+            if (!plotDiv) return;
+            
+            const traceIndices = [];
+            
+            if (typeof COVERAGE_TRACE_RANGES !== 'undefined' && typeof currentCoverageCombo !== 'undefined') {
+                const ranges = COVERAGE_TRACE_RANGES[currentCoverageCombo];
+                if (ranges) {
+                    // Toggle third pass cell clouds (per-cell coverage areas)
+                    if (ranges.third_pass_clouds) {
+                        const [startIdx, endIdx] = ranges.third_pass_clouds;
+                        for (let i = startIdx; i < endIdx; i++) {
+                            traceIndices.push(i);
+                        }
+                    }
+                    // Toggle third pass cell intersections (cell-cell overlaps)
+                    if (ranges.third_pass_intersections) {
+                        const [startIdx, endIdx] = ranges.third_pass_intersections;
+                        for (let i = startIdx; i < endIdx; i++) {
+                            traceIndices.push(i);
+                        }
+                    }
+                }
+            }
+            
+            if (traceIndices.length > 0) {
+                Plotly.restyle(plotDiv, {'visible': this.checked}, traceIndices);
+            }
+        });
+    }
+"""
+
+    # Generate Third Pass Grid toggle script if needed
+    third_pass_grid_script = ""
+    if has_third_pass_grid:
+        third_pass_grid_script = """
+    // Third Pass Grid checkbox handler
+    const thirdPassGridCheckbox = document.getElementById('thirdPassGridCheckbox');
+    if (thirdPassGridCheckbox) {
+        thirdPassGridCheckbox.addEventListener('change', function() {
+            const plotDiv = document.querySelector('.plotly-graph-div');
+            if (!plotDiv) return;
+            
+            const traceIndices = [];
+            
+            if (typeof COVERAGE_TRACE_RANGES !== 'undefined' && typeof currentCoverageCombo !== 'undefined') {
+                const ranges = COVERAGE_TRACE_RANGES[currentCoverageCombo];
+                // Toggle third pass grid (cell-cell candidate hexagons)
+                if (ranges && ranges.third_pass_grid) {
+                    const [startIdx, endIdx] = ranges.third_pass_grid;
+                    for (let i = startIdx; i < endIdx; i++) {
+                        traceIndices.push(i);
+                    }
+                }
+            }
+            
+            if (traceIndices.length > 0) {
+                Plotly.restyle(plotDiv, {'visible': this.checked}, traceIndices);
+            }
+        });
+    }
+"""
+
     return f"""
     // === LAYER STATE ===
     const bgsLayers = {bgs_layers_json};
@@ -382,6 +505,9 @@ def generate_layer_toggle_scripts(
 {zone_overlap_script}
 {czrc_grid_script}
 {czrc_second_pass_script}
+{third_pass_script}
+{third_pass_overlap_script}
+{third_pass_grid_script}
 """
 
 

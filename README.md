@@ -18,9 +18,9 @@ Output: `Gap_Analysis_EC7/Output/ec7_coverage.html`
 
 ---
 
-## 🎯 Two-Pass Optimization Architecture (CORE CONCEPT)
+## 🎯 Three-Pass Optimization Architecture (CORE CONCEPT)
 
-> **This is the most important section to understand.** The two-pass architecture is the heart of this program and determines how boreholes are selected.
+> **This is the most important section to understand.** The three-pass architecture is the heart of this program and determines how boreholes are selected.
 
 ### The Problem
 
@@ -28,7 +28,10 @@ EC7 requires boreholes spaced no more than `max_spacing_m` apart across investig
 
 A **global optimization** (all zones simultaneously) produces the mathematically optimal solution but is computationally intractable for large problems (ILP solve time grows exponentially with test points).
 
-**Solution:** Decompose the problem spatially, solve per-zone, then consolidate redundancies at zone boundaries.
+**Solution:** Decompose the problem spatially using a three-pass approach:
+1. **First Pass:** Solve per-zone independently
+2. **Second Pass:** Consolidate redundancies at zone-zone boundaries (CZRC)
+3. **Third Pass:** Consolidate redundancies at cell-cell boundaries within split clusters
 
 ---
 
@@ -68,6 +71,39 @@ solver_orchestration.py:optimize_boreholes()
     → For each zone:
         solver_algorithms.py:_solve_ilp()
     → aggregate_solution()
+```
+
+---
+
+### Architecture Overview (All Three Passes)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                     COMPLETE THREE-PASS ARCHITECTURE                         │
+│                                                                              │
+│  FIRST PASS           SECOND PASS              THIRD PASS                   │
+│  (Zones)              (Zone CZRC + Cells)      (Cell CZRC)                  │
+│  ───────────          ──────────────────       ───────────                  │
+│                                                                              │
+│  ┌────┐ ┌────┐        ┌────────────────┐       ┌──────────────────┐         │
+│  │ Z1 │ │ Z2 │  ──►   │ Zone CZRC      │  ──►  │ Cell CZRC        │         │
+│  └────┘ └────┘        │ (cloud ∩)      │       │ (same algorithm) │         │
+│                       │                │       │                  │         │
+│                       │   IF > 1 km²:  │       │ For each cell:   │         │
+│                       │   ┌────┬────┐  │       │ 1. Coverage cloud│         │
+│                       │   │ C1 │ C2 │  │       │ 2. Pairwise ∩    │         │
+│                       │   ├────┼────┤  │       │ 3. Tier 1/2      │         │
+│                       │   │ C3 │ C4 │  │       │ 4. ILP solve     │         │
+│                       │   └────┴────┘  │       │                  │         │
+│                       │                │       │ C1∩C2, C1∩C3,    │         │
+│                       │   Per-cell ILP │       │ C2∩C4, C3∩C4...  │         │
+│                       └────────────────┘       └──────────────────┘         │
+│                                                                              │
+│  OUTPUT:              OUTPUT: Per-cell         OUTPUT: Cell-boundary        │
+│  Zone-optimized       boreholes                optimized boreholes          │
+│  boreholes            (zone boundaries         (cell boundaries             │
+│                       consolidated)            consolidated)                │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -337,7 +373,7 @@ Second Pass (if enabled):
     → consolidation.py:run_czrc_optimization()
       → czrc_geometry.py:compute_czrc_consolidation_region()
       → czrc_solver.py:check_and_split_large_cluster()
-        → IF area > 1 km²: _split_into_grid_cells() → [cell ILPs]
+        → IF area > 1 km²: split cells → solve each cell → THIRD PASS
         → ELSE: solve_czrc_ilp_for_cluster() directly
       → czrc_solver.py:solve_czrc_ilp_for_cluster() [per cluster/cell]
         → compute_czrc_tiers()
@@ -346,11 +382,20 @@ Second Pass (if enabled):
         → _compute_locked_coverage()
         → _solve_ilp() [reusing existing solver]
       → aggregate_czrc_results()
+
+Third Pass (if cluster was split):
+  czrc_solver.py:check_and_split_large_cluster()
+    → After cell processing, IF cell_boundary_consolidation.enabled:
+      → run_cell_czrc_pass()
+        → detect_cell_adjacencies()           # Coverage cloud intersections
+        → FOR each adjacent cell pair:
+          → solve_cell_cell_czrc()            # Same tier/ILP pattern
+        → Merge removed/added across all pairs
 ```
 
 ---
 
-### Configuration for Two-Pass
+### Configuration for Three-Pass
 
 ```python
 CONFIG = {
@@ -360,7 +405,7 @@ CONFIG = {
             "enabled": True,               # Early termination on solver stall
             "gap_threshold_pct": 15.0,     # Only trigger if gap > 15%
             "warmup_seconds": 15.0,        # Wait before checking for stalls
-            "apply_to_czrc": True,         # Also apply to CZRC second pass
+            "apply_to_czrc": True,         # Also apply to CZRC second/third pass
         },
     },
     "czrc_optimization": {
@@ -375,8 +420,17 @@ CONFIG = {
         "cell_splitting": {
             "enabled": True,               # Split large regions into cells
             "max_area_for_direct_ilp_m2": 1_000_000,  # 1 km² threshold
-            "cell_size_m": 1000,           # 1 km grid cells
+            "method": "kmeans_voronoi",    # K-means + Voronoi (default)
             "min_cell_area_m2": 100,       # Skip tiny slivers
+        },
+        # ═══════════════════════════════════════════════════════════════════
+        # 🔗 THIRD PASS: CELL-CELL BOUNDARY CONSOLIDATION
+        # ═══════════════════════════════════════════════════════════════════
+        "cell_boundary_consolidation": {
+            "enabled": True,               # Master switch for third pass
+            "tier1_rmax_multiplier": 1.0,  # Same as zone CZRC
+            "tier2_rmax_multiplier": 2.0,  # Same as zone CZRC
+            "test_spacing_mult": 0.2,      # Test point density
         },
         "cache_enabled": False,            # Intra-run CZRC result caching
     },
@@ -393,6 +447,193 @@ When CZRC regions exceed 1 km², they are split into smaller cells to prevent IL
 - **Grid (legacy):** Fixed 2km × 2km grid. Set `"method": "grid"` in config.
 
 Cell boundaries appear as orange dotted lines in HTML (CZRC Grid checkbox). See `czrc_solver.py` for implementation.
+
+---
+
+### Third Pass: Cell-Cell CZRC Boundary Consolidation
+
+The third pass applies the **exact same CZRC algorithm** to cell-cell boundaries that the second pass applies to zone-zone boundaries. This is a recursive application of the proven CZRC approach.
+
+#### The Cell Boundary Problem
+
+When the second pass splits large CZRC regions into Voronoi cells (via K-means clustering), each cell is solved independently. This creates the **same over-provisioning problem** that exists between zones:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│           CELL BOUNDARY PROBLEM (IDENTICAL TO ZONE BOUNDARY PROBLEM)         │
+│                                                                              │
+│     Cell A (Voronoi)              Cell B (Voronoi)                          │
+│     ┌────────────────┐           ┌────────────────┐                         │
+│     │                │           │                │                         │
+│     │   Solved       │           │   Solved       │                         │
+│     │   independently │           │   independently │                         │
+│     │                │           │                │                         │
+│     │   ●  ●  ●  ●   │           │   ●  ●  ●  ●   │                         │
+│     │   ●  ●  ●  ●   │           │   ●  ●  ●  ●   │                         │
+│     │   ●  ●  ●  ● ──┼───────────┼── ●  ●  ●  ●   │                         │
+│     │   ●  ●  ●  ●   │           │   ●  ●  ●  ●   │                         │
+│     │                │           │                │                         │
+│     └────────────────┘           └────────────────┘                         │
+│                     ↑                                                        │
+│                     │                                                        │
+│       REDUNDANT BOREHOLES AT CELL BOUNDARY                                   │
+│       (Same problem as zone boundaries!)                                     │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**The solution:** Apply the same CZRC process to cells that we apply to zones.
+
+---
+
+#### Third Pass Algorithm
+
+The third pass mirrors the second pass exactly, substituting "cells" for "zones":
+
+**Step 1: Detect Cell Adjacencies**
+
+For each cluster that was split into cells:
+1. Parse cell geometries from stored WKT strings (`cluster_stats["cell_wkts"]`)
+2. Compute coverage cloud for each cell (same `compute_zone_coverage_cloud()` function)
+3. Find pairwise intersections (cell-cell CZRC regions)
+
+```python
+# Same function used for zones, now applied to cells
+cloud_cell_a = compute_zone_coverage_cloud(cell_a_geometry, spacing, grid_spacing)
+cloud_cell_b = compute_zone_coverage_cloud(cell_b_geometry, spacing, grid_spacing)
+czrc_region = cloud_cell_a.intersection(cloud_cell_b)
+```
+
+**Step 2: Process Each Adjacent Cell Pair**
+
+For each non-empty cell-cell CZRC region:
+1. Compute Tier 1 and Tier 2 regions (same formulas as zone CZRC)
+2. Classify cell output boreholes as CANDIDATES (Tier 1) or LOCKED (Tier 2)
+3. Filter test points to Tier 1
+4. Solve ILP to find minimum borehole set
+
+**Step 3: Merge Results**
+
+1. Remove boreholes marked redundant by any cell-cell pair
+2. Add any new boreholes (rare - usually just removals)
+3. Deduplicate across all pairs
+
+---
+
+#### Why Third Pass Uses Uniform Spacing
+
+Unlike zone-zone CZRC (which handles variable `max_spacing_m` per zone), cell-cell CZRC operates on cells **within the same zone cluster**. All cells inherit the same spacing from their parent zone, simplifying the ILP:
+
+```python
+# Second pass: variable radii
+zone_spacings = {"Zone_1": 100.0, "Zone_2": 150.0}  # Different per zone
+
+# Third pass: uniform radius
+cell_spacing = cluster["overall_r_max"]  # Same for all cells in cluster
+```
+
+---
+
+#### Third Pass Borehole Classification Flow
+
+```mermaid
+graph TD
+    A[Cell Output Borehole] --> B{Inside Cell-Cell Tier 1?}
+    B -->|Yes| C[CANDIDATE<br/>May be removed]
+    B -->|No| D{Inside Cell-Cell Tier 2?}
+    D -->|Yes| E[LOCKED CONSTANT<br/>Pre-coverage provider]
+    D -->|No| F[NOT IN THIS PAIR<br/>Unchanged]
+    
+    C --> G[Cell-Cell ILP]
+    E --> H[Pre-coverage calculation]
+    H --> G
+    G --> I{Selected by ILP?}
+    I -->|Yes| J[KEPT]
+    I -->|No| K[REMOVED<br/>Cell-boundary redundant]
+```
+
+---
+
+#### Third Pass Output
+
+The third pass returns:
+- `consolidated_boreholes`: Final list after cell-cell redundancy removal
+- `cell_czrc_removed`: Boreholes eliminated at cell boundaries
+- `cell_czrc_added`: New boreholes added (rare)
+- `cell_czrc_stats`: Per-pair statistics and visualization data
+
+**Typical results:**
+- Cell processing output: 50 boreholes (per-cell optimal)
+- After third pass: 45 boreholes (5 removed as cell-boundary redundant)
+- Additional savings: ~10% reduction from cell-cell optimization
+
+---
+
+#### When Third Pass is Skipped
+
+Cell-cell CZRC is skipped when:
+1. `cell_boundary_consolidation.enabled = False` in CONFIG
+2. Cluster was NOT split (area ≤ 1 km² threshold)
+3. Only one cell exists after splitting (single-cell cluster)
+4. No cell pairs have intersecting coverage clouds
+
+---
+
+#### Third Pass Configuration
+
+```python
+CONFIG = {
+    "czrc_optimization": {
+        # ... second pass settings ...
+        
+        "cell_boundary_consolidation": {
+            "enabled": True,                  # Master switch for third pass
+            "tier1_rmax_multiplier": 1.0,     # Same as zone CZRC
+            "tier2_rmax_multiplier": 2.0,     # Same as zone CZRC
+            "test_spacing_mult": 0.2,         # Test point density
+        },
+    },
+}
+```
+
+---
+
+#### Third Pass Code Path
+
+```
+check_and_split_large_cluster()
+  → IF cluster was split into cells:
+      → run_cell_czrc_pass()
+          → detect_cell_adjacencies()           # Find intersecting coverage clouds
+              → compute_zone_coverage_cloud()   # Reuse zone cloud function
+              → compute_pairwise_intersection() # Reuse zone intersection function
+          → FOR each adjacent cell pair:
+              → solve_cell_cell_czrc()          # Same tier/ILP pattern as zone CZRC
+                  → compute_czrc_tiers()        # Reuse zone tier computation
+                  → classify_first_pass_boreholes()  # Reuse zone classification
+                  → _solve_czrc_ilp()           # Reuse ILP solver
+          → Merge and deduplicate results
+```
+
+---
+
+#### Mathematical Equivalence
+
+The third pass is mathematically identical to the second pass:
+
+| Concept            | Second Pass (Zone CZRC)         | Third Pass (Cell CZRC)        |
+| ------------------ | ------------------------------- | ----------------------------- |
+| **Unit**           | Zone                            | Cell                          |
+| **Input**          | First pass boreholes            | Cell output boreholes         |
+| **Coverage cloud** | `compute_zone_coverage_cloud()` | Same function, cell geometry  |
+| **Intersection**   | Zone_A ∩ Zone_B                 | Cell_i ∩ Cell_j               |
+| **Tier 1**         | CZRC + 1×R_max                  | CZRC + 1×R_max (same formula) |
+| **Tier 2**         | CZRC + 2×R_max                  | CZRC + 2×R_max (same formula) |
+| **Spacing**        | Variable per zone               | Uniform (inherited from zone) |
+| **ILP**            | `_solve_czrc_ilp()`             | Same function                 |
+
+**Key insight:** The third pass is NOT a new algorithm. It's the same proven CZRC algorithm applied recursively:
+1. **Second pass:** Zones → Coverage clouds → Intersections → CZRC regions → ILP
+2. **Third pass:** Cells → Coverage clouds → Intersections → CZRC regions → ILP
 
 ---
 
@@ -416,7 +657,7 @@ When the ILP solver makes insufficient progress, stall detection terminates earl
         "warmup_seconds": 15.0,        # Wait before checking
         "comparison_seconds": 10.0,    # Window for improvement check
         "min_improvement_pct": 5.0,    # Minimum required improvement
-        "apply_to_czrc": True,         # Also apply to CZRC second pass
+        "apply_to_czrc": True,         # Also apply to CZRC second/third pass
     },
 }
 ```
