@@ -1629,8 +1629,9 @@ def solve_cell_cell_czrc(
             # Visualization data: test points used for this cell-cell pair
             "viz_tier1_test_points": tier1_test_points,
             "viz_tier2_ring_test_points": tier2_ring_test_points,
-            # Visualization data: existing boreholes (candidates + locked from Second Pass output)
-            "viz_existing_boreholes": bh_candidates + locked,
+            # Visualization data: Tier 1 boreholes only (candidates from Second Pass output)
+            # Only Tier 1 boreholes can be reused as candidates; Tier 2 are locked/fixed
+            "viz_existing_boreholes": bh_candidates,
         },
     )
 

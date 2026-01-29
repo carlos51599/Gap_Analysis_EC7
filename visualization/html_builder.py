@@ -475,12 +475,12 @@ def _add_single_combo_traces(
             fig, combo_key, third_pass_data, czrc_config
         )
 
-        # Add third pass test points (same as second pass - covers full Tier 1 + Tier 2)
-        # Third Pass reuses the same test points from cell processing
-        czrc_test_points = data.get("czrc_test_points", [])
-        if czrc_test_points:
+        # Add third pass test points (Tier 1 filtered from First Pass + fresh Tier 2 ring)
+        # Third Pass generates its own test points within cell-cell context
+        third_pass_test_points = third_pass_data.get("third_pass_test_points", [])
+        if third_pass_test_points:
             ranges["third_pass_test_points"] = _add_third_pass_test_points_trace(
-                fig, combo_key, czrc_test_points, is_visible=False
+                fig, combo_key, third_pass_test_points, is_visible=False
             )
 
     # Third Pass removed/added boreholes
@@ -1187,6 +1187,43 @@ def _add_third_pass_grid_trace(
             visible=False,  # Hidden by default, controlled by Third Pass Grid checkbox
         )
 
+    # Add existing boreholes (Second Pass output) as black X markers
+    # These are the boreholes from Second Pass that fall within Third Pass Tier 1/Tier 2 area
+    # Displayed with same styling as Second Pass displays First Pass candidates
+    existing_boreholes = third_pass_data.get("third_pass_existing_boreholes", [])
+    if existing_boreholes:
+        x_coords = [bh.get("x", bh.get("easting", 0)) for bh in existing_boreholes]
+        y_coords = [bh.get("y", bh.get("northing", 0)) for bh in existing_boreholes]
+
+        # Use same marker styling as Second Pass first_pass_candidates (black X markers)
+        marker_config = CONFIG.get("visualization", {}).get(
+            "first_pass_candidate_marker",
+            {"size": 10, "color": "black", "symbol": "x", "line_width": 2},
+        )
+        marker_color = _normalize_color_for_scattergl(marker_config.get("color", "black"))
+
+        fig.add_trace(
+            go.Scattergl(
+                x=x_coords,
+                y=y_coords,
+                mode="markers",
+                marker=dict(
+                    symbol=marker_config.get("symbol", "x"),
+                    size=marker_config.get("size", 10),
+                    color=marker_color,
+                    line=dict(
+                        width=marker_config.get("line_width", 2),
+                        color=marker_color,
+                    ),
+                ),
+                name=f"Second Pass Candidates ({len(existing_boreholes)})",
+                legendgroup="third_pass_grid",
+                showlegend=False,
+                visible=False,  # Same visibility as grid layer
+                hovertemplate="Second-Pass Candidate<br>X: %{x:.1f}<br>Y: %{y:.1f}<extra></extra>",
+            )
+        )
+
     return (start_idx, len(fig.data))
 
 
@@ -1199,9 +1236,9 @@ def _add_third_pass_test_points_trace(
     """
     Add Third Pass test points as markers (Tier 1 + Tier 2 ring).
 
-    Third Pass uses the same test points as Second Pass (from cell processing).
-    These test points cover the full Tier 1 area (clipped to geometry) plus
-    sparse Tier 2 ring points, controlled by the same config settings.
+    Third Pass uses First Pass test points filtered to the Tier 1 area
+    (cell-cell coverage cloud intersection), plus fresh Tier 2 ring test
+    points generated with sparse spacing (3x multiplier) for the ring area.
 
     Args:
         fig: Plotly figure to add traces to
@@ -2488,10 +2525,7 @@ def _generate_sidebar_panels(
         for combo_ranges in coverage_trace_ranges.values():
             czrc_clouds = combo_ranges.get("czrc_clouds", (0, 0))
             czrc_pairwise = combo_ranges.get("czrc_pairwise", (0, 0))
-            if (
-                czrc_clouds[0] != czrc_clouds[1]
-                or czrc_pairwise[0] != czrc_pairwise[1]
-            ):
+            if czrc_clouds[0] != czrc_clouds[1] or czrc_pairwise[0] != czrc_pairwise[1]:
                 has_czrc_zone_overlap = True
                 break
 

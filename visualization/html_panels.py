@@ -327,28 +327,6 @@ def generate_layers_panel_html(
     # Build checkbox items
     checkbox_items = []
 
-    # Add Satellite checkbox at the top (if available)
-    if has_satellite:
-        checkbox_items.append(
-            """
-    <label style="display: flex; align-items: center; cursor: pointer; margin: 5px 0;">
-        <input type="checkbox" id="satelliteLayerCheckbox" style="margin-right: 8px;">
-        <span style="font-size: 11px;">Satellite</span>
-    </label>"""
-        )
-
-    # Add BGS layer checkboxes
-    if has_bgs:
-        for layer_name in bgs_layers.keys():
-            layer_id = layer_name.lower().replace(" ", "_").replace("bgs_", "bgs")
-            checkbox_items.append(
-                f"""
-    <label style="display: flex; align-items: center; cursor: pointer; margin: 5px 0;">
-        <input type="checkbox" id="{layer_id}Checkbox" class="bgsLayerCheckbox" data-layer="{layer_name}" style="margin-right: 8px;">
-        <span style="font-size: 11px;">{layer_name}</span>
-    </label>"""
-            )
-
     # Add proposed boreholes checkbox (checked by default since they're important)
     if has_proposed:
         checkbox_items.append(
@@ -478,6 +456,37 @@ def generate_layers_panel_html(
         <span style="font-size: 11px;">Third Pass Test Points</span>
     </label>"""
         )
+
+    # Add "Imagery" subheading before Satellite/BGS layers (at bottom of panel)
+    if has_satellite or has_bgs:
+        checkbox_items.append(
+            """
+    <div style="font-size: 10px; font-weight: bold; color: #666; margin: 10px 0 5px 0; border-top: 1px solid #ddd; padding-top: 8px;">
+        Imagery
+    </div>"""
+        )
+
+    # Add Satellite checkbox (moved to bottom under Imagery)
+    if has_satellite:
+        checkbox_items.append(
+            """
+    <label style="display: flex; align-items: center; cursor: pointer; margin: 5px 0;">
+        <input type="checkbox" id="satelliteLayerCheckbox" style="margin-right: 8px;">
+        <span style="font-size: 11px;">Satellite</span>
+    </label>"""
+        )
+
+    # Add BGS layer checkboxes (moved to bottom under Imagery)
+    if has_bgs:
+        for layer_name in bgs_layers.keys():
+            layer_id = layer_name.lower().replace(" ", "_").replace("bgs_", "bgs")
+            checkbox_items.append(
+                f"""
+    <label style="display: flex; align-items: center; cursor: pointer; margin: 5px 0;">
+        <input type="checkbox" id="{layer_id}Checkbox" class="bgsLayerCheckbox" data-layer="{layer_name}" style="margin-right: 8px;">
+        <span style="font-size: 11px;">{layer_name}</span>
+    </label>"""
+            )
 
     # Generate JavaScript for layer toggles from client_scripts module
     layer_scripts = generate_layer_toggle_scripts(
