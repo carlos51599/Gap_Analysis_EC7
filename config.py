@@ -612,7 +612,7 @@ CONFIG: Dict[str, Any] = {
         ),  # Tier 1 = CZRC + mult × R_max
         # Tier 2: Coverage context region (locked boreholes provide pre-coverage)
         "tier2_rmax_multiplier": _env_or_default(
-            "EC7_TIER2_RMAX_MULT", 2.0, float
+            "EC7_TIER2_RMAX_MULT", 2.5, float
         ),  # Tier 2 = CZRC + mult × R_max
         # ═══════════════════════════════════════════════════════════════════
         # CANDIDATE GRID SETTINGS
@@ -629,10 +629,10 @@ CONFIG: Dict[str, Any] = {
         #
         # The Tier 2 test point multiplier is relative to Tier 1's test_spacing_mult:
         #   Tier 2 spacing = test_spacing_mult × tier2_test_spacing_multiplier × max_spacing
-        #   e.g., 0.2 × 3.0 × 200m = 120m grid spacing for 200m-spaced zones
+        #   e.g., 0.2 × 2.0 × 200m = 80m grid spacing for 200m-spaced zones
         "tier2_test_point_protection": {
             "enabled": True,  # Enable Tier 2 test point constraints in ILP
-            "tier2_test_spacing_multiplier": 3.0,  # 3× sparser than Tier 1 test points
+            "tier2_test_spacing_multiplier": 2.0,  # 2× sparser than Tier 1 test points
         },
         # ═══════════════════════════════════════════════════════════════════
         # CZRC RESULT CACHING (Intra-run caching for ILP results)
@@ -664,7 +664,7 @@ CONFIG: Dict[str, Any] = {
             # Exclusion factor (0.9 = 90% of min spacing between boreholes)
             # ENV OVERRIDE: EC7_CZRC_EXCLUSION_FACTOR (float, default: 0.9)
             "exclusion_factor": _env_or_default(
-                "EC7_CZRC_EXCLUSION_FACTOR", 0.9, float
+                "EC7_CZRC_EXCLUSION_FACTOR", 0.8, float
             ),
             # Cross-zone exclusion method: "min", "max", or "average"
             # Controls how exclusion distance is calculated for cross-zone pairs.
@@ -774,7 +774,7 @@ CONFIG: Dict[str, Any] = {
             # Tier 1 multiplier (same as zone CZRC - inherit from parent)
             "tier1_rmax_multiplier": 1.0,
             # Tier 2 multiplier (same as zone CZRC - inherit from parent)
-            "tier2_rmax_multiplier": 2.0,
+            "tier2_rmax_multiplier": 2.5,
             # Test point spacing multiplier (same as zone CZRC)
             "test_spacing_mult": 0.2,
             # NOTE: ILP settings (exclusion_factor, coverage_target_pct, etc.)
