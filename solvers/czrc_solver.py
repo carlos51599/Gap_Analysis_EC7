@@ -2560,17 +2560,58 @@ def run_czrc_optimization(
     # Build set of removed positions for efficient filtering
     removed_positions = {(bh["x"], bh["y"]) for bh in all_removed}
 
+    # DEBUG: Log for diagnostic
+    log = logger or _logger
+    log.info(
+        f"🔍 CZRC Final Assembly: first_pass={len(first_pass_boreholes)}, "
+        f"all_removed={len(all_removed)}, boreholes_to_add={len(boreholes_to_add)}"
+    )
+
     # Start with first-pass boreholes, excluding those marked for removal
     optimized = [
         bh for bh in first_pass_boreholes if (bh["x"], bh["y"]) not in removed_positions
     ]
     existing_pos = {(bh["x"], bh["y"]) for bh in optimized}
 
+    # DEBUG: Check if any removed BH is in first-pass survivors
+    first_pass_survivors_pos = {(bh["x"], bh["y"]) for bh in optimized}
+    overlap_with_removed = first_pass_survivors_pos & removed_positions
+    if overlap_with_removed:
+        log.warning(
+            f"⚠️ BUG: {len(overlap_with_removed)} removed BHs survived first-pass filter!"
+        )
+
     # Add new boreholes (deduplicated)
+    # CRITICAL BUG FIX: boreholes_to_add contains ALL selected boreholes,
+    # including first-pass BHs that were RE-selected by ILP. These should
+    # NOT be added if they were also marked as REMOVED.
+    # A BH can be in both "selected" and "removed" if:
+    # 1. It was in Tier 1 for one cluster (so it's a candidate there)
+    # 2. It was NOT selected by that cluster's ILP → marked as removed
+    # 3. It was in Tier 2 for another cluster (locked, always selected)
+    # Result: Same BH is in both removed and boreholes_to_add
     for bh in boreholes_to_add:
-        if (bh["x"], bh["y"]) not in existing_pos:
+        pos = (bh["x"], bh["y"])
+        # CRITICAL: Also check if this borehole is in removed_positions
+        if pos not in existing_pos and pos not in removed_positions:
             optimized.append(bh)
-            existing_pos.add((bh["x"], bh["y"]))
+            existing_pos.add(pos)
+        elif pos in removed_positions:
+            log.debug(
+                f"   Skipping removed BH at ({pos[0]:.2f}, {pos[1]:.2f}) from boreholes_to_add"
+            )
+
+    # Final verification: check for overlap between optimized and removed
+    optimized_positions = {(bh["x"], bh["y"]) for bh in optimized}
+    final_overlap = optimized_positions & removed_positions
+    if final_overlap:
+        log.error(
+            f"❌ BUG: {len(final_overlap)} removed BHs still in optimized after assembly!"
+        )
+        for pos in list(final_overlap)[:5]:
+            log.error(f"   - ({pos[0]:.4f}, {pos[1]:.4f})")
+    else:
+        log.info(f"✅ CZRC Final: optimized={len(optimized)}, no removed BHs in output")
 
     elapsed = time.perf_counter() - start_time
 
