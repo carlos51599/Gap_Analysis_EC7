@@ -313,9 +313,11 @@ def classify_first_pass_boreholes(
     first_pass_boreholes: List[Dict[str, Any]],
     tier1_region: BaseGeometry,
     tier2_region: BaseGeometry,
-) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    all_boreholes: Optional[List[Dict[str, Any]]] = None,
+    r_max: Optional[float] = None,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
-    Classify boreholes into Tier 1 candidates vs Tier 2 locked.
+    Classify boreholes into Tier 1 candidates, Tier 2 locked, and external coverage.
 
     This function is named for historical reasons but is used in both Second Pass
     (classifying First Pass boreholes) and Third Pass (classifying Second Pass output).
@@ -323,21 +325,30 @@ def classify_first_pass_boreholes(
     Classification Rules:
         - Tier 1 (inside): CANDIDATES for ILP re-optimization (grey markers in viz)
         - Tier 2 only (outside Tier 1): LOCKED CONSTANTS providing pre-coverage
-        - Outside both tiers: Not relevant to this CZRC pair
+        - External (outside Tier 2 but within R_max buffer): Additional pre-coverage
+        - Outside buffer zone: Not relevant to this CZRC pair
 
     For Third Pass specifically:
         - Input: Second Pass OUTPUT (First Pass survivors + Second Pass additions)
         - Tier 1 candidates: Shown as grey markers, eligible for removal
         - Tier 2 locked: Provide coverage context but are NOT re-optimized
+        - External: Boreholes from other cells that can cover Tier 2 test points
 
     Args:
         first_pass_boreholes: Boreholes to classify (First Pass for 2nd pass,
             Second Pass OUTPUT for 3rd pass)
         tier1_region: Tier 1 boundary (active optimization region)
         tier2_region: Tier 2 boundary (always contains Tier 1, coverage context)
+        all_boreholes: Optional full set of boreholes for external coverage detection.
+            For Second Pass: all First Pass output from all zones.
+            For Third Pass: all Second Pass output (second_pass_candidates).
+        r_max: Maximum coverage radius, used to compute external buffer zone.
 
     Returns:
-        Tuple of (candidates, locked) borehole lists
+        Tuple of (candidates, locked, external) borehole lists.
+        - candidates: Tier 1 boreholes (ILP candidates)
+        - locked: Tier 2 ring boreholes (locked coverage)
+        - external: Boreholes outside Tier 2 but within R_max buffer (additional coverage)
     """
     candidates = []
     locked = []
@@ -350,7 +361,28 @@ def classify_first_pass_boreholes(
         elif tier2_region.contains(pt):
             locked.append(bh)
 
-    return candidates, locked
+    # Detect external boreholes that can cover Tier 2 test points
+    external: List[Dict[str, Any]] = []
+    if all_boreholes is not None and r_max is not None and r_max > 0:
+        # Buffer Tier 2 outward by R_max to find external coverage zone
+        tier2_buffer = tier2_region.buffer(r_max)
+        # External zone = buffer ring outside Tier 2
+        external_zone = tier2_buffer.difference(tier2_region)
+
+        # Track positions already in candidates/locked to avoid duplicates
+        known_positions = {(bh["x"], bh["y"]) for bh in candidates}
+        known_positions.update((bh["x"], bh["y"]) for bh in locked)
+
+        for bh in all_boreholes:
+            pos = (bh["x"], bh["y"])
+            if pos in known_positions:
+                continue  # Already classified
+            pt = Point(bh["x"], bh["y"])
+            if external_zone.contains(pt):
+                external.append(bh)
+                known_positions.add(pos)  # Prevent re-adding
+
+    return candidates, locked, external
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -685,9 +717,25 @@ def _compute_unsatisfied_test_points(
     tier1_test_points: List[Dict[str, Any]],
     locked_boreholes: List[Dict[str, Any]],
     logger: Optional[logging.Logger],
+    external_boreholes: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[List[Dict[str, Any]], int]:
-    """Compute test points not pre-covered by Tier 2 boreholes."""
-    pre_covered = _compute_locked_coverage(tier1_test_points, locked_boreholes, logger)
+    """Compute test points not pre-covered by locked (Tier 2) or external boreholes.
+
+    Args:
+        tier1_test_points: Test points to check coverage for
+        locked_boreholes: Boreholes inside Tier 2 (locked coverage)
+        logger: Optional logger
+        external_boreholes: Boreholes outside Tier 2 but within R_max buffer
+
+    Returns:
+        (unsatisfied_test_points, precovered_count)
+    """
+    # Combine locked and external boreholes for coverage check
+    all_coverage_bhs = list(locked_boreholes)
+    if external_boreholes:
+        all_coverage_bhs.extend(external_boreholes)
+
+    pre_covered = _compute_locked_coverage(tier1_test_points, all_coverage_bhs, logger)
     unsatisfied = [tp for i, tp in enumerate(tier1_test_points) if i not in pre_covered]
     return unsatisfied, len(pre_covered)
 
@@ -695,17 +743,20 @@ def _compute_unsatisfied_test_points(
 def _annotate_test_points_with_coverage(
     test_points: List[Dict[str, Any]],
     locked_boreholes: List[Dict[str, Any]],
+    external_boreholes: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """
-    Annotate test points with is_covered flag based on locked borehole coverage.
+    Annotate test points with is_covered flag based on locked and external coverage.
 
     This function marks each test point with is_covered=True if it falls within
-    the coverage radius of any locked (Tier 2) borehole, or is_covered=False otherwise.
-    Used for visualization to show which test points are pre-covered vs unsatisfied.
+    the coverage radius of any locked (Tier 2) or external borehole, or
+    is_covered=False otherwise. Used for visualization to show which test points
+    are pre-covered vs unsatisfied.
 
     Args:
         test_points: List of test point dicts with x, y, required_radius, zone
         locked_boreholes: Locked boreholes from Tier 2 region
+        external_boreholes: Boreholes outside Tier 2 but within R_max buffer
 
     Returns:
         List of test point dicts with added is_covered boolean field
@@ -713,8 +764,13 @@ def _annotate_test_points_with_coverage(
     if not test_points:
         return []
 
+    # Combine locked and external boreholes for coverage check
+    all_coverage_bhs = list(locked_boreholes)
+    if external_boreholes:
+        all_coverage_bhs.extend(external_boreholes)
+
     # Compute pre-covered indices using existing function
-    pre_covered_indices = _compute_locked_coverage(test_points, locked_boreholes, None)
+    pre_covered_indices = _compute_locked_coverage(test_points, all_coverage_bhs, None)
 
     # Annotate each test point with coverage status
     annotated = []
@@ -794,7 +850,9 @@ def solve_czrc_ilp_for_pair(
         return [], [], [], {"status": "skipped", "reason": "no_tier1_test_points"}
 
     # Step 4: Classify boreholes
-    bh_candidates, locked = classify_first_pass_boreholes(
+    # Note: This simpler function doesn't have access to all boreholes for external detection
+    # External coverage detection is handled in solve_czrc_ilp_for_cluster
+    bh_candidates, locked, _external = classify_first_pass_boreholes(
         first_pass_boreholes, tier1_region, tier2_region
     )
 
@@ -1632,7 +1690,7 @@ def solve_cell_cell_czrc(
     # Prepare grey marker visualization: Second Pass OUTPUT filtered to Third Pass Tier 1
     # These show which boreholes entered Third Pass re-optimization as candidates
     if second_pass_candidates is not None:
-        viz_candidates, _ = classify_first_pass_boreholes(
+        viz_candidates, _, _ = classify_first_pass_boreholes(
             second_pass_candidates, tier1_region, tier2_region
         )
     else:
@@ -1640,7 +1698,7 @@ def solve_cell_cell_czrc(
 
     if not tier1_test_points:
         # Still classify boreholes for visualization even when skipping
-        bh_candidates_viz, _ = classify_first_pass_boreholes(
+        bh_candidates_viz, _, _ = classify_first_pass_boreholes(
             cell_boreholes, tier1_region, tier2_region
         )
         # Use viz_candidates for grey markers if provided, else fall back to bh_candidates_viz
@@ -1678,9 +1736,15 @@ def solve_cell_cell_czrc(
             clip_geometry=zones_clip_geometry,
         )
 
-    # Step 3: Classify boreholes (REUSE)
-    bh_candidates, locked = classify_first_pass_boreholes(
-        cell_boreholes, tier1_region, tier2_region
+    # Step 3: Classify boreholes with external coverage detection
+    # Use second_pass_candidates (all Second Pass output) for external coverage detection
+    # This captures boreholes from OTHER cells that can cover this cell-pair's test points
+    bh_candidates, locked, external = classify_first_pass_boreholes(
+        cell_boreholes,
+        tier1_region,
+        tier2_region,
+        all_boreholes=second_pass_candidates,  # Full Second Pass output for external detection
+        r_max=r_max,
     )
 
     if not bh_candidates:
@@ -1704,9 +1768,9 @@ def solve_cell_cell_czrc(
             },
         )
 
-    # Step 4: Compute unsatisfied test points (REUSE)
+    # Step 4: Compute unsatisfied test points including external coverage
     tier1_unsatisfied, precovered_ct = _compute_unsatisfied_test_points(
-        tier1_test_points, locked, logger
+        tier1_test_points, locked, logger, external_boreholes=external
     )
 
     # Step 5: Prepare candidates (REUSE)
@@ -1774,6 +1838,7 @@ def solve_cell_cell_czrc(
             "tier1_unsatisfied": len(tier1_unsatisfied) if tier1_unsatisfied else 0,
             "tier2_ring_test_points": len(tier2_ring_test_points),
             "precovered": precovered_ct,
+            "external_coverage_bhs": len(external),  # NEW: Track external coverage sources
             "candidates": len(candidates),
             "bh_candidates": len(bh_candidates),
             "locked": len(locked),
@@ -1786,12 +1851,12 @@ def solve_cell_cell_czrc(
             "tier1_wkt": tier1_region.wkt,
             "tier2_wkt": tier2_region.wkt,
             "r_max": r_max,
-            # Visualization data: test points used for this cell-cell pair with is_covered flag
+            # Visualization data: test points with is_covered flag including external coverage
             "viz_tier1_test_points": _annotate_test_points_with_coverage(
-                tier1_test_points, locked
+                tier1_test_points, locked, external_boreholes=external
             ),
             "viz_tier2_ring_test_points": _annotate_test_points_with_coverage(
-                tier2_ring_test_points, locked
+                tier2_ring_test_points, locked, external_boreholes=external
             ),
             # Grey markers: Second Pass OUTPUT boreholes filtered to Third Pass Tier 1
             # These are the candidates that entered Third Pass re-optimization
@@ -2081,14 +2146,20 @@ def solve_czrc_ilp_for_cluster(
     if not tier1_test_points:
         return [], [], [], {"status": "skipped", "reason": "no_tier1_test_points"}
 
-    # Step 2: Classify boreholes using unified tier regions
-    bh_candidates, locked = classify_first_pass_boreholes(
-        first_pass_boreholes, unified_tier1, unified_tier2
+    # Step 2: Classify boreholes with external coverage detection
+    # first_pass_boreholes contains ALL First Pass output from all zones,
+    # so we use it for both classification AND external detection
+    bh_candidates, locked, external = classify_first_pass_boreholes(
+        first_pass_boreholes,
+        unified_tier1,
+        unified_tier2,
+        all_boreholes=first_pass_boreholes,  # Use full First Pass output for external detection
+        r_max=overall_r_max,
     )
 
-    # Step 3: Compute unsatisfied test points (Tier 1)
+    # Step 3: Compute unsatisfied test points including external coverage
     tier1_unsatisfied, precovered_ct = _compute_unsatisfied_test_points(
-        tier1_test_points, locked, logger
+        tier1_test_points, locked, logger, external_boreholes=external
     )
 
     # Step 3.5: Generate Tier 2 ring test points if enabled
@@ -2110,7 +2181,7 @@ def solve_czrc_ilp_for_cluster(
         )
         if tier2_ring_test_points:
             tier2_ring_unsatisfied, _ = _compute_unsatisfied_test_points(
-                tier2_ring_test_points, locked, logger
+                tier2_ring_test_points, locked, logger, external_boreholes=external
             )
 
     # Combine Tier 1 and Tier 2 ring unsatisfied test points
@@ -2233,16 +2304,21 @@ def solve_czrc_ilp_for_cluster(
         "tier1_test_points": len(tier1_test_points),
         "tier2_ring_test_points": len(tier2_ring_test_points),
         "precovered_count": precovered_ct,
+        "external_coverage_bhs": len(external),  # Track external coverage sources
         "unsatisfied_count": len(unsatisfied),
         "candidates_count": len(candidates),
         "selected_count": len(selected),
         "solve_time": elapsed,
         "ilp_stats": ilp_stats,
         "first_pass_candidates": bh_candidates,
-        # CZRC test points for visualization with is_covered flag for coloring
+        # CZRC test points for visualization with is_covered flag including external coverage
         "czrc_test_points": (
-            _annotate_test_points_with_coverage(tier1_test_points, locked)
-            + _annotate_test_points_with_coverage(tier2_ring_test_points, locked)
+            _annotate_test_points_with_coverage(
+                tier1_test_points, locked, external_boreholes=external
+            )
+            + _annotate_test_points_with_coverage(
+                tier2_ring_test_points, locked, external_boreholes=external
+            )
         ),
         # Second Pass output = selected (for direct ILP, this is final; for split, Third Pass comes after)
         "second_pass_boreholes": [
