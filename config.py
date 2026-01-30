@@ -971,8 +971,10 @@ CONFIG: Dict[str, Any] = {
         },
         # CZRC test points styling (Tier 1 + Tier 2 ring test points)
         "czrc_test_points": {
-            "tier1_color": "rgba(255, 0, 0, 1)",  # Blue for Tier 1
-            "tier2_color": "rgba(174, 0, 255, 1)",  # Purple for Tier 2 ring
+            "tier1_color": "rgba(255, 0, 0, 1)",  # Red for Tier 1 uncovered
+            "tier2_color": "rgba(174, 0, 255, 1)",  # Purple for Tier 2 ring uncovered
+            "tier1_covered_color": "rgba(0, 200, 0, 1)",  # Green for Tier 1 covered by locked BHs
+            "tier2_covered_color": "rgba(0, 180, 0, 1)",  # Green for Tier 2 ring covered by locked BHs
             "size": 5,  # Small markers
             "symbol": "circle",  # Circle markers
         },

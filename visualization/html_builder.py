@@ -882,38 +882,48 @@ def _add_czrc_test_points_trace(
     tier1_pts = [tp for tp in czrc_test_points if tp.get("zone") != "tier2_ring"]
     tier2_pts = [tp for tp in czrc_test_points if tp.get("zone") == "tier2_ring"]
 
+    # Further split by coverage status (is_covered flag from czrc_solver)
+    tier1_covered = [tp for tp in tier1_pts if tp.get("is_covered", False)]
+    tier1_uncovered = [tp for tp in tier1_pts if not tp.get("is_covered", False)]
+    tier2_covered = [tp for tp in tier2_pts if tp.get("is_covered", False)]
+    tier2_uncovered = [tp for tp in tier2_pts if not tp.get("is_covered", False)]
+
     print(
-        f"   🔷 _add_czrc_test_points_trace: {len(tier1_pts)} Tier1, {len(tier2_pts)} Tier2 ring"
+        f"   🔷 _add_czrc_test_points_trace: Tier1 {len(tier1_uncovered)} uncovered + "
+        f"{len(tier1_covered)} covered, Tier2 {len(tier2_uncovered)} uncovered + "
+        f"{len(tier2_covered)} covered"
     )
 
     # Get colors from config
     from Gap_Analysis_EC7.config import CONFIG
 
     czrc_viz = CONFIG.get("visualization", {}).get("czrc_test_points", {})
-    tier1_color = czrc_viz.get("tier1_color", "rgba(0, 100, 255, 0.6)")
-    tier2_color = czrc_viz.get("tier2_color", "rgba(128, 0, 255, 0.6)")
+    tier1_color = czrc_viz.get("tier1_color", "rgba(255, 0, 0, 1)")
+    tier2_color = czrc_viz.get("tier2_color", "rgba(174, 0, 255, 1)")
+    tier1_covered_color = czrc_viz.get("tier1_covered_color", "rgba(0, 200, 0, 1)")
+    tier2_covered_color = czrc_viz.get("tier2_covered_color", "rgba(0, 180, 0, 1)")
     marker_size = czrc_viz.get("size", 4)
 
     start_idx = len(fig.data)
 
-    # Tier 1 test points trace (blue dots) - using Scattergl for cartesian coordinates
-    if tier1_pts:
+    # Tier 1 UNCOVERED test points (red - require ILP coverage)
+    if tier1_uncovered:
         fig.add_trace(
             go.Scattergl(
-                x=[tp["x"] for tp in tier1_pts],
-                y=[tp["y"] for tp in tier1_pts],
+                x=[tp["x"] for tp in tier1_uncovered],
+                y=[tp["y"] for tp in tier1_uncovered],
                 mode="markers",
                 marker=dict(
                     size=marker_size,
                     color=tier1_color,
                     symbol="circle",
                 ),
-                name=f"CZRC Tier1 Test Points ({combo_key})",
+                name=f"CZRC Tier1 Uncovered ({combo_key})",
                 visible=is_visible,
                 showlegend=False,
                 legendgroup="czrc_test_points",
                 hovertemplate=(
-                    "<b>Tier 1 Test Point</b><br>"
+                    "<b>Tier 1 Test Point (Uncovered)</b><br>"
                     "Easting: %{x:,.0f}<br>"
                     "Northing: %{y:,.0f}<br>"
                     "<extra></extra>"
@@ -921,24 +931,74 @@ def _add_czrc_test_points_trace(
             )
         )
 
-    # Tier 2 ring test points trace (purple dots)
-    if tier2_pts:
+    # Tier 1 COVERED test points (green - pre-covered by locked boreholes)
+    if tier1_covered:
         fig.add_trace(
             go.Scattergl(
-                x=[tp["x"] for tp in tier2_pts],
-                y=[tp["y"] for tp in tier2_pts],
+                x=[tp["x"] for tp in tier1_covered],
+                y=[tp["y"] for tp in tier1_covered],
+                mode="markers",
+                marker=dict(
+                    size=marker_size,
+                    color=tier1_covered_color,
+                    symbol="circle",
+                ),
+                name=f"CZRC Tier1 Covered ({combo_key})",
+                visible=is_visible,
+                showlegend=False,
+                legendgroup="czrc_test_points",
+                hovertemplate=(
+                    "<b>Tier 1 Test Point (Covered by Locked BH)</b><br>"
+                    "Easting: %{x:,.0f}<br>"
+                    "Northing: %{y:,.0f}<br>"
+                    "<extra></extra>"
+                ),
+            )
+        )
+
+    # Tier 2 ring UNCOVERED test points (purple)
+    if tier2_uncovered:
+        fig.add_trace(
+            go.Scattergl(
+                x=[tp["x"] for tp in tier2_uncovered],
+                y=[tp["y"] for tp in tier2_uncovered],
                 mode="markers",
                 marker=dict(
                     size=marker_size,
                     color=tier2_color,
                     symbol="circle",
                 ),
-                name=f"CZRC Tier2 Ring Test Points ({combo_key})",
+                name=f"CZRC Tier2 Ring Uncovered ({combo_key})",
                 visible=is_visible,
                 showlegend=False,
                 legendgroup="czrc_test_points",
                 hovertemplate=(
-                    "<b>Tier 2 Ring Test Point</b><br>"
+                    "<b>Tier 2 Ring Test Point (Uncovered)</b><br>"
+                    "Easting: %{x:,.0f}<br>"
+                    "Northing: %{y:,.0f}<br>"
+                    "<extra></extra>"
+                ),
+            )
+        )
+
+    # Tier 2 ring COVERED test points (green)
+    if tier2_covered:
+        fig.add_trace(
+            go.Scattergl(
+                x=[tp["x"] for tp in tier2_covered],
+                y=[tp["y"] for tp in tier2_covered],
+                mode="markers",
+                marker=dict(
+                    size=marker_size,
+                    color=tier2_covered_color,
+                    symbol="circle",
+                ),
+                name=f"CZRC Tier2 Ring Covered ({combo_key})",
+                visible=is_visible,
+                showlegend=False,
+                legendgroup="czrc_test_points",
+                hovertemplate=(
+                    "<b>Tier 2 Ring Test Point (Covered by Locked BH)</b><br>"
                     "Easting: %{x:,.0f}<br>"
                     "Northing: %{y:,.0f}<br>"
                     "<extra></extra>"
@@ -1242,10 +1302,14 @@ def _add_third_pass_test_points_trace(
     (cell-cell coverage cloud intersection), plus fresh Tier 2 ring test
     points generated with sparse spacing (3x multiplier) for the ring area.
 
+    Test points are split by coverage status:
+    - Covered (green): Pre-covered by locked boreholes, removed from ILP
+    - Uncovered (red/purple): Need to be satisfied by ILP
+
     Args:
         fig: Plotly figure to add traces to
         combo_key: Filter combination key for trace naming
-        czrc_test_points: List of {"x", "y", "zone"} test point coordinates
+        czrc_test_points: List of {"x", "y", "zone", "is_covered"} test point coordinates
         is_visible: Initial visibility state (default False - hidden)
 
     Returns:
@@ -1263,35 +1327,44 @@ def _add_third_pass_test_points_trace(
     tier1_pts = [tp for tp in czrc_test_points if tp.get("zone") != "tier2_ring"]
     tier2_pts = [tp for tp in czrc_test_points if tp.get("zone") == "tier2_ring"]
 
+    # Further split by coverage status (is_covered flag from czrc_solver)
+    tier1_covered = [tp for tp in tier1_pts if tp.get("is_covered", False)]
+    tier1_uncovered = [tp for tp in tier1_pts if not tp.get("is_covered", False)]
+    tier2_covered = [tp for tp in tier2_pts if tp.get("is_covered", False)]
+    tier2_uncovered = [tp for tp in tier2_pts if not tp.get("is_covered", False)]
+
     print(
-        f"   🔶 _add_third_pass_test_points_trace: {len(tier1_pts)} Tier1, "
-        f"{len(tier2_pts)} Tier2 ring"
+        f"   🔶 _add_third_pass_test_points_trace: Tier1 {len(tier1_uncovered)} uncovered + "
+        f"{len(tier1_covered)} covered, Tier2 {len(tier2_uncovered)} uncovered + "
+        f"{len(tier2_covered)} covered"
     )
 
-    # Get colors from config (use orange tones for Third Pass to distinguish)
+    # Get colors from config
     czrc_viz = CONFIG.get("visualization", {}).get("czrc_test_points", {})
-    tier1_color = czrc_viz.get("tier1_color", "rgba(255, 140, 0, 0.6)")  # Orange
-    tier2_color = czrc_viz.get("tier2_color", "rgba(255, 180, 50, 0.6)")  # Light orange
+    tier1_color = czrc_viz.get("tier1_color", "rgba(255, 0, 0, 1)")
+    tier2_color = czrc_viz.get("tier2_color", "rgba(174, 0, 255, 1)")
+    tier1_covered_color = czrc_viz.get("tier1_covered_color", "rgba(0, 200, 0, 1)")
+    tier2_covered_color = czrc_viz.get("tier2_covered_color", "rgba(0, 180, 0, 1)")
     marker_size = czrc_viz.get("size", 4)
 
-    # Tier 1 test points trace (orange dots)
-    if tier1_pts:
+    # Tier 1 UNCOVERED test points (red - require ILP coverage)
+    if tier1_uncovered:
         fig.add_trace(
             go.Scattergl(
-                x=[tp["x"] for tp in tier1_pts],
-                y=[tp["y"] for tp in tier1_pts],
+                x=[tp["x"] for tp in tier1_uncovered],
+                y=[tp["y"] for tp in tier1_uncovered],
                 mode="markers",
                 marker=dict(
                     size=marker_size,
                     color=tier1_color,
                     symbol="circle",
                 ),
-                name=f"Third Pass Tier1 Test Points ({combo_key})",
+                name=f"Third Pass Tier1 Uncovered ({combo_key})",
                 visible=is_visible,
                 showlegend=False,
                 legendgroup="third_pass_test_points",
                 hovertemplate=(
-                    "<b>Tier 1 Test Point</b><br>"
+                    "<b>Tier 1 Test Point (Uncovered)</b><br>"
                     "Easting: %{x:,.0f}<br>"
                     "Northing: %{y:,.0f}<br>"
                     "<extra></extra>"
@@ -1299,24 +1372,74 @@ def _add_third_pass_test_points_trace(
             )
         )
 
-    # Tier 2 ring test points trace (lighter orange dots)
-    if tier2_pts:
+    # Tier 1 COVERED test points (green - pre-covered by locked boreholes)
+    if tier1_covered:
         fig.add_trace(
             go.Scattergl(
-                x=[tp["x"] for tp in tier2_pts],
-                y=[tp["y"] for tp in tier2_pts],
+                x=[tp["x"] for tp in tier1_covered],
+                y=[tp["y"] for tp in tier1_covered],
+                mode="markers",
+                marker=dict(
+                    size=marker_size,
+                    color=tier1_covered_color,
+                    symbol="circle",
+                ),
+                name=f"Third Pass Tier1 Covered ({combo_key})",
+                visible=is_visible,
+                showlegend=False,
+                legendgroup="third_pass_test_points",
+                hovertemplate=(
+                    "<b>Tier 1 Test Point (Covered by Locked BH)</b><br>"
+                    "Easting: %{x:,.0f}<br>"
+                    "Northing: %{y:,.0f}<br>"
+                    "<extra></extra>"
+                ),
+            )
+        )
+
+    # Tier 2 ring UNCOVERED test points (purple)
+    if tier2_uncovered:
+        fig.add_trace(
+            go.Scattergl(
+                x=[tp["x"] for tp in tier2_uncovered],
+                y=[tp["y"] for tp in tier2_uncovered],
                 mode="markers",
                 marker=dict(
                     size=marker_size,
                     color=tier2_color,
                     symbol="circle",
                 ),
-                name=f"Third Pass Tier2 Ring Test Points ({combo_key})",
+                name=f"Third Pass Tier2 Ring Uncovered ({combo_key})",
                 visible=is_visible,
                 showlegend=False,
                 legendgroup="third_pass_test_points",
                 hovertemplate=(
-                    "<b>Tier 2 Ring Test Point</b><br>"
+                    "<b>Tier 2 Ring Test Point (Uncovered)</b><br>"
+                    "Easting: %{x:,.0f}<br>"
+                    "Northing: %{y:,.0f}<br>"
+                    "<extra></extra>"
+                ),
+            )
+        )
+
+    # Tier 2 ring COVERED test points (green)
+    if tier2_covered:
+        fig.add_trace(
+            go.Scattergl(
+                x=[tp["x"] for tp in tier2_covered],
+                y=[tp["y"] for tp in tier2_covered],
+                mode="markers",
+                marker=dict(
+                    size=marker_size,
+                    color=tier2_covered_color,
+                    symbol="circle",
+                ),
+                name=f"Third Pass Tier2 Ring Covered ({combo_key})",
+                visible=is_visible,
+                showlegend=False,
+                legendgroup="third_pass_test_points",
+                hovertemplate=(
+                    "<b>Tier 2 Ring Test Point (Covered by Locked BH)</b><br>"
                     "Easting: %{x:,.0f}<br>"
                     "Northing: %{y:,.0f}<br>"
                     "<extra></extra>"

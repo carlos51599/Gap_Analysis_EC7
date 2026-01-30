@@ -692,6 +692,40 @@ def _compute_unsatisfied_test_points(
     return unsatisfied, len(pre_covered)
 
 
+def _annotate_test_points_with_coverage(
+    test_points: List[Dict[str, Any]],
+    locked_boreholes: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Annotate test points with is_covered flag based on locked borehole coverage.
+
+    This function marks each test point with is_covered=True if it falls within
+    the coverage radius of any locked (Tier 2) borehole, or is_covered=False otherwise.
+    Used for visualization to show which test points are pre-covered vs unsatisfied.
+
+    Args:
+        test_points: List of test point dicts with x, y, required_radius, zone
+        locked_boreholes: Locked boreholes from Tier 2 region
+
+    Returns:
+        List of test point dicts with added is_covered boolean field
+    """
+    if not test_points:
+        return []
+
+    # Compute pre-covered indices using existing function
+    pre_covered_indices = _compute_locked_coverage(test_points, locked_boreholes, None)
+
+    # Annotate each test point with coverage status
+    annotated = []
+    for i, tp in enumerate(test_points):
+        annotated_tp = dict(tp)  # Copy original fields
+        annotated_tp["is_covered"] = i in pre_covered_indices
+        annotated.append(annotated_tp)
+
+    return annotated
+
+
 def _build_pair_stats(
     pair_key: str,
     r_max: float,
@@ -1675,26 +1709,14 @@ def solve_cell_cell_czrc(
         tier1_test_points, locked, logger
     )
 
-    # Step 4b: Compute unsatisfied Tier 2 ring test points
-    # CRITICAL: Tier 2 test points must be included in ILP to prevent gap creation
-    tier2_ring_unsatisfied: List[Dict[str, Any]] = []
-    if tier2_ring_test_points:
-        tier2_ring_unsatisfied, _ = _compute_unsatisfied_test_points(
-            tier2_ring_test_points, locked, logger
-        )
-
-    # Combine Tier 1 and Tier 2 ring unsatisfied test points
-    all_unsatisfied = tier1_unsatisfied + tier2_ring_unsatisfied
-
     # Step 5: Prepare candidates (REUSE)
     candidates, _ = _prepare_candidates_for_ilp(
         tier1_region, bh_candidates, r_max, spacing, config
     )
 
     # Step 6: Solve ILP (REUSE)
-    # Use combined unsatisfied (Tier1 + Tier2) to ensure Tier 2 coverage is maintained
-    # If all are precovered, use tier1_test_points to allow removing redundant candidates
-    solve_test_points = all_unsatisfied if all_unsatisfied else tier1_test_points
+    # Use tier1_test_points if all are precovered (allows removing redundant candidates)
+    solve_test_points = tier1_unsatisfied if tier1_unsatisfied else tier1_test_points
     selected_indices, ilp_stats = _solve_czrc_ilp(
         solve_test_points,
         candidates,
@@ -1751,8 +1773,6 @@ def solve_cell_cell_czrc(
             "tier1_test_points": len(tier1_test_points),
             "tier1_unsatisfied": len(tier1_unsatisfied) if tier1_unsatisfied else 0,
             "tier2_ring_test_points": len(tier2_ring_test_points),
-            "tier2_ring_unsatisfied": len(tier2_ring_unsatisfied),
-            "total_unsatisfied": len(all_unsatisfied),
             "precovered": precovered_ct,
             "candidates": len(candidates),
             "bh_candidates": len(bh_candidates),
@@ -1766,9 +1786,13 @@ def solve_cell_cell_czrc(
             "tier1_wkt": tier1_region.wkt,
             "tier2_wkt": tier2_region.wkt,
             "r_max": r_max,
-            # Visualization data: test points used for this cell-cell pair
-            "viz_tier1_test_points": tier1_test_points,
-            "viz_tier2_ring_test_points": tier2_ring_test_points,
+            # Visualization data: test points used for this cell-cell pair with is_covered flag
+            "viz_tier1_test_points": _annotate_test_points_with_coverage(
+                tier1_test_points, locked
+            ),
+            "viz_tier2_ring_test_points": _annotate_test_points_with_coverage(
+                tier2_ring_test_points, locked
+            ),
             # Grey markers: Second Pass OUTPUT boreholes filtered to Third Pass Tier 1
             # These are the candidates that entered Third Pass re-optimization
             "viz_existing_boreholes": actual_viz_boreholes,
@@ -2215,8 +2239,11 @@ def solve_czrc_ilp_for_cluster(
         "solve_time": elapsed,
         "ilp_stats": ilp_stats,
         "first_pass_candidates": bh_candidates,
-        # CZRC test points for visualization (all points, not just unsatisfied)
-        "czrc_test_points": tier1_test_points + tier2_ring_test_points,
+        # CZRC test points for visualization with is_covered flag for coloring
+        "czrc_test_points": (
+            _annotate_test_points_with_coverage(tier1_test_points, locked)
+            + _annotate_test_points_with_coverage(tier2_ring_test_points, locked)
+        ),
         # Second Pass output = selected (for direct ILP, this is final; for split, Third Pass comes after)
         "second_pass_boreholes": [
             {
