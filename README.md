@@ -454,6 +454,19 @@ Cell boundaries appear as orange dotted lines in HTML (CZRC Grid checkbox). See 
 
 The third pass applies the **exact same CZRC algorithm** to cell-cell boundaries that the second pass applies to zone-zone boundaries. This is a recursive application of the proven CZRC approach.
 
+#### Third Pass Visualization Definitions
+
+| Term                 | Definition                                                                                                                                                                       |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Grey Markers**     | Second Pass OUTPUT boreholes (First Pass survivors + Second Pass additions) that fall within Third Pass **Tier 1**. These are candidates for re-optimization and may be removed. |
+| **Locked Boreholes** | Second Pass OUTPUT boreholes that fall within Third Pass **Tier 2** (but outside Tier 1). These provide coverage context but are NOT re-optimized - treated as fixed constants.  |
+| **Red X Markers**    | Boreholes that were in Third Pass Tier 1 (grey markers) but were removed by Third Pass ILP.                                                                                      |
+| **Blue Markers**     | Boreholes that survived Third Pass (either were locked in Tier 2, or were selected by ILP in Tier 1).                                                                            |
+
+**Key Point:** Grey markers show the INPUT to Third Pass re-optimization within the Tier 1 area. If a borehole was not in Third Pass Tier 1, it was locked and not subject to removal.
+
+---
+
 #### The Cell Boundary Problem
 
 When the second pass splits large CZRC regions into Voronoi cells (via K-means clustering), each cell is solved independently. This creates the **same over-provisioning problem** that exists between zones:

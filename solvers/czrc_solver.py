@@ -1,11 +1,11 @@
 """
-CZRC (Cross-Zone Redundancy Check) Second-Pass Optimization.
+CZRC (Cross-Zone Redundancy Check) Second-Pass and Third-Pass Optimization.
 
 Architectural Overview:
 =======================
-Responsibility: Second-pass optimization using precise coverage-cloud-based
-regions for multi-zone borehole consolidation. Replaces border_consolidation
-approach with mathematically rigorous tier-based classification.
+Responsibility: Second-pass and Third-pass optimization using precise
+coverage-cloud-based regions for multi-zone and cell-cell borehole
+consolidation. Uses mathematically rigorous tier-based classification.
 
 Key Interactions:
     - Uses czrc_geometry.py for CZRC region computation
@@ -13,12 +13,21 @@ Key Interactions:
     - Reuses helper functions from consolidation.py
     - Optional: czrc_cache.py for intra-run result caching
 
+Third Pass Visualization Definitions:
+    - GREY MARKERS: Second Pass OUTPUT (First Pass survivors + Second Pass
+      additions) that fall within Third Pass Tier 1. These are the candidates
+      that may be removed by Third Pass re-optimization.
+    - LOCKED BOREHOLES: Second Pass OUTPUT that fall within Third Pass Tier 2
+      (but outside Tier 1). These provide coverage context but are NOT
+      re-optimized - they're treated as fixed constants during ILP.
+
 Navigation Guide:
-    1. run_czrc_optimization() - Main entry point
-    2. solve_czrc_ilp_for_pair() - Per-pair ILP orchestration
-    3. compute_czrc_tiers() - Tier boundary computation
-    4. filter_test_points_to_tier1() - Test point filtering
-    5. classify_first_pass_boreholes() - Borehole classification
+    1. run_czrc_optimization() - Main entry point (Second Pass)
+    2. check_and_split_large_cluster() - Handles large clusters via cell splitting
+    3. run_cell_czrc_pass() - Third Pass cell-cell CZRC
+    4. solve_czrc_ilp_for_pair() - Per-pair ILP orchestration
+    5. compute_czrc_tiers() - Tier boundary computation
+    6. classify_first_pass_boreholes() - Borehole classification (Tier 1 vs Tier 2)
 
 REUSED FUNCTIONS (from existing modules):
     - _solve_ilp() from solver_algorithms.py
@@ -306,17 +315,26 @@ def classify_first_pass_boreholes(
     tier2_region: BaseGeometry,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
-    Classify first-pass boreholes into Tier 1 candidates vs Tier 2 locked.
+    Classify boreholes into Tier 1 candidates vs Tier 2 locked.
+
+    This function is named for historical reasons but is used in both Second Pass
+    (classifying First Pass boreholes) and Third Pass (classifying Second Pass output).
 
     Classification Rules:
-        - Tier 1 (inside): CANDIDATES for ILP optimization
-        - Tier 2 only (outside Tier 1): LOCKED CONSTANTS (provide pre-coverage)
+        - Tier 1 (inside): CANDIDATES for ILP re-optimization (grey markers in viz)
+        - Tier 2 only (outside Tier 1): LOCKED CONSTANTS providing pre-coverage
         - Outside both tiers: Not relevant to this CZRC pair
 
+    For Third Pass specifically:
+        - Input: Second Pass OUTPUT (First Pass survivors + Second Pass additions)
+        - Tier 1 candidates: Shown as grey markers, eligible for removal
+        - Tier 2 locked: Provide coverage context but are NOT re-optimized
+
     Args:
-        first_pass_boreholes: From all_stats["selected_boreholes"]
-        tier1_region: Tier 1 boundary
-        tier2_region: Tier 2 boundary (always contains Tier 1)
+        first_pass_boreholes: Boreholes to classify (First Pass for 2nd pass,
+            Second Pass OUTPUT for 3rd pass)
+        tier1_region: Tier 1 boundary (active optimization region)
+        tier2_region: Tier 2 boundary (always contains Tier 1, coverage context)
 
     Returns:
         Tuple of (candidates, locked) borehole lists
@@ -1301,15 +1319,51 @@ def check_and_split_large_cluster(
                 all_czrc_test_points.append(tp)
                 seen_test_points_for_viz.add(pos)
 
+    # Compute TRUE Second Pass output: first_pass - removed + added
+    # CRITICAL: all_selected only contains boreholes that were in at least one cell's
+    # Tier 1 and selected by its ILP. Boreholes that were always in Tier 2 (locked)
+    # across all cells never appear in all_selected, but they DID survive Second Pass!
+    # The correct Second Pass output is: first_pass_boreholes - removed + added
+    removed_positions_for_output = {(bh["x"], bh["y"]) for bh in deduped_removed}
+
+    # Start with all First Pass boreholes that weren't removed
+    true_second_pass_output: List[Dict[str, Any]] = []
+    seen_output_positions: set = set()
+
+    # Keep First Pass survivors (not removed)
+    for bh in first_pass_boreholes:
+        pos = (bh["x"], bh["y"])
+        if pos not in removed_positions_for_output and pos not in seen_output_positions:
+            true_second_pass_output.append(
+                {
+                    "x": bh["x"],
+                    "y": bh["y"],
+                    "coverage_radius": bh.get("coverage_radius", 100.0),
+                }
+            )
+            seen_output_positions.add(pos)
+
+    # Add Second Pass additions
+    for bh in deduped_added:
+        pos = (bh["x"], bh["y"])
+        if pos not in seen_output_positions:
+            true_second_pass_output.append(
+                {
+                    "x": bh["x"],
+                    "y": bh["y"],
+                    "coverage_radius": bh.get("coverage_radius", 100.0),
+                }
+            )
+            seen_output_positions.add(pos)
+
+    log.info(
+        f"   📊 Second Pass output: {len(true_second_pass_output)} boreholes "
+        f"(first_pass={len(first_pass_boreholes)}, removed={len(deduped_removed)}, "
+        f"added={len(deduped_added)})"
+    )
+
     # Store Second Pass boreholes before Third Pass for per-pass CSV export
-    second_pass_boreholes = [
-        {
-            "x": bh["x"],
-            "y": bh["y"],
-            "coverage_radius": bh.get("coverage_radius", 100.0),
-        }
-        for bh in all_selected
-    ]
+    second_pass_boreholes = true_second_pass_output
 
     # === THIRD PASS: Cell-Cell CZRC Boundary Consolidation ===
     cell_czrc_config = config.get("cell_boundary_consolidation", {})
@@ -1333,6 +1387,9 @@ def check_and_split_large_cluster(
         cell_spacing = cluster.get("overall_r_max", 100.0)
 
         # Run cell-cell CZRC pass
+        # CRITICAL: Use true_second_pass_output (First Pass survivors + Second Pass additions)
+        # This includes boreholes that were always in Tier 2 (locked) during Second Pass
+        # Grey markers show: All Second Pass survivors filtered to Third Pass Tier 1
         (
             consolidated_selected,
             cell_czrc_removed,
@@ -1340,7 +1397,7 @@ def check_and_split_large_cluster(
             cell_czrc_stats,
         ) = run_cell_czrc_pass(
             cell_wkts=cell_wkts,
-            cell_boreholes=all_selected,
+            cell_boreholes=true_second_pass_output,  # All Second Pass survivors as ILP input
             cell_test_points=all_test_points,  # CRITICAL: Use First Pass test points
             spacing=cell_spacing,
             config=cell_czrc_config,
@@ -1348,6 +1405,7 @@ def check_and_split_large_cluster(
             logger=logger,
             highs_log_folder=highs_log_folder,
             cluster_idx=cluster_idx,
+            second_pass_candidates=true_second_pass_output,  # For grey marker visualization
         )
 
         if cell_czrc_stats.get("status") == "success":
@@ -1492,6 +1550,7 @@ def solve_cell_cell_czrc(
     zones_clip_geometry: Optional[BaseGeometry] = None,
     logger: Optional[logging.Logger] = None,
     highs_log_file: Optional[str] = None,
+    second_pass_candidates: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[
     List[Dict[str, Any]],
     List[Dict[str, Any]],
@@ -1514,6 +1573,9 @@ def solve_cell_cell_czrc(
         zones_clip_geometry: Optional geometry to clip test points to (actual zone shapefile)
         logger: Optional logger
         highs_log_file: Optional path to write HiGHS solver log
+        second_pass_candidates: Second Pass OUTPUT boreholes (survivors + added) for
+            grey marker visualization. Filtered to Third Pass Tier 1 before display.
+            If None, uses bh_candidates (cell_boreholes in Tier 1) instead.
 
     Returns:
         (selected, removed, added, stats) tuple
@@ -1532,12 +1594,37 @@ def solve_cell_cell_czrc(
 
     # Step 2: Filter test points to Tier 1 (REUSE)
     tier1_test_points = filter_test_points_to_tier1(cell_test_points, tier1_region)
+
+    # Prepare grey marker visualization: Second Pass OUTPUT filtered to Third Pass Tier 1
+    # These show which boreholes entered Third Pass re-optimization as candidates
+    if second_pass_candidates is not None:
+        viz_candidates, _ = classify_first_pass_boreholes(
+            second_pass_candidates, tier1_region, tier2_region
+        )
+    else:
+        viz_candidates = None  # Will fall back to bh_candidates below
+
     if not tier1_test_points:
+        # Still classify boreholes for visualization even when skipping
+        bh_candidates_viz, _ = classify_first_pass_boreholes(
+            cell_boreholes, tier1_region, tier2_region
+        )
+        # Use viz_candidates for grey markers if provided, else fall back to bh_candidates_viz
+        actual_viz = viz_candidates if viz_candidates is not None else bh_candidates_viz
         return (
             cell_boreholes,
             [],
             [],
-            {"status": "skipped", "reason": "no_tier1_test_points"},
+            {
+                "status": "skipped",
+                "reason": "no_tier1_test_points",
+                # Include tier geometry WKTs for diagnostic export
+                "tier1_wkt": tier1_region.wkt,
+                "tier2_wkt": tier2_region.wkt,
+                "r_max": r_max,
+                # Include existing boreholes for visualization even when skipped
+                "viz_existing_boreholes": actual_viz,
+            },
         )
 
     # Step 2b: Generate Tier 2 ring test points (sparse) for this cell-cell pair
@@ -1564,12 +1651,40 @@ def solve_cell_cell_czrc(
 
     if not bh_candidates:
         # No candidates in Tier 1 - nothing to optimize
-        return cell_boreholes, [], [], {"status": "skipped", "reason": "no_candidates"}
+        # Still return tier geometries and locked boreholes for diagnostics
+        # Use viz_candidates for grey markers if available (shows ALL Second Pass candidates)
+        actual_viz = viz_candidates if viz_candidates is not None else []
+        return (
+            cell_boreholes,
+            [],
+            [],
+            {
+                "status": "skipped",
+                "reason": "no_candidates",
+                # Include tier geometry WKTs for diagnostic export
+                "tier1_wkt": tier1_region.wkt,
+                "tier2_wkt": tier2_region.wkt,
+                "r_max": r_max,
+                # Use viz_candidates for grey markers if available
+                "viz_existing_boreholes": actual_viz,
+            },
+        )
 
     # Step 4: Compute unsatisfied test points (REUSE)
     tier1_unsatisfied, precovered_ct = _compute_unsatisfied_test_points(
         tier1_test_points, locked, logger
     )
+
+    # Step 4b: Compute unsatisfied Tier 2 ring test points
+    # CRITICAL: Tier 2 test points must be included in ILP to prevent gap creation
+    tier2_ring_unsatisfied: List[Dict[str, Any]] = []
+    if tier2_ring_test_points:
+        tier2_ring_unsatisfied, _ = _compute_unsatisfied_test_points(
+            tier2_ring_test_points, locked, logger
+        )
+
+    # Combine Tier 1 and Tier 2 ring unsatisfied test points
+    all_unsatisfied = tier1_unsatisfied + tier2_ring_unsatisfied
 
     # Step 5: Prepare candidates (REUSE)
     candidates, _ = _prepare_candidates_for_ilp(
@@ -1577,8 +1692,9 @@ def solve_cell_cell_czrc(
     )
 
     # Step 6: Solve ILP (REUSE)
-    # Use tier1_test_points if all are precovered (allows removing redundant candidates)
-    solve_test_points = tier1_unsatisfied if tier1_unsatisfied else tier1_test_points
+    # Use combined unsatisfied (Tier1 + Tier2) to ensure Tier 2 coverage is maintained
+    # If all are precovered, use tier1_test_points to allow removing redundant candidates
+    solve_test_points = all_unsatisfied if all_unsatisfied else tier1_test_points
     selected_indices, ilp_stats = _solve_czrc_ilp(
         solve_test_points,
         candidates,
@@ -1619,6 +1735,12 @@ def solve_cell_cell_czrc(
 
     elapsed = time.perf_counter() - start_time
 
+    # Grey markers: Second Pass OUTPUT filtered to Third Pass Tier 1
+    # Falls back to bh_candidates (cell_boreholes in Tier 1) if not provided
+    actual_viz_boreholes = (
+        viz_candidates if viz_candidates is not None else bh_candidates
+    )
+
     return (
         selected,
         removed,
@@ -1629,6 +1751,8 @@ def solve_cell_cell_czrc(
             "tier1_test_points": len(tier1_test_points),
             "tier1_unsatisfied": len(tier1_unsatisfied) if tier1_unsatisfied else 0,
             "tier2_ring_test_points": len(tier2_ring_test_points),
+            "tier2_ring_unsatisfied": len(tier2_ring_unsatisfied),
+            "total_unsatisfied": len(all_unsatisfied),
             "precovered": precovered_ct,
             "candidates": len(candidates),
             "bh_candidates": len(bh_candidates),
@@ -1638,12 +1762,16 @@ def solve_cell_cell_czrc(
             "added": len(added),
             "solve_time": elapsed,
             "ilp_stats": ilp_stats,
+            # Tier geometry WKTs for diagnostic export
+            "tier1_wkt": tier1_region.wkt,
+            "tier2_wkt": tier2_region.wkt,
+            "r_max": r_max,
             # Visualization data: test points used for this cell-cell pair
             "viz_tier1_test_points": tier1_test_points,
             "viz_tier2_ring_test_points": tier2_ring_test_points,
-            # Visualization data: Tier 1 boreholes only (candidates from Second Pass output)
-            # Only Tier 1 boreholes can be reused as candidates; Tier 2 are locked/fixed
-            "viz_existing_boreholes": bh_candidates,
+            # Grey markers: Second Pass OUTPUT boreholes filtered to Third Pass Tier 1
+            # These are the candidates that entered Third Pass re-optimization
+            "viz_existing_boreholes": actual_viz_boreholes,
         },
     )
 
@@ -1658,6 +1786,7 @@ def run_cell_czrc_pass(
     logger: Optional[logging.Logger] = None,
     highs_log_folder: Optional[str] = None,
     cluster_idx: int = 0,
+    second_pass_candidates: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[
     List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]
 ]:
@@ -1674,6 +1803,9 @@ def run_cell_czrc_pass(
         logger: Optional logger
         highs_log_folder: Optional folder path for HiGHS solver logs
         cluster_idx: Cluster index for log file naming (0-based)
+        second_pass_candidates: Second Pass OUTPUT boreholes (survivors + added) for
+            grey marker visualization. These are filtered to Third Pass Tier 1 before
+            display. If None, uses cell_boreholes for visualization.
 
     Returns:
         (final_boreholes, all_removed, all_added, stats) tuple
@@ -1760,6 +1892,7 @@ def run_cell_czrc_pass(
             zones_clip_geometry=zones_clip_geometry,
             logger=logger,
             highs_log_file=highs_log_file,
+            second_pass_candidates=second_pass_candidates,
         )
 
         if stats.get("status") == "success":
@@ -1819,6 +1952,19 @@ def run_cell_czrc_pass(
                 all_existing_boreholes.append(bh)
                 seen_existing_positions.add(pos)
 
+    # Collect tier geometries for diagnostic export
+    tier_geometries: Dict[str, Dict[str, Any]] = {}
+    for ps in pair_stats:
+        pair_key = ps.get("pair_key", "")
+        tier1_wkt = ps.get("tier1_wkt")
+        tier2_wkt = ps.get("tier2_wkt")
+        if tier1_wkt or tier2_wkt:
+            tier_geometries[pair_key] = {
+                "tier1_wkt": tier1_wkt,
+                "tier2_wkt": tier2_wkt,
+                "r_max": ps.get("r_max", 100.0),
+            }
+
     elapsed = time.perf_counter() - start_time
 
     log.info(
@@ -1845,6 +1991,8 @@ def run_cell_czrc_pass(
             "third_pass_test_points": all_third_pass_test_points,
             # Existing boreholes (from Second Pass output) for grey marker display
             "third_pass_existing_boreholes": all_existing_boreholes,
+            # Tier geometries for diagnostic export (GeoJSON)
+            "tier_geometries": tier_geometries,
         },
     )
 
@@ -2055,6 +2203,9 @@ def solve_czrc_ilp_for_cluster(
         "pair_keys": pair_keys,
         "is_unified_cluster": len(pair_keys) > 1,
         "overall_r_max": overall_r_max,
+        "r_max": overall_r_max,  # For tier geometry export
+        "tier1_wkt": unified_tier1.wkt,  # For tier geometry export
+        "tier2_wkt": unified_tier2.wkt,  # For tier geometry export
         "tier1_test_points": len(tier1_test_points),
         "tier2_ring_test_points": len(tier2_ring_test_points),
         "precovered_count": precovered_ct,
@@ -2168,6 +2319,7 @@ def run_czrc_optimization(
     seen_third_pass_test_points: set = set()  # Track unique third pass test points
     all_third_pass_existing: List[Dict[str, Any]] = []  # Third pass existing boreholes
     seen_third_pass_existing: set = set()  # Track unique existing boreholes
+    all_tier_geometries: Dict[str, Dict[str, Any]] = {}  # Third pass tier geometries
     all_second_pass_boreholes: List[Dict[str, Any]] = (
         []
     )  # Second pass output (before third pass)
@@ -2226,6 +2378,11 @@ def run_czrc_optimization(
                     if pos not in seen_third_pass_existing:
                         all_third_pass_existing.append(bh)
                         seen_third_pass_existing.add(pos)
+                # Collect Third Pass tier geometries for diagnostic export
+                tier_geoms = cell_czrc_stats.get("tier_geometries", {})
+                for pair_key, geom_data in tier_geoms.items():
+                    prefixed_key = f"cluster_{cluster_idx}_{pair_key}"
+                    all_tier_geometries[prefixed_key] = geom_data
 
         # Collect unique first-pass candidates across all clusters
         for bh in cluster_stats.get("first_pass_candidates", []):
@@ -2360,11 +2517,13 @@ def run_czrc_optimization(
                 "cell_intersections_wkt": all_cell_intersections_wkt,
                 "third_pass_test_points": all_third_pass_test_points,
                 "third_pass_existing_boreholes": all_third_pass_existing,
+                "tier_geometries": all_tier_geometries,  # For diagnostic GeoJSON export
             }
             if all_cell_clouds_wkt
             or all_cell_intersections_wkt
             or all_third_pass_test_points
             or all_third_pass_existing
+            or all_tier_geometries
             else None
         ),
         "solve_time": elapsed,

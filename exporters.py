@@ -198,6 +198,7 @@ def export_per_pass_boreholes_to_csv(
     precomputed_coverages: Dict[str, Dict[str, Any]],
     output_dir: Path,
     is_testing_mode: bool,
+    zones_gdf: Optional["gpd.GeoDataFrame"] = None,
     log: logging.Logger = None,
 ) -> Dict[str, str]:
     """
@@ -212,11 +213,13 @@ def export_per_pass_boreholes_to_csv(
     - second_pass.csv: Boreholes after CZRC per-cell optimization
     - third_pass.csv: Boreholes after Cell-Cell boundary consolidation
     - final_proposed.csv: Same data object used by HTML (result["proposed"])
+    - geometries/: Folder containing tier geometry GeoJSON files
 
     Args:
         precomputed_coverages: Dict mapping combo_key -> coverage result dict
         output_dir: Base output directory
         is_testing_mode: Whether running in testing mode (single combo)
+        zones_gdf: Optional GeoDataFrame with zone boundaries for First Pass export
         log: Logger instance (optional)
 
     Returns:
@@ -230,6 +233,10 @@ def export_per_pass_boreholes_to_csv(
     # Generate timestamp: MMDD_HHMM
     timestamp = datetime.now().strftime("%m%d_%H%M")
 
+    # Base folder for per-pass CSV output
+    proposed_boreholes_dir = output_dir / "proposed_boreholes"
+    proposed_boreholes_dir.mkdir(parents=True, exist_ok=True)
+
     exported_folders: Dict[str, str] = {}
 
     for combo_key, coverage_data in precomputed_coverages.items():
@@ -241,10 +248,10 @@ def export_per_pass_boreholes_to_csv(
         # Create folder name based on mode
         if is_testing_mode:
             folder_name = f"testing_{combo_key}_{timestamp}"
-            combo_folder = output_dir / folder_name
+            combo_folder = proposed_boreholes_dir / folder_name
         else:
             # Production mode: production_MMDD_HHMM/combo_key/
-            prod_folder = output_dir / f"production_{timestamp}"
+            prod_folder = proposed_boreholes_dir / f"production_{timestamp}"
             combo_folder = prod_folder / combo_key
 
         combo_folder.mkdir(parents=True, exist_ok=True)
@@ -294,6 +301,25 @@ def export_per_pass_boreholes_to_csv(
             f"P1={len(first_pass_bhs)}, P2={len(second_pass_bhs)}, "
             f"P3={len(third_pass_bhs)}, Final={len(proposed)}"
         )
+
+        # Export tier geometries to Output/geometries/ folder
+        if is_testing_mode:
+            geom_folder = output_dir / "geometries" / f"testing_{combo_key}_{timestamp}"
+        else:
+            geom_folder = (
+                output_dir / "geometries" / f"production_{timestamp}" / combo_key
+            )
+        geom_folder.mkdir(parents=True, exist_ok=True)
+        tier_files = export_tier_geometries_to_geojson(
+            coverage_data=coverage_data,
+            output_folder=geom_folder,
+            zones_gdf=zones_gdf,
+            log=log,
+        )
+        if tier_files:
+            log.info(
+                f"   🗺️ Exported {len(tier_files)} tier geometry files to {geom_folder.relative_to(output_dir)}"
+            )
 
     return exported_folders
 
@@ -1204,6 +1230,271 @@ def export_all_coverage_outputs(
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# 🗺️ TIER GEOMETRY EXPORT (DIAGNOSTIC)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def export_tier_geometries_to_geojson(
+    coverage_data: Dict[str, Any],
+    output_folder: Path,
+    zones_gdf: Optional["gpd.GeoDataFrame"] = None,
+    log: Optional[logging.Logger] = None,
+) -> Dict[str, str]:
+    """
+    Export Tier 1 and Tier 2 geometries for First Pass, Second Pass, and Third Pass.
+
+    This diagnostic export helps debug issues with borehole visualization
+    by allowing point-in-polygon lookups against the actual tier boundaries.
+
+    Files created:
+    - first_pass_zones.geojson: Zone geometry and candidate grid (buffered) regions
+    - second_pass_tiers.geojson: All cluster and cell tier1/tier2 regions
+    - third_pass_tiers.geojson: Cell-cell tier1/tier2 regions
+
+    Args:
+        coverage_data: Dict containing czrc_data with tier WKTs
+        output_folder: Folder to write GeoJSON files
+        zones_gdf: Optional GeoDataFrame with zone boundaries for First Pass export
+        log: Optional logger
+
+    Returns:
+        Dict mapping geometry type to file path
+    """
+    if log is None:
+        log = logger
+
+    output_folder = Path(output_folder)
+    output_folder.mkdir(parents=True, exist_ok=True)
+
+    exported_files: Dict[str, str] = {}
+
+    # === FIRST PASS: Zone and Candidate Grid Geometries ===
+    # Zone geometry = the zone itself, Candidate grid geometry = zone buffered by max_spacing
+    if zones_gdf is not None and not zones_gdf.empty:
+        features = []
+        for idx, row in zones_gdf.iterrows():
+            try:
+                geom = row.geometry
+                if geom is None or geom.is_empty:
+                    continue
+
+                # Extract zone properties
+                zone_name = row.get("Zone", row.get("zone", f"Zone_{idx}"))
+                max_spacing = float(
+                    row.get("max_spacing_m", row.get("max_spacing", 100.0))
+                )
+
+                # Zone geometry: The zone itself
+                feature_zone = {
+                    "type": "Feature",
+                    "properties": {
+                        "pass": "first",
+                        "name": str(zone_name),
+                        "geometry_type": "zone",
+                        "max_spacing_m": max_spacing,
+                        "area_m2": round(geom.area, 1),
+                    },
+                    "geometry": mapping(geom),
+                }
+                features.append(feature_zone)
+
+                # Candidate grid geometry: Zone buffered by max_spacing
+                candidate_grid_geom = geom.buffer(max_spacing)
+                feature_candidate_grid = {
+                    "type": "Feature",
+                    "properties": {
+                        "pass": "first",
+                        "name": str(zone_name),
+                        "geometry_type": "candidate_grid",
+                        "max_spacing_m": max_spacing,
+                        "area_m2": round(candidate_grid_geom.area, 1),
+                    },
+                    "geometry": mapping(candidate_grid_geom),
+                }
+                features.append(feature_candidate_grid)
+            except Exception as e:
+                log.warning(f"Failed to export zone {idx}: {e}")
+
+        if features:
+            geojson_data = {"type": "FeatureCollection", "features": features}
+            output_path = output_folder / "first_pass_zones.geojson"
+            with open(output_path, "w") as f:
+                json.dump(geojson_data, f, indent=2)
+            exported_files["first_pass_zones"] = str(output_path)
+            log.info(
+                f"   📦 Exported {len(features)} zone geometries to {output_path.name}"
+            )
+
+    # === SECOND PASS: Cluster and Cell Tier Geometries (all in one file) ===
+    # cluster_stats is in optimization_stats["czrc_optimization"]["cluster_stats"]
+    opt_stats = coverage_data.get("optimization_stats", {})
+    czrc_opt_stats = opt_stats.get("czrc_optimization", {})
+    cluster_stats = czrc_opt_stats.get("cluster_stats", {})
+
+    if cluster_stats:
+        features = []
+        # Use enumeration for 1-based cluster indexing
+        for cluster_idx, (cluster_key, stats) in enumerate(cluster_stats.items()):
+            was_split = stats.get("was_split", False)
+
+            if was_split:
+                # Split cluster: export cell-level tier geometries from cell_stats
+                cell_stats_list = stats.get("cell_stats", [])
+                for cell_idx, cell_stat in enumerate(cell_stats_list):
+                    # Format: "Cluster 1 Cell 3" (1-based)
+                    name = f"Cluster {cluster_idx + 1} Cell {cell_idx + 1}"
+
+                    for tier_num in [1, 2]:
+                        tier_key = f"tier{tier_num}_wkt"
+                        wkt_str = cell_stat.get(tier_key)
+                        if wkt_str:
+                            try:
+                                geom = wkt.loads(wkt_str)
+                                feature = {
+                                    "type": "Feature",
+                                    "properties": {
+                                        "pass": "second",
+                                        "name": name,
+                                        "cluster_key": cluster_key,
+                                        "cluster_idx": cluster_idx + 1,
+                                        "cell_idx": cell_idx + 1,
+                                        "geometry_type": f"tier{tier_num}",
+                                        "tier": tier_num,
+                                        "r_max": cell_stat.get("r_max", 100.0),
+                                        "area_m2": round(geom.area, 1),
+                                    },
+                                    "geometry": mapping(geom),
+                                }
+                                features.append(feature)
+                            except Exception as e:
+                                log.warning(
+                                    f"Failed to parse tier{tier_num} for {name}: {e}"
+                                )
+            else:
+                # Non-split cluster: export cluster-level tier geometries
+                # Format: "Cluster 1" (1-based)
+                name = f"Cluster {cluster_idx + 1}"
+
+                for tier_num in [1, 2]:
+                    tier_key = f"tier{tier_num}_wkt"
+                    wkt_str = stats.get(tier_key)
+                    if wkt_str:
+                        try:
+                            geom = wkt.loads(wkt_str)
+                            feature = {
+                                "type": "Feature",
+                                "properties": {
+                                    "pass": "second",
+                                    "name": name,
+                                    "cluster_key": cluster_key,
+                                    "cluster_idx": cluster_idx + 1,
+                                    "geometry_type": f"tier{tier_num}",
+                                    "tier": tier_num,
+                                    "r_max": stats.get("r_max", 100.0),
+                                    "area_m2": round(geom.area, 1),
+                                },
+                                "geometry": mapping(geom),
+                            }
+                            features.append(feature)
+                        except Exception as e:
+                            log.warning(
+                                f"Failed to parse tier{tier_num} for {name}: {e}"
+                            )
+
+        if features:
+            geojson_data = {"type": "FeatureCollection", "features": features}
+            output_path = output_folder / "second_pass_tiers.geojson"
+            with open(output_path, "w") as f:
+                json.dump(geojson_data, f, indent=2)
+            exported_files["second_pass_tiers"] = str(output_path)
+            log.info(
+                f"   📦 Exported {len(features)} cluster/cell tier geometries to {output_path.name}"
+            )
+
+    # === THIRD PASS: Cell-Cell Tier Geometries ===
+    third_pass_data = coverage_data.get("third_pass_data", {})
+    tier_geometries = third_pass_data.get("tier_geometries", {})
+    if tier_geometries:
+        features = []
+        for pair_key, tier_data in tier_geometries.items():
+            for tier_num in [1, 2]:
+                tier_key = f"tier{tier_num}_wkt"
+                wkt_str = tier_data.get(tier_key)
+                if wkt_str:
+                    try:
+                        geom = wkt.loads(wkt_str)
+                        feature = {
+                            "type": "Feature",
+                            "properties": {
+                                "pass": "third",
+                                "pair_key": pair_key,
+                                "geometry_type": f"tier{tier_num}",
+                                "tier": tier_num,
+                                "r_max": tier_data.get("r_max", 100.0),
+                                "area_m2": round(geom.area, 1),
+                            },
+                            "geometry": mapping(geom),
+                        }
+                        features.append(feature)
+                    except Exception as e:
+                        log.warning(
+                            f"Failed to parse tier{tier_num} WKT for {pair_key}: {e}"
+                        )
+
+        if features:
+            geojson_data = {"type": "FeatureCollection", "features": features}
+            output_path = output_folder / "third_pass_tiers.geojson"
+            with open(output_path, "w") as f:
+                json.dump(geojson_data, f, indent=2)
+            exported_files["third_pass_tiers"] = str(output_path)
+            log.info(
+                f"   📦 Exported {len(features)} cell-cell tier geometries to {output_path.name}"
+            )
+
+    return exported_files
+
+
+def check_point_in_tier_geometries(
+    x: float,
+    y: float,
+    geojson_path: str,
+) -> List[Dict[str, Any]]:
+    """
+    Check which tier geometries contain a point.
+
+    Args:
+        x: Easting coordinate
+        y: Northing coordinate
+        geojson_path: Path to tier geometry GeoJSON file
+
+    Returns:
+        List of feature properties for geometries containing the point
+    """
+    point = Point(x, y)
+
+    with open(geojson_path, "r") as f:
+        fc = json.load(f)
+
+    results = []
+    for feature in fc["features"]:
+        geom = shape(feature["geometry"])
+        if geom.contains(point):
+            props = feature["properties"].copy()
+            props["distance_to_boundary"] = round(point.distance(geom.boundary), 2)
+            results.append(props)
+        else:
+            # Check if point is close (within 10m)
+            dist = point.distance(geom)
+            if dist < 10:
+                props = feature["properties"].copy()
+                props["distance_outside"] = round(dist, 2)
+                props["status"] = "near_but_outside"
+                results.append(props)
+
+    return results
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # 📦 MODULE EXPORTS
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -1216,6 +1507,9 @@ __all__ = [
     # GeoJSON export
     "export_coverage_geojson",
     "export_coverage_polygons_to_geojson",
+    # Tier geometry export (diagnostic)
+    "export_tier_geometries_to_geojson",
+    "check_point_in_tier_geometries",
     # Main entry point
     "export_all_coverage_outputs",
 ]

@@ -1187,9 +1187,9 @@ def _add_third_pass_grid_trace(
             visible=False,  # Hidden by default, controlled by Third Pass Grid checkbox
         )
 
-    # Add existing boreholes (Second Pass output) as black X markers
-    # These are the boreholes from Second Pass that fall within Third Pass Tier 1/Tier 2 area
-    # Displayed with same styling as Second Pass displays First Pass candidates
+    # Add existing boreholes (Second Pass output) as grey markers
+    # These are the boreholes from Second Pass OUTPUT (survivors + added) that fall
+    # within Third Pass Tier 1 area - the input to Third Pass re-optimization
     existing_boreholes = third_pass_data.get("third_pass_existing_boreholes", [])
     if existing_boreholes:
         x_coords = [bh.get("x", bh.get("easting", 0)) for bh in existing_boreholes]
@@ -1218,11 +1218,11 @@ def _add_third_pass_grid_trace(
                         color=marker_color,
                     ),
                 ),
-                name=f"Second Pass Candidates ({len(existing_boreholes)})",
+                name=f"Second Pass Boreholes ({len(existing_boreholes)})",
                 legendgroup="third_pass_grid",
                 showlegend=False,
                 visible=False,  # Same visibility as grid layer
-                hovertemplate="Second-Pass Candidate<br>X: %{x:.1f}<br>Y: %{y:.1f}<extra></extra>",
+                hovertemplate="Second Pass Borehole<br>X: %{x:.1f}<br>Y: %{y:.1f}<extra></extra>",
             )
         )
 

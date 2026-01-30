@@ -920,6 +920,7 @@ def _export_analysis_outputs(
         precomputed_coverages=precomputed_coverages,
         output_dir=output_dir,
         is_testing_mode=testing_enabled,
+        zones_gdf=zones_gdf,
         log=logger,
     )
     timings["5.6b_export_per_pass_csv"] = time.perf_counter() - step_start
