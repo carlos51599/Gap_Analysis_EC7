@@ -654,21 +654,6 @@ def worker_process_filter_combination(
                             f"({len(czrc_removed)} removed, {len(czrc_added)} added)"
                         )
 
-                        # DEBUG: Verify that removed boreholes are NOT in proposed
-                        proposed_positions = {(bh["x"], bh["y"]) for bh in proposed}
-                        removed_positions = {(bh["x"], bh["y"]) for bh in czrc_removed}
-                        overlap = proposed_positions & removed_positions
-                        if overlap:
-                            print(
-                                f"   ⚠️ BUG: {len(overlap)} removed BHs found in proposed!"
-                            )
-                            for pos in list(overlap)[:5]:  # Show first 5
-                                print(f"      - Overlap at ({pos[0]:.2f}, {pos[1]:.2f})")
-                        else:
-                            print(
-                                f"   ✓ Verified: no removed BHs in proposed"
-                            )
-
                         # Update result with optimized boreholes
                         result["proposed"] = [
                             {

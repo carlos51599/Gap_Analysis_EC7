@@ -959,37 +959,6 @@ def solve_czrc_ilp_for_pair(
     return selected, removed, added, stats
 
 
-def _is_point_near_set(
-    x: float, y: float, coord_set: set, tolerance: float = 1.0
-) -> bool:
-    """
-    Check if (x, y) is within tolerance of any point in coord_set.
-
-    This is needed because _prepare_candidates_for_ilp() deduplicates grid
-    candidates with first-pass boreholes using a 1.0m tolerance. After
-    deduplication, the candidates list may contain GRID coordinates instead
-    of the original first-pass borehole coordinates.
-
-    When the ILP selects a grid point that was merged with a first-pass
-    borehole, we need tolerance-based matching to recognize that the
-    first-pass borehole was effectively "selected" (via its grid proxy).
-
-    Args:
-        x: X coordinate to check
-        y: Y coordinate to check
-        coord_set: Set of (x, y) tuples to check against
-        tolerance: Distance tolerance in meters (default 1.0 matches dedupe tol)
-
-    Returns:
-        True if (x, y) is within tolerance of any point in coord_set
-    """
-    for cx, cy in coord_set:
-        dist_sq = (x - cx) ** 2 + (y - cy) ** 2
-        if dist_sq < tolerance * tolerance:
-            return True
-    return False
-
-
 def _assemble_czrc_results(
     indices: List[int],
     candidates: List[Point],
@@ -1008,9 +977,7 @@ def _assemble_czrc_results(
         for i in indices
         if i < len(candidates)
     ]
-    # Removed = Tier 1 first-pass NOT selected (using tolerance-based matching)
-    # CRITICAL: Use tolerance matching because grid candidates may have replaced
-    # first-pass borehole coordinates during deduplication in _prepare_candidates_for_ilp
+    # Removed = Tier 1 first-pass NOT selected
     removed = [
         {
             "x": bh["x"],
@@ -1018,16 +985,14 @@ def _assemble_czrc_results(
             "coverage_radius": bh.get("coverage_radius", min_spacing),
         }
         for bh in bh_candidates
-        if not _is_point_near_set(bh["x"], bh["y"], selected_set, tolerance=1.0)
+        if (bh["x"], bh["y"]) not in selected_set
     ]
-    # Added = Selected NOT in first-pass Tier 1 (using tolerance-based matching)
+    # Added = Selected NOT in first-pass Tier 1
     added = [
         {"x": candidates[i].x, "y": candidates[i].y, "coverage_radius": min_spacing}
         for i in indices
         if i < len(candidates)
-        and not _is_point_near_set(
-            candidates[i].x, candidates[i].y, tier1_bh_set, tolerance=1.0
-        )
+        and (candidates[i].x, candidates[i].y) not in tier1_bh_set
     ]
     # Filter coincident pairs
     removed, added = _filter_coincident_pairs(removed, added)
@@ -1873,9 +1838,7 @@ def solve_cell_cell_czrc(
             "tier1_unsatisfied": len(tier1_unsatisfied) if tier1_unsatisfied else 0,
             "tier2_ring_test_points": len(tier2_ring_test_points),
             "precovered": precovered_ct,
-            "external_coverage_bhs": len(
-                external
-            ),  # NEW: Track external coverage sources
+            "external_coverage_bhs": len(external),  # NEW: Track external coverage sources
             "candidates": len(candidates),
             "bh_candidates": len(bh_candidates),
             "locked": len(locked),
@@ -2597,39 +2560,17 @@ def run_czrc_optimization(
     # Build set of removed positions for efficient filtering
     removed_positions = {(bh["x"], bh["y"]) for bh in all_removed}
 
-    # DEBUG: Log removed positions for diagnostic
-    log = logger or _logger
-    log.info(
-        f"🔍 CZRC Final Assembly: first_pass={len(first_pass_boreholes)}, "
-        f"all_removed={len(all_removed)}, boreholes_to_add={len(boreholes_to_add)}"
-    )
-
     # Start with first-pass boreholes, excluding those marked for removal
     optimized = [
         bh for bh in first_pass_boreholes if (bh["x"], bh["y"]) not in removed_positions
     ]
     existing_pos = {(bh["x"], bh["y"]) for bh in optimized}
 
-    # DEBUG: Verify removed are actually excluded
-    removed_in_optimized = [
-        bh for bh in optimized if (bh["x"], bh["y"]) in removed_positions
-    ]
-    if removed_in_optimized:
-        log.warning(
-            f"⚠️ BUG: {len(removed_in_optimized)} removed BHs still in optimized!"
-        )
-
     # Add new boreholes (deduplicated)
     for bh in boreholes_to_add:
         if (bh["x"], bh["y"]) not in existing_pos:
             optimized.append(bh)
             existing_pos.add((bh["x"], bh["y"]))
-
-    log.info(
-        f"✅ CZRC Final: optimized={len(optimized)} "
-        f"(first_pass survivors={len(first_pass_boreholes) - len(all_removed)}, "
-        f"new additions={len(optimized) - (len(first_pass_boreholes) - len(all_removed))})"
-    )
 
     elapsed = time.perf_counter() - start_time
 
