@@ -66,15 +66,15 @@ from Gap_Analysis_EC7.solvers.solver_config import (
 
 def _abbreviate_zone_name(zone: str) -> str:
     """
-    Abbreviate a zone name to first 4 letters for shorter log filenames.
+    Abbreviate a zone name to first 2 letters for shorter log filenames.
     
-    Handles underscore-separated names like "Embankment_0" → "emba_0".
+    Handles underscore-separated names like "Embankment_0" → "em_0".
     
     Args:
         zone: Full zone name (e.g., "Embankment_0", "Highways_1")
         
     Returns:
-        Abbreviated name (e.g., "emba_0", "high_1")
+        Abbreviated name (e.g., "em_0", "hi_1")
     """
     # Split on underscore, abbreviate text parts, keep numeric parts
     parts = zone.split('_')
@@ -83,7 +83,7 @@ def _abbreviate_zone_name(zone: str) -> str:
         if part.isdigit():
             abbreviated.append(part)
         else:
-            abbreviated.append(part[:4].lower())
+            abbreviated.append(part[:2].lower())
     return '_'.join(abbreviated)
 
 
@@ -97,10 +97,10 @@ def _sanitize_log_name(name: str, max_len: int = 50, abbreviate: bool = True) ->
     Args:
         name: Raw name (e.g., "Embankment_0+Embankment_1")
         max_len: Maximum length before truncation (default 50)
-        abbreviate: Whether to abbreviate zone names to 4 letters (default True)
+        abbreviate: Whether to abbreviate zone names to 2 letters (default True)
         
     Returns:
-        Filesystem-safe abbreviated name (e.g., "emba_0_emba_1")
+        Filesystem-safe abbreviated name (e.g., "em_0_em_1")
     """
     import re
     # Replace problematic characters (including + from cluster_key) with underscores
@@ -119,20 +119,21 @@ def _sanitize_log_name(name: str, max_len: int = 50, abbreviate: bool = True) ->
             part = parts[i]
             # Check if this is a text part followed by a number
             if not part.isdigit() and i + 1 < len(parts) and parts[i + 1].isdigit():
-                # Abbreviate zone name: "Embankment_0" → "emba_0"
-                abbreviated_parts.append(part[:4].lower())
+                # Abbreviate zone name: "Embankment_0" → "em_0"
+                abbreviated_parts.append(part[:2].lower())
                 abbreviated_parts.append(parts[i + 1])
                 i += 2
             elif part.isdigit():
                 abbreviated_parts.append(part)
                 i += 1
             elif part.lower().startswith('cell'):
-                # Keep cell identifiers as-is
-                abbreviated_parts.append(part)
+                # Convert Cell to c: "Cell_0" → "c0"
+                cell_num = part[4:] if len(part) > 4 else ""
+                abbreviated_parts.append(f"c{cell_num}")
                 i += 1
             else:
                 # Abbreviate standalone text
-                abbreviated_parts.append(part[:4].lower())
+                abbreviated_parts.append(part[:2].lower())
                 i += 1
         safe = '_'.join(abbreviated_parts)
     
@@ -495,8 +496,8 @@ def _run_zone_decomposition(
             zone_kwargs["max_spacing"] = zone_spacing
             zone_kwargs["candidate_spacing"] = zone_candidate_spacing
             zone_kwargs["test_spacing"] = zone_test_spacing
-            # Use meaningful zone name for log files (without "zone_" prefix)
-            zone_kwargs["log_name_prefix"] = f"firstpass_{zone_name}"
+            # Use meaningful zone name for log files (without "pass" in prefix)
+            zone_kwargs["log_name_prefix"] = f"first_{zone_name}"
 
             # Solve with or without caching
             if zone_cache is not None:
@@ -748,7 +749,7 @@ def _run_single_solve(
                 log_name = _sanitize_log_name(log_name_prefix)
             else:
                 # Use short uuid as fallback (handles multiple solves)
-                log_name = f"firstpass_{str(uuid.uuid4())[:8]}"
+                log_name = f"first_{str(uuid.uuid4())[:8]}"
             firstpass_log_file = os.path.join(
                 highs_log_folder, f"{log_name}.log"
             )

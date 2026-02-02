@@ -74,14 +74,14 @@ def _sanitize_log_name(name: str, max_len: int = 50) -> str:
     Sanitize and abbreviate a name for use in log filenames.
     
     Replaces problematic characters with underscores, abbreviates zone names
-    to first 4 letters, and truncates if needed.
+    to first 2 letters, and truncates if needed.
     
     Args:
         name: Raw name (e.g., "Embankment_0+Embankment_1")
         max_len: Maximum length before truncation (default 50)
         
     Returns:
-        Filesystem-safe abbreviated name (e.g., "emba_0_emba_1")
+        Filesystem-safe abbreviated name (e.g., "em_0_em_1")
     """
     import re
     # Replace problematic characters (including + from cluster_key) with underscores
@@ -89,7 +89,7 @@ def _sanitize_log_name(name: str, max_len: int = 50) -> str:
     # Collapse multiple underscores and strip
     safe = re.sub(r'_+', '_', safe.strip('_'))
     
-    # Abbreviate zone names to first 4 letters
+    # Abbreviate zone names to first 2 letters
     parts = safe.split('_')
     abbreviated_parts = []
     i = 0
@@ -97,20 +97,21 @@ def _sanitize_log_name(name: str, max_len: int = 50) -> str:
         part = parts[i]
         # Check if this is a text part followed by a number (zone pattern)
         if not part.isdigit() and i + 1 < len(parts) and parts[i + 1].isdigit():
-            # Abbreviate zone name: "Embankment_0" → "emba_0"
-            abbreviated_parts.append(part[:4].lower())
+            # Abbreviate zone name: "Embankment_0" → "em_0"
+            abbreviated_parts.append(part[:2].lower())
             abbreviated_parts.append(parts[i + 1])
             i += 2
         elif part.isdigit():
             abbreviated_parts.append(part)
             i += 1
         elif part.lower().startswith('cell'):
-            # Keep cell identifiers as-is
-            abbreviated_parts.append(part)
+            # Convert Cell to c: "Cell0" → "c0"
+            cell_num = part[4:] if len(part) > 4 else ""
+            abbreviated_parts.append(f"c{cell_num}")
             i += 1
         else:
             # Abbreviate standalone text
-            abbreviated_parts.append(part[:4].lower())
+            abbreviated_parts.append(part[:2].lower())
             i += 1
     safe = '_'.join(abbreviated_parts)
     
@@ -2118,13 +2119,13 @@ def run_cell_czrc_pass(
                 safe_cluster_name = _sanitize_log_name(cluster_key)
                 highs_log_file = os.path.join(
                     highs_log_folder,
-                    f"thirdpass_{safe_cluster_name}_Cell{cell_i}_Cell{cell_j}.log",
+                    f"third_{safe_cluster_name}_c{cell_i}_c{cell_j}.log",
                 )
             else:
                 # Fallback to numeric naming
                 highs_log_file = os.path.join(
                     highs_log_folder,
-                    f"thirdpass_c{cluster_idx + 1:02d}_Cell{cell_i}_Cell{cell_j}.log",
+                    f"third_c{cluster_idx + 1:02d}_c{cell_i}_c{cell_j}.log",
                 )
 
         log.info(
@@ -2411,14 +2412,14 @@ def solve_czrc_ilp_for_cluster(
         if cluster_idx >= 1000:
             # Direct solve - use cluster name
             highs_log_file = os.path.join(
-                highs_log_folder, f"secondpass_{safe_cluster_name}.log"
+                highs_log_folder, f"second_{safe_cluster_name}.log"
             )
         else:
             # Cell solve within split cluster - include cell index
             cell_idx = cluster_idx % 100
             highs_log_file = os.path.join(
                 highs_log_folder,
-                f"secondpass_{safe_cluster_name}_cell{cell_idx + 1:02d}.log",
+                f"second_{safe_cluster_name}_c{cell_idx + 1:02d}.log",
             )
 
     if czrc_cache is not None:
