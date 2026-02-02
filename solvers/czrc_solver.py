@@ -69,6 +69,31 @@ if TYPE_CHECKING:
 _logger = logging.getLogger(__name__)
 
 
+def _sanitize_log_name(name: str, max_len: int = 50) -> str:
+    """
+    Sanitize a name for use in log filenames.
+    
+    Replaces problematic characters with underscores and truncates if needed.
+    Used for cluster names and cell pair identifiers.
+    
+    Args:
+        name: Raw name (e.g., "Embankment_0+Embankment_1")
+        max_len: Maximum length before truncation (default 50)
+        
+    Returns:
+        Filesystem-safe name (e.g., "Embankment_0_Embankment_1")
+    """
+    import re
+    # Replace problematic characters (including + from cluster_key) with underscores
+    safe = re.sub(r'[<>:"/\\|?*\[\]\s+]+', '_', name)
+    # Remove leading/trailing underscores
+    safe = safe.strip('_')
+    # Truncate if too long (preserving end for uniqueness)
+    if len(safe) > max_len:
+        safe = safe[:max_len - 3] + "..."
+    return safe if safe else "unnamed"
+
+
 def _get_czrc_stall_detection_config(czrc_ilp_config: Dict[str, Any]) -> Dict[str, Any]:
     """
     Resolve stall detection config for CZRC, respecting apply_to_czrc flag.
@@ -1545,6 +1570,9 @@ def check_and_split_large_cluster(
         # Get spacing from cluster (use overall_r_max as uniform spacing for cells)
         cell_spacing = cluster.get("overall_r_max", 100.0)
 
+        # Build cluster_key for meaningful log file naming
+        local_cluster_key = "+".join(sorted(cluster["pair_keys"]))
+
         # Run cell-cell CZRC pass
         # CRITICAL: Use true_second_pass_output (First Pass survivors + Second Pass additions)
         # This includes boreholes that were always in Tier 2 (locked) during Second Pass
@@ -1564,6 +1592,7 @@ def check_and_split_large_cluster(
             logger=logger,
             highs_log_folder=highs_log_folder,
             cluster_idx=cluster_idx,
+            cluster_key=local_cluster_key,
             second_pass_candidates=true_second_pass_output,  # For grey marker visualization
         )
 
@@ -1970,6 +1999,7 @@ def run_cell_czrc_pass(
     logger: Optional[logging.Logger] = None,
     highs_log_folder: Optional[str] = None,
     cluster_idx: int = 0,
+    cluster_key: Optional[str] = None,
     second_pass_candidates: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[
     List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]
@@ -1987,6 +2017,7 @@ def run_cell_czrc_pass(
         logger: Optional logger
         highs_log_folder: Optional folder path for HiGHS solver logs
         cluster_idx: Cluster index for log file naming (0-based)
+        cluster_key: Optional cluster name for meaningful log filenames
         second_pass_candidates: Second Pass OUTPUT boreholes (survivors + added) for
             grey marker visualization. These are filtered to Third Pass Tier 1 before
             display. If None, uses cell_boreholes for visualization.
@@ -2056,10 +2087,19 @@ def run_cell_czrc_pass(
         highs_log_file = None
         if highs_log_folder:
             os.makedirs(highs_log_folder, exist_ok=True)
-            highs_log_file = os.path.join(
-                highs_log_folder,
-                f"third_c{cluster_idx + 1:02d}_p{pair_idx + 1:02d}.log",
-            )
+            # Use cluster_key for meaningful log filename if available
+            if cluster_key:
+                safe_cluster_name = _sanitize_log_name(cluster_key)
+                highs_log_file = os.path.join(
+                    highs_log_folder,
+                    f"thirdpass_{safe_cluster_name}_Cell{cell_i}_Cell{cell_j}.log",
+                )
+            else:
+                # Fallback to numeric naming
+                highs_log_file = os.path.join(
+                    highs_log_folder,
+                    f"thirdpass_c{cluster_idx + 1:02d}_Cell{cell_i}_Cell{cell_j}.log",
+                )
 
         log.info(
             f"      🔄 Cell_{cell_i} ↔ Cell_{cell_j} (pair {pair_idx+1}/{len(adjacencies)})"
@@ -2338,26 +2378,21 @@ def solve_czrc_ilp_for_cluster(
         import os
 
         os.makedirs(highs_log_folder, exist_ok=True)
-        # Use 1-based naming to match HTML tooltip display:
-        # - HTML shows "CZRC Cell {i + 1}" for cells (Cell 1, Cell 2, etc.)
-        # - Cluster numbering also uses 1-based for consistency
-        # cluster_idx < 1000: cell solve (e.g., cluster 0 cell 0 → c01_cell01)
-        # cluster_idx >= 1000: direct solve (e.g., cluster 1 → c02_direct)
+        # Use meaningful cluster_key for log filenames
+        safe_cluster_name = _sanitize_log_name(cluster_key)
+        # cluster_idx < 1000: cell solve within split cluster
+        # cluster_idx >= 1000: direct solve (non-split cluster)
         if cluster_idx >= 1000:
-            # Direct solve (from check_and_split_large_cluster non-split path)
-            actual_cluster_idx = cluster_idx - 1000
-            # Use 1-based cluster number
+            # Direct solve - use cluster name
             highs_log_file = os.path.join(
-                highs_log_folder, f"czrc_c{actual_cluster_idx + 1:02d}_direct.log"
+                highs_log_folder, f"secondpass_{safe_cluster_name}.log"
             )
         else:
-            # Cell solve (from split cluster)
-            cell_cluster_idx = cluster_idx // 100
+            # Cell solve within split cluster - include cell index
             cell_idx = cluster_idx % 100
-            # Use 1-based for both cluster and cell to match HTML display
             highs_log_file = os.path.join(
                 highs_log_folder,
-                f"czrc_c{cell_cluster_idx + 1:02d}_cell{cell_idx + 1:02d}.log",
+                f"secondpass_{safe_cluster_name}_cell{cell_idx + 1:02d}.log",
             )
 
     if czrc_cache is not None:

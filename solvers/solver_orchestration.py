@@ -60,6 +60,36 @@ from Gap_Analysis_EC7.solvers.solver_config import (
 
 
 # ===========================================================================
+# 📂 FILENAME UTILITIES
+# ===========================================================================
+
+
+def _sanitize_log_name(name: str, max_len: int = 50) -> str:
+    """
+    Sanitize a name for use in log filenames.
+    
+    Replaces problematic characters with underscores and truncates if needed.
+    Used for zone names, cluster names, and cell pair identifiers.
+    
+    Args:
+        name: Raw name (e.g., "Embankment_0_Embankment_1")
+        max_len: Maximum length before truncation (default 50)
+        
+    Returns:
+        Filesystem-safe name (e.g., "Embankment_0_Embankment_1")
+    """
+    import re
+    # Replace problematic characters with underscores
+    safe = re.sub(r'[<>:"/\\|?*\[\]\s]+', '_', name)
+    # Remove leading/trailing underscores
+    safe = safe.strip('_')
+    # Truncate if too long (preserving end for uniqueness)
+    if len(safe) > max_len:
+        safe = safe[:max_len - 3] + "..."
+    return safe if safe else "unnamed"
+
+
+# ===========================================================================
 # 🏗️ MAIN ORCHESTRATION SECTION
 # ===========================================================================
 
@@ -186,6 +216,7 @@ def compute_optimal_boreholes(
     mip_heuristic_effort: float = 0.05,
     # HiGHS log capture
     highs_log_folder: Optional[str] = None,
+    log_name_prefix: Optional[str] = None,  # Meaningful name for log files
     logger: Optional[logging.Logger] = None,
     # Stall detection for early termination
     stall_detection_config: Optional[Dict[str, Any]] = None,
@@ -270,6 +301,7 @@ def compute_optimal_boreholes(
         "verbose": verbose,
         "mip_heuristic_effort": mip_heuristic_effort,
         "highs_log_folder": highs_log_folder,
+        "log_name_prefix": log_name_prefix,
         "logger": logger,
         "stall_detection_config": stall_detection_config,
     }
@@ -410,6 +442,8 @@ def _run_zone_decomposition(
             zone_kwargs["max_spacing"] = zone_spacing
             zone_kwargs["candidate_spacing"] = zone_candidate_spacing
             zone_kwargs["test_spacing"] = zone_test_spacing
+            # Use meaningful zone name for log files
+            zone_kwargs["log_name_prefix"] = f"firstpass_zone_{zone_name}"
 
             # Solve with or without caching
             if zone_cache is not None:
@@ -544,6 +578,7 @@ def _run_connected_components(
 
         comp_boreholes, comp_stats = _solve_component(
             component_gaps=component_gaps,
+            component_idx=comp_idx,
             logger=None,  # Quiet per-component
             **kwargs,
         )
@@ -613,6 +648,7 @@ def _run_single_solve(
     verbose: int,
     mip_heuristic_effort: float,
     highs_log_folder: Optional[str],
+    log_name_prefix: Optional[str],
     logger: Optional[logging.Logger],
     stall_detection_config: Optional[Dict[str, Any]] = None,
 ) -> Tuple[List[Dict[str, float]], Dict[str, Any]]:
@@ -654,10 +690,14 @@ def _run_single_solve(
             import os
             import uuid
 
-            # Use short uuid to make filename unique (handles multiple solves)
-            short_id = str(uuid.uuid4())[:8]
+            # Use meaningful prefix if provided, otherwise fall back to UUID
+            if log_name_prefix:
+                log_name = _sanitize_log_name(log_name_prefix)
+            else:
+                # Use short uuid as fallback (handles multiple solves)
+                log_name = f"firstpass_{str(uuid.uuid4())[:8]}"
             firstpass_log_file = os.path.join(
-                highs_log_folder, f"firstpass_{short_id}.log"
+                highs_log_folder, f"{log_name}.log"
             )
 
         selected_indices, stats = _solve_ilp(
@@ -791,6 +831,7 @@ def _solve_component(
     verbose: int,
     mip_heuristic_effort: float = 0.05,
     highs_log_folder: Optional[str] = None,
+    component_idx: Optional[int] = None,
     logger: Optional[logging.Logger] = None,
 ) -> Tuple[List[Dict[str, float]], Dict[str, Any]]:
     """
@@ -844,8 +885,12 @@ def _solve_component(
         import os
         import uuid
 
-        short_id = str(uuid.uuid4())[:8]
-        component_log_file = os.path.join(highs_log_folder, f"component_{short_id}.log")
+        # Use meaningful component index if available, otherwise fall back to UUID
+        if component_idx is not None:
+            log_name = f"component_{component_idx + 1:02d}"
+        else:
+            log_name = f"component_{str(uuid.uuid4())[:8]}"
+        component_log_file = os.path.join(highs_log_folder, f"{log_name}.log")
 
     # Solve ILP for this component
     selected_indices, stats = _solve_ilp(
