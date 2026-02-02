@@ -1603,17 +1603,37 @@ def export_run_stats_summary(
             original_count = czrc_stats.get("original_count", len(first_pass_boreholes))
             final_count = czrc_stats.get("final_count", len(second_pass_boreholes))
             # CZRC uses 'boreholes_removed' and 'boreholes_added' as keys
-            removed_count = czrc_stats.get("boreholes_removed", 0)
-            added_count = czrc_stats.get("boreholes_added", 0)
-            net_change = czrc_stats.get("net_change", final_count - original_count)
+            # These are TOTALS including Third Pass - we'll subtract Third Pass for accurate display
+            total_removed_count = czrc_stats.get("boreholes_removed", 0)
+            total_added_count = czrc_stats.get("boreholes_added", 0)
             solve_time = czrc_stats.get("solve_time", 0)
             status = czrc_stats.get("status", "unknown")
             clusters_processed = czrc_stats.get("clusters_processed", 0)
             unified_clusters = czrc_stats.get("unified_clusters", 0)
+            
+            # Calculate Second Pass only removed/added by subtracting Third Pass
+            # (Third Pass stats will be computed later, so we do it inline here)
+            third_pass_rem = 0
+            third_pass_add = 0
+            cluster_stats_dict = czrc_stats.get("cluster_stats", {})
+            for ckey, cinfo in cluster_stats_dict.items():
+                if isinstance(cinfo, dict) and cinfo.get("was_split", False):
+                    cell_czrc = cinfo.get("cell_czrc_stats", {})
+                    if cell_czrc.get("status") == "success":
+                        tp_rem = cell_czrc.get("third_pass_removed", [])
+                        tp_add = cell_czrc.get("third_pass_added", [])
+                        third_pass_rem += len(tp_rem) if isinstance(tp_rem, list) else 0
+                        third_pass_add += len(tp_add) if isinstance(tp_add, list) else 0
+            
+            # Second Pass only stats
+            removed_count = total_removed_count - third_pass_rem
+            added_count = total_added_count - third_pass_add
+            second_pass_output = original_count - removed_count + added_count
+            net_change = second_pass_output - original_count
 
             lines.append(f"- **Status:** {status}")
             lines.append(f"- **Input Boreholes:** {original_count}")
-            lines.append(f"- **Output Boreholes:** {final_count}")
+            lines.append(f"- **Output Boreholes:** {second_pass_output}")
             lines.append(f"- **Removed:** {removed_count}")
             lines.append(f"- **Added:** {added_count}")
             lines.append(f"- **Net Change:** {net_change:+d}")
@@ -1757,8 +1777,28 @@ def export_run_stats_summary(
         lines.append(f"- **Final Proposed Boreholes:** {len(proposed)}")
 
         # Calculate totals from passes
+        # Use czrc_stats for accurate Second Pass output count (matches "Output Boreholes" in Second Pass section)
         p1_count = len(first_pass_boreholes)
-        p2_count = len(second_pass_boreholes)
+        # Second Pass output = CZRC final_count (which is after Third Pass too, but the stats say "Output: X")
+        # Actually we need the TRUE Second Pass output (before Third Pass)
+        # This is: First Pass - Second Pass removals + Second Pass additions
+        # We can compute it from czrc_stats:
+        #   original_count = First Pass count
+        #   boreholes_removed = TOTAL removed (Second + Third Pass)
+        #   boreholes_added = TOTAL added (Second + Third Pass)
+        #   third_pass_removed = Third Pass only removals
+        #   third_pass_added = Third Pass only additions
+        #   Second Pass output = original - (removed - third_removed) + (added - third_added)
+        third_pass_removed_count = third_pass_removed_total if has_third_pass else 0
+        third_pass_added_count = third_pass_added_total if has_third_pass else 0
+        if czrc_stats:
+            total_removed = czrc_stats.get("boreholes_removed", 0)
+            total_added = czrc_stats.get("boreholes_added", 0)
+            second_only_removed = total_removed - third_pass_removed_count
+            second_only_added = total_added - third_pass_added_count
+            p2_count = p1_count - second_only_removed + second_only_added
+        else:
+            p2_count = len(second_pass_boreholes)
         p3_count = len(proposed)
 
         if p1_count > 0:
