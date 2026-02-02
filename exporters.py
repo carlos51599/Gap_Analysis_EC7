@@ -1708,10 +1708,12 @@ def export_run_stats_summary(
                     tp_added = cell_czrc.get("third_pass_added", [])
                     third_pass_removed_total += len(tp_removed) if isinstance(tp_removed, list) else 0
                     third_pass_added_total += len(tp_added) if isinstance(tp_added, list) else 0
-                    # Collect cell pairs
-                    cell_pairs = cell_czrc.get("cell_pairs", {})
-                    for cpair_name, cpair_info in cell_pairs.items():
-                        all_cell_pairs[f"{cluster_key[:15]}:{cpair_name}"] = cpair_info
+                    # Collect cell pairs from pair_stats list
+                    pair_stats_list = cell_czrc.get("pair_stats", [])
+                    for pair_stat in pair_stats_list:
+                        if isinstance(pair_stat, dict):
+                            pair_key = pair_stat.get("pair_key", "Unknown")
+                            all_cell_pairs[f"{cluster_key[:15]}:{pair_key}"] = pair_stat
 
         if has_third_pass:
             lines.append(f"- **Status:** success")
@@ -1727,9 +1729,9 @@ def export_run_stats_summary(
                 lines.append("|-----------|-----|------|------|-------------|-------|")
                 for cpair_name, cpair_info in all_cell_pairs.items():
                     if isinstance(cpair_info, dict):
-                        cp_selected = cpair_info.get("selected_count", 0)
-                        cp_removed = cpair_info.get("removed_count", 0)
-                        cp_added = cpair_info.get("added_count", 0)
+                        cp_selected = cpair_info.get("selected", 0)
+                        cp_removed = cpair_info.get("removed", 0)
+                        cp_added = cpair_info.get("added", 0)
                         cp_time = cpair_info.get("solve_time", 0)
                         cp_delta = cp_added - cp_removed
                         # Extract gap and termination from ilp_stats
