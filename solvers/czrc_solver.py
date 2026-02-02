@@ -71,23 +71,49 @@ _logger = logging.getLogger(__name__)
 
 def _sanitize_log_name(name: str, max_len: int = 50) -> str:
     """
-    Sanitize a name for use in log filenames.
+    Sanitize and abbreviate a name for use in log filenames.
     
-    Replaces problematic characters with underscores and truncates if needed.
-    Used for cluster names and cell pair identifiers.
+    Replaces problematic characters with underscores, abbreviates zone names
+    to first 4 letters, and truncates if needed.
     
     Args:
         name: Raw name (e.g., "Embankment_0+Embankment_1")
         max_len: Maximum length before truncation (default 50)
         
     Returns:
-        Filesystem-safe name (e.g., "Embankment_0_Embankment_1")
+        Filesystem-safe abbreviated name (e.g., "emba_0_emba_1")
     """
     import re
     # Replace problematic characters (including + from cluster_key) with underscores
     safe = re.sub(r'[<>:"/\\|?*\[\]\s+]+', '_', name)
-    # Remove leading/trailing underscores
-    safe = safe.strip('_')
+    # Collapse multiple underscores and strip
+    safe = re.sub(r'_+', '_', safe.strip('_'))
+    
+    # Abbreviate zone names to first 4 letters
+    parts = safe.split('_')
+    abbreviated_parts = []
+    i = 0
+    while i < len(parts):
+        part = parts[i]
+        # Check if this is a text part followed by a number (zone pattern)
+        if not part.isdigit() and i + 1 < len(parts) and parts[i + 1].isdigit():
+            # Abbreviate zone name: "Embankment_0" → "emba_0"
+            abbreviated_parts.append(part[:4].lower())
+            abbreviated_parts.append(parts[i + 1])
+            i += 2
+        elif part.isdigit():
+            abbreviated_parts.append(part)
+            i += 1
+        elif part.lower().startswith('cell'):
+            # Keep cell identifiers as-is
+            abbreviated_parts.append(part)
+            i += 1
+        else:
+            # Abbreviate standalone text
+            abbreviated_parts.append(part[:4].lower())
+            i += 1
+    safe = '_'.join(abbreviated_parts)
+    
     # Truncate if too long (preserving end for uniqueness)
     if len(safe) > max_len:
         safe = safe[:max_len - 3] + "..."

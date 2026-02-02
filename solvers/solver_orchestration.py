@@ -64,25 +64,78 @@ from Gap_Analysis_EC7.solvers.solver_config import (
 # ===========================================================================
 
 
-def _sanitize_log_name(name: str, max_len: int = 50) -> str:
+def _abbreviate_zone_name(zone: str) -> str:
+    """
+    Abbreviate a zone name to first 4 letters for shorter log filenames.
+    
+    Handles underscore-separated names like "Embankment_0" → "emba_0".
+    
+    Args:
+        zone: Full zone name (e.g., "Embankment_0", "Highways_1")
+        
+    Returns:
+        Abbreviated name (e.g., "emba_0", "high_1")
+    """
+    # Split on underscore, abbreviate text parts, keep numeric parts
+    parts = zone.split('_')
+    abbreviated = []
+    for part in parts:
+        if part.isdigit():
+            abbreviated.append(part)
+        else:
+            abbreviated.append(part[:4].lower())
+    return '_'.join(abbreviated)
+
+
+def _sanitize_log_name(name: str, max_len: int = 50, abbreviate: bool = True) -> str:
     """
     Sanitize a name for use in log filenames.
     
-    Replaces problematic characters with underscores and truncates if needed.
-    Used for zone names, cluster names, and cell pair identifiers.
+    Replaces problematic characters with underscores, abbreviates zone names,
+    and truncates if needed.
     
     Args:
-        name: Raw name (e.g., "Embankment_0_Embankment_1")
+        name: Raw name (e.g., "Embankment_0+Embankment_1")
         max_len: Maximum length before truncation (default 50)
+        abbreviate: Whether to abbreviate zone names to 4 letters (default True)
         
     Returns:
-        Filesystem-safe name (e.g., "Embankment_0_Embankment_1")
+        Filesystem-safe abbreviated name (e.g., "emba_0_emba_1")
     """
     import re
-    # Replace problematic characters with underscores
-    safe = re.sub(r'[<>:"/\\|?*\[\]\s]+', '_', name)
-    # Remove leading/trailing underscores
-    safe = safe.strip('_')
+    # Replace problematic characters (including + from cluster_key) with underscores
+    safe = re.sub(r'[<>:"/\\|?*\[\]\s+]+', '_', name)
+    # Remove leading/trailing underscores and collapse multiple underscores
+    safe = re.sub(r'_+', '_', safe.strip('_'))
+    
+    # Abbreviate zone names if enabled
+    if abbreviate:
+        # Split by underscore and abbreviate each zone portion
+        # Zone names are like "Embankment_0", so we process pairs
+        parts = safe.split('_')
+        abbreviated_parts = []
+        i = 0
+        while i < len(parts):
+            part = parts[i]
+            # Check if this is a text part followed by a number
+            if not part.isdigit() and i + 1 < len(parts) and parts[i + 1].isdigit():
+                # Abbreviate zone name: "Embankment_0" → "emba_0"
+                abbreviated_parts.append(part[:4].lower())
+                abbreviated_parts.append(parts[i + 1])
+                i += 2
+            elif part.isdigit():
+                abbreviated_parts.append(part)
+                i += 1
+            elif part.lower().startswith('cell'):
+                # Keep cell identifiers as-is
+                abbreviated_parts.append(part)
+                i += 1
+            else:
+                # Abbreviate standalone text
+                abbreviated_parts.append(part[:4].lower())
+                i += 1
+        safe = '_'.join(abbreviated_parts)
+    
     # Truncate if too long (preserving end for uniqueness)
     if len(safe) > max_len:
         safe = safe[:max_len - 3] + "..."
@@ -442,8 +495,8 @@ def _run_zone_decomposition(
             zone_kwargs["max_spacing"] = zone_spacing
             zone_kwargs["candidate_spacing"] = zone_candidate_spacing
             zone_kwargs["test_spacing"] = zone_test_spacing
-            # Use meaningful zone name for log files
-            zone_kwargs["log_name_prefix"] = f"firstpass_zone_{zone_name}"
+            # Use meaningful zone name for log files (without "zone_" prefix)
+            zone_kwargs["log_name_prefix"] = f"firstpass_{zone_name}"
 
             # Solve with or without caching
             if zone_cache is not None:
