@@ -1499,6 +1499,37 @@ Several modules exceed 1000 lines:
 
 Each cell is solved independently. K-means+Voronoi creates balanced cells that minimize boundary effects. Results are deduplicated during merge.
 
+### 6. Multi-Cluster Overlap Bug (Second Pass)
+
+**Status:** Known bug with bandaid fix. Awaiting proper root cause resolution.
+
+**Problem:** When a borehole's coverage spans multiple clusters during Second Pass, it can be:
+- **Selected** by Cluster A's ILP → added to `boreholes_to_add`
+- **Removed** by Cluster B's ILP → added to `all_removed`
+
+This results in the same borehole appearing in BOTH lists, causing inconsistent behavior where removed boreholes would be re-added to the final proposed set.
+
+**Bandaid Fix:** Located in [czrc_solver.py](solvers/czrc_solver.py#L2697-L2727):
+```python
+# Filter boreholes_to_add to exclude any that were removed
+# If ANY cluster removes a borehole, it should NOT be re-added
+removed_positions_for_filter = {(bh["x"], bh["y"]) for bh in all_removed}
+filtered_to_add = [bh for bh in boreholes_to_add 
+                   if (bh["x"], bh["y"]) not in removed_positions_for_filter]
+```
+
+**Impact on Statistics:** This fix removes boreholes AFTER the per-cluster ILP processing completes but BEFORE the final proposed set is assembled. These removals are:
+- **Not counted** in Second Pass "Removed" stats (which only track per-cluster ILP decisions)
+- **Visible** in console output as: `🔧 Multi-cluster overlap: N boreholes removed by one cluster, selected by another → removing`
+- **Cause** discrepancy between Second Pass CSV export (pre-fix) and Third Pass CSV export (post-fix)
+
+**Root Cause:** The underlying issue is that cluster boundaries are not properly coordinating during Second Pass ILP. Each cluster solves independently without knowledge of adjacent cluster decisions about shared boreholes.
+
+**Future Fix Direction:** Proper solution would involve either:
+1. Pre-coordination of cluster boundaries before ILP
+2. Global constraint propagation across clusters
+3. Re-architecture of cluster boundary handling
+
 ---
 
 ## Data Flow
