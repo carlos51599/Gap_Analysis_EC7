@@ -74,14 +74,15 @@ def _sanitize_log_name(name: str, max_len: int = 50) -> str:
     Sanitize and abbreviate a name for use in log filenames.
     
     Replaces problematic characters with underscores, abbreviates zone names
-    to first 2 letters, and truncates if needed.
+    to first 2 letters, and truncates if needed. Zone names are joined with
+    their numbers (em2), underscores only between different zones/cells (em2_hi1).
     
     Args:
         name: Raw name (e.g., "Embankment_0+Embankment_1")
         max_len: Maximum length before truncation (default 50)
         
     Returns:
-        Filesystem-safe abbreviated name (e.g., "em_0_em_1")
+        Filesystem-safe abbreviated name (e.g., "em0_em1")
     """
     import re
     # Replace problematic characters (including + from cluster_key) with underscores
@@ -89,31 +90,32 @@ def _sanitize_log_name(name: str, max_len: int = 50) -> str:
     # Collapse multiple underscores and strip
     safe = re.sub(r'_+', '_', safe.strip('_'))
     
-    # Abbreviate zone names to first 2 letters
+    # Abbreviate zone names to first 2 letters, join with number (no underscore)
     parts = safe.split('_')
-    abbreviated_parts = []
+    zone_tokens = []  # Each token is a complete zone like "em0" or cell like "c1"
     i = 0
     while i < len(parts):
         part = parts[i]
         # Check if this is a text part followed by a number (zone pattern)
         if not part.isdigit() and i + 1 < len(parts) and parts[i + 1].isdigit():
-            # Abbreviate zone name: "Embankment_0" → "em_0"
-            abbreviated_parts.append(part[:2].lower())
-            abbreviated_parts.append(parts[i + 1])
+            # Abbreviate zone name: "Embankment_0" → "em0" (no underscore)
+            zone_tokens.append(f"{part[:2].lower()}{parts[i + 1]}")
             i += 2
         elif part.isdigit():
-            abbreviated_parts.append(part)
+            # Standalone number - append as is
+            zone_tokens.append(part)
             i += 1
         elif part.lower().startswith('cell'):
             # Convert Cell to c: "Cell0" → "c0"
             cell_num = part[4:] if len(part) > 4 else ""
-            abbreviated_parts.append(f"c{cell_num}")
+            zone_tokens.append(f"c{cell_num}")
             i += 1
         else:
             # Abbreviate standalone text
-            abbreviated_parts.append(part[:2].lower())
+            zone_tokens.append(part[:2].lower())
             i += 1
-    safe = '_'.join(abbreviated_parts)
+    # Join zone tokens with underscores (underscore only between different zones)
+    safe = '_'.join(zone_tokens)
     
     # Truncate if too long (preserving end for uniqueness)
     if len(safe) > max_len:
