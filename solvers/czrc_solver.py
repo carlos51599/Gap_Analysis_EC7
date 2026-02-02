@@ -99,33 +99,41 @@ def _sanitize_log_name(name: str, max_zones: int = 5) -> Tuple[str, Optional[str
     # Abbreviate zone names to first 2 letters, join with number (no underscore)
     parts = safe.split("_")
     zone_tokens = []  # Each token is a complete zone like "em0" or cell like "c1"
+    zone_count = 0  # Count actual zones (not cells)
     i = 0
     while i < len(parts):
         part = parts[i]
-        # Check if this is a text part followed by a number (zone pattern)
-        if not part.isdigit() and i + 1 < len(parts) and parts[i + 1].isdigit():
+        part_lower = part.lower()
+        
+        # First check: Is this "Cell" followed by a number? → convert to c#
+        if part_lower == "cell" and i + 1 < len(parts) and parts[i + 1].isdigit():
+            zone_tokens.append(f"c{parts[i + 1]}")
+            i += 2
+            # Cell is NOT counted as a zone
+        # Second check: Is this a text part followed by a number (zone pattern)?
+        elif not part.isdigit() and i + 1 < len(parts) and parts[i + 1].isdigit():
             # Abbreviate zone name: "Embankment_0" → "em0" (no underscore)
             zone_tokens.append(f"{part[:2].lower()}{parts[i + 1]}")
+            zone_count += 1
             i += 2
         elif part.isdigit():
             # Standalone number - append as is
             zone_tokens.append(part)
             i += 1
-        elif part.lower().startswith("cell"):
-            # Convert Cell to c: "Cell0" → "c0"
-            cell_num = part[4:] if len(part) > 4 else ""
+        elif part_lower.startswith("cell") and len(part) > 4:
+            # Cell with attached number: "Cell0" → "c0"
+            cell_num = part[4:]
             zone_tokens.append(f"c{cell_num}")
             i += 1
+            # Cell is NOT counted as a zone
         else:
-            # Abbreviate standalone text
+            # Abbreviate standalone text as zone
             zone_tokens.append(part[:2].lower())
+            zone_count += 1
             i += 1
     
     # Full abbreviated name
     full_name = "_".join(zone_tokens)
-    
-    # Count zone tokens (filter out cell tokens which start with 'c' followed by digit)
-    zone_count = sum(1 for t in zone_tokens if not (t.startswith('c') and len(t) > 1 and t[1:].isdigit()))
     
     # If too many zones, use simplified count-based name
     if zone_count > max_zones:
