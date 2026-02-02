@@ -69,29 +69,35 @@ if TYPE_CHECKING:
 _logger = logging.getLogger(__name__)
 
 
-def _sanitize_log_name(name: str, max_len: int = 50) -> str:
+def _sanitize_log_name(name: str, max_zones: int = 5) -> Tuple[str, Optional[str]]:
     """
     Sanitize and abbreviate a name for use in log filenames.
-    
+
     Replaces problematic characters with underscores, abbreviates zone names
     to first 2 letters, and truncates if needed. Zone names are joined with
     their numbers (em2), underscores only between different zones/cells (em2_hi1).
     
+    For clusters with more than max_zones zones, returns a simplified name
+    like "8zones" and the full abbreviated name for logging in the file header.
+
     Args:
         name: Raw name (e.g., "Embankment_0+Embankment_1")
-        max_len: Maximum length before truncation (default 50)
-        
+        max_zones: Maximum zones before using count-based name (default 5)
+
     Returns:
-        Filesystem-safe abbreviated name (e.g., "em0_em1")
+        Tuple of (filename_safe_name, full_name_for_header_or_None)
+        - filename_safe_name: Short name for filename (e.g., "em0_em1" or "8zones")
+        - full_name_for_header: Full abbreviated name if truncated, else None
     """
     import re
+
     # Replace problematic characters (including + from cluster_key) with underscores
-    safe = re.sub(r'[<>:"/\\|?*\[\]\s+]+', '_', name)
+    safe = re.sub(r'[<>:"/\\|?*\[\]\s+]+', "_", name)
     # Collapse multiple underscores and strip
-    safe = re.sub(r'_+', '_', safe.strip('_'))
-    
+    safe = re.sub(r"_+", "_", safe.strip("_"))
+
     # Abbreviate zone names to first 2 letters, join with number (no underscore)
-    parts = safe.split('_')
+    parts = safe.split("_")
     zone_tokens = []  # Each token is a complete zone like "em0" or cell like "c1"
     i = 0
     while i < len(parts):
@@ -105,7 +111,7 @@ def _sanitize_log_name(name: str, max_len: int = 50) -> str:
             # Standalone number - append as is
             zone_tokens.append(part)
             i += 1
-        elif part.lower().startswith('cell'):
+        elif part.lower().startswith("cell"):
             # Convert Cell to c: "Cell0" → "c0"
             cell_num = part[4:] if len(part) > 4 else ""
             zone_tokens.append(f"c{cell_num}")
@@ -114,13 +120,19 @@ def _sanitize_log_name(name: str, max_len: int = 50) -> str:
             # Abbreviate standalone text
             zone_tokens.append(part[:2].lower())
             i += 1
-    # Join zone tokens with underscores (underscore only between different zones)
-    safe = '_'.join(zone_tokens)
     
-    # Truncate if too long (preserving end for uniqueness)
-    if len(safe) > max_len:
-        safe = safe[:max_len - 3] + "..."
-    return safe if safe else "unnamed"
+    # Full abbreviated name
+    full_name = "_".join(zone_tokens)
+    
+    # Count zone tokens (filter out cell tokens which start with 'c' followed by digit)
+    zone_count = sum(1 for t in zone_tokens if not (t.startswith('c') and len(t) > 1 and t[1:].isdigit()))
+    
+    # If too many zones, use simplified count-based name
+    if zone_count > max_zones:
+        short_name = f"{zone_count}zones"
+        return short_name, full_name
+    
+    return full_name if full_name else "unnamed", None
 
 
 def _get_czrc_stall_detection_config(czrc_ilp_config: Dict[str, Any]) -> Dict[str, Any]:
@@ -2114,11 +2126,13 @@ def run_cell_czrc_pass(
     for pair_idx, (cell_i, cell_j, czrc_region) in enumerate(adjacencies):
         # Generate HiGHS log file path for this cell-cell pair
         highs_log_file = None
+        cluster_header = None
         if highs_log_folder:
             os.makedirs(highs_log_folder, exist_ok=True)
             # Use cluster_key for meaningful log filename if available
             if cluster_key:
-                safe_cluster_name = _sanitize_log_name(cluster_key)
+                safe_cluster_name, full_name = _sanitize_log_name(cluster_key)
+                cluster_header = full_name  # Will be None if not truncated
                 highs_log_file = os.path.join(
                     highs_log_folder,
                     f"third_{safe_cluster_name}_c{cell_i}_c{cell_j}.log",
@@ -2129,6 +2143,12 @@ def run_cell_czrc_pass(
                     highs_log_folder,
                     f"third_c{cluster_idx + 1:02d}_c{cell_i}_c{cell_j}.log",
                 )
+        
+        # Write cluster composition header to log file if using simplified name
+        if highs_log_file and cluster_header:
+            with open(highs_log_file, 'w') as f:
+                f.write(f"# Cluster composition: {cluster_header}\n")
+                f.write(f"# Original cluster_key: {cluster_key}\n\n")
 
         log.info(
             f"      🔄 Cell_{cell_i} ↔ Cell_{cell_j} (pair {pair_idx+1}/{len(adjacencies)})"
@@ -2403,12 +2423,14 @@ def solve_czrc_ilp_for_cluster(
 
     # Generate HiGHS log file path if folder provided
     highs_log_file: Optional[str] = None
+    cluster_header: Optional[str] = None
     if highs_log_folder:
         import os
 
         os.makedirs(highs_log_folder, exist_ok=True)
         # Use meaningful cluster_key for log filenames
-        safe_cluster_name = _sanitize_log_name(cluster_key)
+        safe_cluster_name, full_name = _sanitize_log_name(cluster_key)
+        cluster_header = full_name  # Will be None if not truncated
         # cluster_idx < 1000: cell solve within split cluster
         # cluster_idx >= 1000: direct solve (non-split cluster)
         if cluster_idx >= 1000:
@@ -2423,6 +2445,12 @@ def solve_czrc_ilp_for_cluster(
                 highs_log_folder,
                 f"second_{safe_cluster_name}_c{cell_idx + 1:02d}.log",
             )
+        
+        # Write cluster composition header to log file if using simplified name
+        if cluster_header:
+            with open(highs_log_file, 'w') as f:
+                f.write(f"# Cluster composition: {cluster_header}\n")
+                f.write(f"# Original cluster_key: {cluster_key}\n\n")
 
     if czrc_cache is not None:
         # Use cache: key is based on actual problem (unsatisfied test points)

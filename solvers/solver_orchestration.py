@@ -67,20 +67,20 @@ from Gap_Analysis_EC7.solvers.solver_config import (
 def _abbreviate_zone_name(zone: str) -> str:
     """
     Abbreviate a zone name to first 2 letters for shorter log filenames.
-    
+
     Joins zone abbreviation with its number (no underscore): "Embankment_0" → "em0".
-    
+
     Args:
         zone: Full zone name (e.g., "Embankment_0", "Highways_1")
-        
+
     Returns:
         Abbreviated name (e.g., "em0", "hi1")
     """
     # Split on underscore, abbreviate text parts and join with number
-    parts = zone.split('_')
+    parts = zone.split("_")
     if len(parts) >= 2 and parts[-1].isdigit():
         # Zone with number: "Embankment_0" → "em0"
-        text_part = '_'.join(parts[:-1])
+        text_part = "_".join(parts[:-1])
         return f"{text_part[:2].lower()}{parts[-1]}"
     else:
         # Single part: just abbreviate
@@ -90,30 +90,31 @@ def _abbreviate_zone_name(zone: str) -> str:
 def _sanitize_log_name(name: str, max_len: int = 50, abbreviate: bool = True) -> str:
     """
     Sanitize a name for use in log filenames.
-    
+
     Replaces problematic characters with underscores, abbreviates zone names,
     and truncates if needed. Zone names are joined with their numbers (em2),
     underscores only between different zones/cells (em2_hi1).
-    
+
     Args:
         name: Raw name (e.g., "Embankment_0+Embankment_1")
         max_len: Maximum length before truncation (default 50)
         abbreviate: Whether to abbreviate zone names to 2 letters (default True)
-        
+
     Returns:
         Filesystem-safe abbreviated name (e.g., "em0_em1")
     """
     import re
+
     # Replace problematic characters (including + from cluster_key) with underscores
-    safe = re.sub(r'[<>:"/\\|?*\[\]\s+]+', '_', name)
+    safe = re.sub(r'[<>:"/\\|?*\[\]\s+]+', "_", name)
     # Remove leading/trailing underscores and collapse multiple underscores
-    safe = re.sub(r'_+', '_', safe.strip('_'))
-    
+    safe = re.sub(r"_+", "_", safe.strip("_"))
+
     # Abbreviate zone names if enabled
     if abbreviate:
         # Split by underscore and abbreviate each zone portion
         # Zone names are like "Embankment_0", join as "em0" (no underscore within zone)
-        parts = safe.split('_')
+        parts = safe.split("_")
         zone_tokens = []  # Each token is a complete zone like "em0" or cell like "c1"
         i = 0
         while i < len(parts):
@@ -127,7 +128,7 @@ def _sanitize_log_name(name: str, max_len: int = 50, abbreviate: bool = True) ->
                 # Standalone number - append to previous token or as is
                 zone_tokens.append(part)
                 i += 1
-            elif part.lower().startswith('cell'):
+            elif part.lower().startswith("cell"):
                 # Convert Cell to c: "Cell0" → "c0"
                 cell_num = part[4:] if len(part) > 4 else ""
                 zone_tokens.append(f"c{cell_num}")
@@ -137,11 +138,11 @@ def _sanitize_log_name(name: str, max_len: int = 50, abbreviate: bool = True) ->
                 zone_tokens.append(part[:2].lower())
                 i += 1
         # Join zone tokens with underscores (underscore only between different zones)
-        safe = '_'.join(zone_tokens)
-    
+        safe = "_".join(zone_tokens)
+
     # Truncate if too long (preserving end for uniqueness)
     if len(safe) > max_len:
-        safe = safe[:max_len - 3] + "..."
+        safe = safe[: max_len - 3] + "..."
     return safe if safe else "unnamed"
 
 
@@ -191,7 +192,10 @@ def optimize_boreholes(
 
     # Extract stall detection config as dict for solver
     stall_detection_dict = None
-    if hasattr(config.ilp, "stall_detection") and config.ilp.stall_detection is not None:
+    if (
+        hasattr(config.ilp, "stall_detection")
+        and config.ilp.stall_detection is not None
+    ):
         stall_detection_dict = config.ilp.stall_detection.to_dict()
 
     # Delegate to implementation function with extracted parameters
@@ -752,9 +756,7 @@ def _run_single_solve(
             else:
                 # Use short uuid as fallback (handles multiple solves)
                 log_name = f"first_{str(uuid.uuid4())[:8]}"
-            firstpass_log_file = os.path.join(
-                highs_log_folder, f"{log_name}.log"
-            )
+            firstpass_log_file = os.path.join(highs_log_folder, f"{log_name}.log")
 
         selected_indices, stats = _solve_ilp(
             test_points,
