@@ -342,7 +342,47 @@ def generate_layers_panel_html(
     <label style="display: flex; align-items: center; cursor: pointer; margin: 5px 0; padding-left: 16px;">
         <input type="checkbox" id="boreholeCirclesCheckbox" style="margin-right: 8px;">
         <span style="font-size: 11px;">Borehole Circles</span>
-    </label>"""
+    </label>
+    <div id="circleRemovalControls" style="display: none; margin: 5px 0 10px 16px; padding: 8px; background: rgba(0, 0, 0, 0.03); border-radius: 4px; border: 1px solid rgba(0, 0, 0, 0.08);">
+        <div style="font-size: 10px; color: #666; margin-bottom: 6px;">
+            <strong>Shift+Click</strong> to remove circles
+        </div>
+        <div id="removedCount" style="font-size: 11px; margin-bottom: 8px; color: #555;">
+            Removed: 0 circles
+        </div>
+        <div style="display: flex; gap: 4px; flex-wrap: wrap;">
+            <button id="undoLastRemoval" disabled style="
+                padding: 4px 8px;
+                font-size: 10px;
+                background: #6c757d;
+                color: white;
+                border: none;
+                border-radius: 3px;
+                cursor: pointer;
+                opacity: 0.7;
+            " onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity=this.disabled?'0.5':'0.7'">↩ Undo</button>
+            <button id="resetRemovals" disabled style="
+                padding: 4px 8px;
+                font-size: 10px;
+                background: #28a745;
+                color: white;
+                border: none;
+                border-radius: 3px;
+                cursor: pointer;
+                opacity: 0.7;
+            " onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity=this.disabled?'0.5':'0.7'">↩ Reset All</button>
+            <button id="exportRemoved" style="
+                padding: 4px 8px;
+                font-size: 10px;
+                background: #007bff;
+                color: white;
+                border: none;
+                border-radius: 3px;
+                cursor: pointer;
+                opacity: 0.7;
+            " onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='0.7'">📥 Export</button>
+        </div>
+    </div>"""
         )
 
     # Add candidate grid (hexagon overlay) checkbox - unchecked by default

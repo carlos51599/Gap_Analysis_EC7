@@ -133,6 +133,8 @@ from Gap_Analysis_EC7.visualization.client_scripts import (
     generate_coverage_data_script,
     # Click-to-copy tooltip
     generate_click_to_copy_script,
+    # Circle removal (Shift+Click)
+    generate_circle_removal_script,
 )
 
 # ===========================================================================
@@ -203,5 +205,6 @@ __all__ = [
     "generate_filter_panel_scripts",
     "generate_coverage_data_script",
     "generate_click_to_copy_script",
+    "generate_circle_removal_script",
     "generate_slider_styles_css",
 ]

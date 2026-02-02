@@ -797,7 +797,372 @@ def generate_filter_panel_scripts(
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# � CLICK-TO-COPY TOOLTIP SCRIPTS
+# 🔴 BOREHOLE CIRCLE REMOVAL SCRIPTS
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def generate_circle_removal_script() -> str:
+    """
+    Generate JavaScript for interactive removal of borehole circles.
+
+    When Shift+Click is performed on a borehole circle (while the layer is visible),
+    the circle is removed from the visualization. Features:
+
+    - Tracks removed borehole IDs in a Set
+    - Maintains removal history for Undo functionality
+    - Stores master data for regenerating trace after removal
+    - Provides Export functionality for removed circle list
+    - Shows visual feedback via toast notifications
+    - Updates counter in removal controls panel
+
+    The removal is data-driven: we filter the master borehole list and reconstruct
+    the trace data rather than nullifying individual points.
+
+    Returns:
+        JavaScript code block as string (without <script> tags)
+    """
+    return """
+(function() {
+    // === CIRCLE REMOVAL STATE ===
+    // Global flag to indicate removal handling is active
+    window.circleRemovalActive = false;
+    const removedBoreholeIds = new Set();
+    const removalHistory = [];  // Stack for undo functionality
+    let masterBoreholeData = null;  // Will be populated from trace customdata
+    
+    // === TOAST NOTIFICATION ===
+    function showRemovalToast(message, isSuccess) {
+        const existingToast = document.getElementById('removalToast');
+        if (existingToast) existingToast.remove();
+        
+        const toast = document.createElement('div');
+        toast.id = 'removalToast';
+        toast.style.cssText = `
+            position: fixed;
+            bottom: 60px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 12px 24px;
+            background: ${isSuccess ? 'rgba(220, 53, 69, 0.95)' : 'rgba(108, 117, 125, 0.95)'};
+            color: white;
+            border-radius: 8px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-size: 14px;
+            z-index: 10000;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            transition: opacity 0.3s ease-out;
+            pointer-events: none;
+        `;
+        toast.textContent = message;
+        document.body.appendChild(toast);
+        
+        setTimeout(function() {
+            toast.style.opacity = '0';
+            setTimeout(function() { toast.remove(); }, 300);
+        }, 2000);
+    }
+    
+    // === UI UPDATE ===
+    function updateRemovalUI() {
+        const countDisplay = document.getElementById('removedCount');
+        if (countDisplay) {
+            countDisplay.textContent = `Removed: ${removedBoreholeIds.size} circle${removedBoreholeIds.size !== 1 ? 's' : ''}`;
+        }
+        
+        const undoBtn = document.getElementById('undoLastRemoval');
+        if (undoBtn) {
+            undoBtn.disabled = removalHistory.length === 0;
+        }
+        
+        const resetBtn = document.getElementById('resetRemovals');
+        if (resetBtn) {
+            resetBtn.disabled = removedBoreholeIds.size === 0;
+        }
+    }
+    
+    // === CIRCLE TRACE HELPERS ===
+    function getCircleTraceIndex() {
+        if (typeof COVERAGE_TRACE_RANGES === 'undefined' || typeof currentCoverageCombo === 'undefined') {
+            return null;
+        }
+        const ranges = COVERAGE_TRACE_RANGES[currentCoverageCombo];
+        if (ranges && ranges.borehole_circles) {
+            return ranges.borehole_circles[0];  // Start index of borehole circles trace
+        }
+        return null;
+    }
+    
+    function isBoreholeCirclesVisible() {
+        const checkbox = document.getElementById('boreholeCirclesCheckbox');
+        return checkbox && checkbox.checked;
+    }
+    
+    // === EXTRACT MASTER DATA FROM TRACE ===
+    function extractMasterDataFromTrace() {
+        const plotDiv = document.querySelector('.plotly-graph-div');
+        const traceIdx = getCircleTraceIndex();
+        if (!plotDiv || traceIdx === null || !plotDiv.data || !plotDiv.data[traceIdx]) {
+            return;
+        }
+        
+        const trace = plotDiv.data[traceIdx];
+        if (!trace.customdata || trace.customdata.length === 0) {
+            console.warn('No customdata in borehole circles trace');
+            return;
+        }
+        
+        // Extract unique boreholes from customdata
+        // customdata format: [borehole_id, center_x, center_y, radius] or null (separator)
+        const boreholes = new Map();  // borehole_id -> {x, y, radius}
+        
+        for (const cd of trace.customdata) {
+            if (cd !== null && Array.isArray(cd) && cd.length >= 4) {
+                const [bhId, cx, cy, radius] = cd;
+                if (!boreholes.has(bhId)) {
+                    boreholes.set(bhId, { id: bhId, x: cx, y: cy, radius: radius });
+                }
+            }
+        }
+        
+        masterBoreholeData = Array.from(boreholes.values());
+        console.log(`📊 Extracted master data: ${masterBoreholeData.length} boreholes`);
+    }
+    
+    // === REGENERATE TRACE ===
+    function regenerateCircleTrace() {
+        const plotDiv = document.querySelector('.plotly-graph-div');
+        const traceIdx = getCircleTraceIndex();
+        if (!plotDiv || traceIdx === null || !masterBoreholeData) {
+            return;
+        }
+        
+        // Filter out removed boreholes
+        const visibleBoreholes = masterBoreholeData.filter(bh => !removedBoreholeIds.has(bh.id));
+        
+        // Generate new coordinate arrays
+        const numPoints = 64;
+        const allX = [];
+        const allY = [];
+        const allCustomdata = [];
+        
+        for (const bh of visibleBoreholes) {
+            const angles = [];
+            for (let i = 0; i <= numPoints; i++) {
+                angles.push(2 * Math.PI * i / numPoints);
+            }
+            
+            for (const angle of angles) {
+                const x = bh.x + bh.radius * Math.cos(angle);
+                const y = bh.y + bh.radius * Math.sin(angle);
+                allX.push(x);
+                allY.push(y);
+                allCustomdata.push([bh.id, bh.x, bh.y, bh.radius]);
+            }
+            
+            // Separator
+            allX.push(null);
+            allY.push(null);
+            allCustomdata.push(null);
+        }
+        
+        // Update trace
+        Plotly.restyle(plotDiv, {
+            x: [allX],
+            y: [allY],
+            customdata: [allCustomdata]
+        }, [traceIdx]);
+    }
+    
+    // === REMOVAL HANDLER ===
+    function removeCircle(boreholeId) {
+        if (removedBoreholeIds.has(boreholeId)) {
+            return;  // Already removed
+        }
+        
+        removedBoreholeIds.add(boreholeId);
+        removalHistory.push(boreholeId);
+        regenerateCircleTrace();
+        updateRemovalUI();
+        showRemovalToast(`🗑️ Removed circle #${boreholeId}`, true);
+    }
+    
+    // === UNDO/RESET HANDLERS ===
+    window.undoLastCircleRemoval = function() {
+        if (removalHistory.length === 0) return;
+        
+        const lastId = removalHistory.pop();
+        removedBoreholeIds.delete(lastId);
+        regenerateCircleTrace();
+        updateRemovalUI();
+        showRemovalToast(`↩️ Restored circle #${lastId}`, false);
+    };
+    
+    window.resetAllCircleRemovals = function() {
+        if (removedBoreholeIds.size === 0) return;
+        
+        const count = removedBoreholeIds.size;
+        removedBoreholeIds.clear();
+        removalHistory.length = 0;
+        regenerateCircleTrace();
+        updateRemovalUI();
+        showRemovalToast(`↩️ Restored ${count} circle${count !== 1 ? 's' : ''}`, false);
+    };
+    
+    // === EXPORT HANDLER ===
+    window.exportRemovedCircles = function() {
+        if (removedBoreholeIds.size === 0) {
+            showRemovalToast('No circles removed to export', false);
+            return;
+        }
+        
+        // Get removed borehole details
+        const removedDetails = [];
+        for (const bhId of removedBoreholeIds) {
+            const bh = masterBoreholeData ? masterBoreholeData.find(b => b.id === bhId) : null;
+            if (bh) {
+                removedDetails.push({
+                    id: bh.id,
+                    x: bh.x,
+                    y: bh.y,
+                    radius: bh.radius
+                });
+            } else {
+                removedDetails.push({ id: bhId });
+            }
+        }
+        
+        const exportData = {
+            timestamp: new Date().toISOString(),
+            removed_count: removedBoreholeIds.size,
+            removed_circles: removedDetails
+        };
+        
+        const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'removed_circles.json';
+        a.click();
+        URL.revokeObjectURL(url);
+        
+        showRemovalToast(`📥 Exported ${removedBoreholeIds.size} removed circles`, true);
+    };
+    
+    // === PLOTLY CLICK HANDLER FOR REMOVAL ===
+    function attachRemovalHandler() {
+        const plotDiv = document.querySelector('.plotly-graph-div');
+        if (!plotDiv) {
+            setTimeout(attachRemovalHandler, 500);
+            return;
+        }
+        
+        // Extract master data on first load
+        setTimeout(function() {
+            extractMasterDataFromTrace();
+        }, 1000);
+        
+        // Add click handler
+        plotDiv.on('plotly_click', function(data) {
+            // Only handle Shift+Click when borehole circles layer is visible
+            if (!data || !data.event || !data.event.shiftKey) return;
+            if (!isBoreholeCirclesVisible()) return;
+            
+            const point = data.points && data.points[0];
+            if (!point || !point.customdata) return;
+            
+            // Check if click is on borehole circles trace
+            const circleTraceIdx = getCircleTraceIndex();
+            if (circleTraceIdx === null || point.curveNumber !== circleTraceIdx) return;
+            
+            // customdata format: [borehole_id, center_x, center_y, radius]
+            const cd = point.customdata;
+            if (!Array.isArray(cd) || cd.length < 4) return;
+            
+            const boreholeId = cd[0];
+            
+            // Set flag to prevent copy-to-clipboard from running
+            window.circleRemovalActive = true;
+            
+            // Extract master data if not done yet
+            if (!masterBoreholeData) {
+                extractMasterDataFromTrace();
+            }
+            
+            removeCircle(boreholeId);
+            
+            // Reset flag after short delay
+            setTimeout(function() {
+                window.circleRemovalActive = false;
+            }, 100);
+        });
+        
+        console.log('🔴 Circle removal handler attached');
+    }
+    
+    // === SHOW/HIDE REMOVAL CONTROLS ===
+    function toggleRemovalControlsVisibility() {
+        const controls = document.getElementById('circleRemovalControls');
+        if (controls) {
+            controls.style.display = isBoreholeCirclesVisible() ? 'block' : 'none';
+        }
+    }
+    
+    // Watch for checkbox changes
+    function watchBoreholeCirclesCheckbox() {
+        const checkbox = document.getElementById('boreholeCirclesCheckbox');
+        if (checkbox) {
+            checkbox.addEventListener('change', function() {
+                toggleRemovalControlsVisibility();
+                // Re-extract master data when layer is toggled on
+                if (this.checked && !masterBoreholeData) {
+                    setTimeout(extractMasterDataFromTrace, 500);
+                }
+            });
+        }
+    }
+    
+    // === BUTTON EVENT BINDINGS ===
+    function bindButtonEvents() {
+        const undoBtn = document.getElementById('undoLastRemoval');
+        if (undoBtn) {
+            undoBtn.addEventListener('click', window.undoLastCircleRemoval);
+        }
+        
+        const resetBtn = document.getElementById('resetRemovals');
+        if (resetBtn) {
+            resetBtn.addEventListener('click', window.resetAllCircleRemovals);
+        }
+        
+        const exportBtn = document.getElementById('exportRemoved');
+        if (exportBtn) {
+            exportBtn.addEventListener('click', window.exportRemovedCircles);
+        }
+    }
+    
+    // === INITIALIZATION ===
+    if (document.readyState === 'complete') {
+        setTimeout(function() {
+            attachRemovalHandler();
+            watchBoreholeCirclesCheckbox();
+            bindButtonEvents();
+            updateRemovalUI();
+        }, 500);
+    } else {
+        window.addEventListener('load', function() {
+            setTimeout(function() {
+                attachRemovalHandler();
+                watchBoreholeCirclesCheckbox();
+                bindButtonEvents();
+                updateRemovalUI();
+            }, 500);
+        });
+    }
+})();
+"""
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 📋 CLICK-TO-COPY TOOLTIP SCRIPTS
 # ═══════════════════════════════════════════════════════════════════════════
 
 
@@ -962,8 +1327,18 @@ def generate_click_to_copy_script() -> str:
             setTimeout(function() { lastHoverText = null; }, 500);
         });
         
-        // Copy on click
+        // Copy on click (skip if circle removal is active)
         plotDiv.on('plotly_click', function(data) {
+            // Skip copy-to-clipboard if circle removal handler just processed this click
+            if (window.circleRemovalActive) {
+                return;
+            }
+            
+            // Also skip if Shift is pressed (reserved for circle removal)
+            if (data && data.event && data.event.shiftKey) {
+                return;
+            }
+            
             if (data && data.points && data.points.length > 0) {
                 const point = data.points[0];
                 let clickText = '';

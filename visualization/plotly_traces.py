@@ -890,6 +890,13 @@ def build_borehole_circles_trace(
     without fill, showing only the outline of each borehole's coverage radius.
     The circles are NOT merged, preserving individual borehole identity.
 
+    Each point includes customdata with:
+    - borehole_id: Unique identifier for the borehole (index-based)
+    - center_x: Circle center X coordinate
+    - center_y: Circle center Y coordinate
+    - radius: Circle radius
+    This enables interactive removal of individual circles via JavaScript.
+
     Args:
         coordinates: List of {"x": float, "y": float, "coverage_radius"?: float}
                      borehole locations. coverage_radius is optional per point.
@@ -909,6 +916,7 @@ def build_borehole_circles_trace(
             y=[],
             mode="lines",
             line=dict(color=line_color, width=line_width),
+            customdata=[],
             name=name,
             showlegend=show_legend,
             visible=visible,
@@ -919,11 +927,12 @@ def build_borehole_circles_trace(
     # This approach draws each circle separately without merging
     all_x: List[Optional[float]] = []
     all_y: List[Optional[float]] = []
+    all_customdata: List[Optional[List]] = []
 
     # Number of points per circle for smooth appearance
     num_points = 64
 
-    for coord in coordinates:
+    for borehole_id, coord in enumerate(coordinates):
         cx = coord["x"]
         cy = coord["y"]
         radius = coord.get("coverage_radius", buffer_radius)
@@ -937,9 +946,15 @@ def build_borehole_circles_trace(
         all_x.extend(circle_x.tolist())
         all_y.extend(circle_y.tolist())
 
+        # Add customdata for each point: [borehole_id, center_x, center_y, radius]
+        # All points in the same circle share the same borehole_id
+        for _ in range(len(circle_x)):
+            all_customdata.append([borehole_id, cx, cy, radius])
+
         # Add None separator for next circle
         all_x.append(None)
         all_y.append(None)
+        all_customdata.append(None)
 
     return go.Scattergl(
         x=all_x,
@@ -947,11 +962,18 @@ def build_borehole_circles_trace(
         mode="lines",
         line=dict(color=line_color, width=line_width),
         fill=None,  # No fill - outline only
+        customdata=all_customdata,
         name=name,
         legendgroup="borehole_circles",
         showlegend=show_legend,
         visible=visible,
-        hoverinfo="skip",
+        hovertemplate=(
+            "<b>Proposed BH #%{customdata[0]}</b><br>"
+            "Center: (%{customdata[1]:,.0f}, %{customdata[2]:,.0f})<br>"
+            "Radius: %{customdata[3]:.1f}m<br>"
+            "<i>Shift+Click to remove</i><br>"
+            "<extra></extra>"
+        ),
     )
 
 

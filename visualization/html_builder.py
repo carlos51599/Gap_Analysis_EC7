@@ -61,6 +61,7 @@ from Gap_Analysis_EC7.visualization import (
     # Client scripts
     generate_coverage_data_script,
     generate_click_to_copy_script,
+    generate_circle_removal_script,
 )
 
 # ===========================================================================
@@ -3257,6 +3258,11 @@ def _assemble_final_html(
     click_to_copy_js = generate_click_to_copy_script()
     click_to_copy_script = f"<script>\n{click_to_copy_js}</script>"
     final_html = final_html.replace("</body>", f"{click_to_copy_script}</body>")
+
+    # Embed circle removal script (Shift+Click to remove borehole circles)
+    circle_removal_js = generate_circle_removal_script()
+    circle_removal_script = f"<script>\n{circle_removal_js}</script>"
+    final_html = final_html.replace("</body>", f"{circle_removal_script}</body>")
 
     return final_html
 
