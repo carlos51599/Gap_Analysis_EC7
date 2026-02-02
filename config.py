@@ -134,7 +134,7 @@ CONFIG: Dict[str, Any] = {
         "solver_overrides": {
             "solver_mode": "ilp",  # Force ILP for testing
             "time_limit_s": 90,  # Standard timeout
-            "mip_gap": 0.1,  # Standard tolerance
+            "mip_gap": 0.04,  # Standard tolerance
         },
     },
     # ═══════════════════════════════════════════════════════════════════════
@@ -632,7 +632,7 @@ CONFIG: Dict[str, Any] = {
         #   e.g., 0.2 × 3.0 × 200m = 120m grid spacing for 200m-spaced zones
         "tier2_test_point_protection": {
             "enabled": True,  # Enable Tier 2 test point constraints in ILP
-            "tier2_test_spacing_multiplier": 3.0,  # 3× sparser than Tier 1 test points
+            "tier2_test_spacing_multiplier": 2.0,  # 2× sparser than Tier 1 test points
         },
         # ═══════════════════════════════════════════════════════════════════
         # CZRC RESULT CACHING (Intra-run caching for ILP results)
@@ -931,6 +931,12 @@ CONFIG: Dict[str, Any] = {
             "buffer_color": "rgba(4, 0, 255, 0.173)",  # Blue (#0400FF) with 30% opacity
             "line_color": "rgba(0, 85, 255, 1)",  # Blue outline for buffer
             "line_width": 0.5,  # Buffer outline width in pixels
+        },
+        # Borehole circles styling (outline-only circles showing coverage radii)
+        # Separate layer from proposed_marker buffers - shows individual circles without fill
+        "borehole_circles": {
+            "line_color": "rgba(0, 100, 255, 0.7)",  # Blue outline matching proposed marker
+            "line_width": 2,  # Visible but not too thick
         },
         # Removed borehole marker styling (consolidation removed these)
         "removed_marker": {

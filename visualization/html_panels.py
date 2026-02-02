@@ -336,6 +336,14 @@ def generate_layers_panel_html(
         <span style="font-size: 11px;">Proposed Boreholes</span>
     </label>"""
         )
+        # Add borehole circles checkbox (unchecked by default - shows coverage radii outlines)
+        checkbox_items.append(
+            """
+    <label style="display: flex; align-items: center; cursor: pointer; margin: 5px 0; padding-left: 16px;">
+        <input type="checkbox" id="boreholeCirclesCheckbox" style="margin-right: 8px;">
+        <span style="font-size: 11px;">Borehole Circles</span>
+    </label>"""
+        )
 
     # Add candidate grid (hexagon overlay) checkbox - unchecked by default
     if has_hexgrid:

@@ -72,6 +72,7 @@ from Gap_Analysis_EC7.visualization.plotly_traces import (
     build_coverage_polygon_trace,
     build_coverage_marker_trace,
     build_coverage_buffer_trace,
+    build_borehole_circles_trace,
     # Layout builders
     build_map_layout,
     # Figure modifiers (add traces to fig)
@@ -171,6 +172,7 @@ __all__ = [
     "build_coverage_polygon_trace",
     "build_coverage_marker_trace",
     "build_coverage_buffer_trace",
+    "build_borehole_circles_trace",
     # Legacy names (backward compatibility)
     "build_merged_marker_trace",
     "build_merged_buffer_trace",

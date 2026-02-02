@@ -890,18 +890,34 @@ def _export_analysis_outputs(
     output_dir: Path,
     config: Dict,
     logger: logging.Logger,
+    total_time: float = 0.0,
 ) -> Dict[str, float]:
-    """Export CSV, GeoJSON (testing mode), and PNG outputs."""
+    """Export CSV, GeoJSON (testing mode), PNG outputs, and run stats summary."""
     from Gap_Analysis_EC7.exporters import (
         export_proposed_boreholes_to_csv,
         export_per_pass_boreholes_to_csv,
         export_coverage_polygons_to_geojson,
+        export_run_stats_summary,
     )
 
     timings = {}
 
     # Log solver summary (first pass + consolidation results)
     _log_solver_summary(precomputed_coverages, logger)
+
+    # Step 5.5c: Export run stats summary (overwrites each run)
+    logger.info("\nSTEP 5.5c: Exporting run statistics summary")
+    step_start = time.perf_counter()
+    _ = export_run_stats_summary(
+        precomputed_coverages=precomputed_coverages,
+        output_dir=output_dir,
+        total_time=total_time,
+        log=logger,
+    )
+    timings["5.5c_export_stats_summary"] = time.perf_counter() - step_start
+    logger.info(
+        f"   ⏱️ Step 5.5c completed in {timings['5.5c_export_stats_summary']:.2f}s"
+    )
 
     # Step 5.6: Export CSV (legacy single file per combo)
     logger.info("\nSTEP 5.6: Exporting proposed borehole coordinates to CSV")
@@ -1158,8 +1174,15 @@ def run_ec7_analysis() -> dict:
         timings.update(coverage_timings)
 
         # Phase 3: Export analysis outputs
+        # Calculate elapsed time so far for stats summary
+        elapsed_time = time.perf_counter() - total_start
         export_timings = _export_analysis_outputs(
-            precomputed_coverages, zones_gdf, output_dir, CONFIG, logger
+            precomputed_coverages,
+            zones_gdf,
+            output_dir,
+            CONFIG,
+            logger,
+            total_time=elapsed_time,
         )
         timings.update(export_timings)
 

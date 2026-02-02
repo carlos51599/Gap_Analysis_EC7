@@ -818,7 +818,8 @@ def build_coverage_marker_trace(
     Build a single merged marker trace for proposed boreholes.
 
     Args:
-        coordinates: List of {"x": float, "y": float} dicts
+        coordinates: List of {"x": float, "y": float, "source_pass"?: str} dicts
+            source_pass is optional - if provided, shown in tooltip
         name: Trace name for legend
         marker_color: RGBA marker color
         marker_size: Marker size in pixels
@@ -843,7 +844,10 @@ def build_coverage_marker_trace(
 
     x_coords = [c["x"] for c in coordinates]
     y_coords = [c["y"] for c in coordinates]
-    customdata = [[i + 1] for i in range(len(coordinates))]
+    # Include source_pass in customdata: [index, source_pass]
+    customdata = [
+        [i + 1, c.get("source_pass", "First Pass")] for i, c in enumerate(coordinates)
+    ]
 
     return go.Scattergl(
         x=x_coords,
@@ -860,12 +864,94 @@ def build_coverage_marker_trace(
             "<b>Proposed Borehole #%{customdata[0]}</b><br>"
             "Easting: %{x:,.0f}<br>"
             "Northing: %{y:,.0f}<br>"
+            "Source: %{customdata[1]}<br>"
             "<extra></extra>"
         ),
         name=name,
         legendgroup="proposed",
         showlegend=show_legend,
         visible=visible,
+    )
+
+
+def build_borehole_circles_trace(
+    coordinates: List[Dict[str, float]],
+    buffer_radius: float,
+    name: str,
+    line_color: str = "rgba(0, 100, 255, 0.7)",
+    line_width: int = 2,
+    visible: bool = False,
+    show_legend: bool = True,
+) -> go.Scattergl:
+    """
+    Build outline-only circles showing proposed borehole coverage radii.
+
+    Unlike build_coverage_buffer_trace(), this creates individual circles
+    without fill, showing only the outline of each borehole's coverage radius.
+    The circles are NOT merged, preserving individual borehole identity.
+
+    Args:
+        coordinates: List of {"x": float, "y": float, "coverage_radius"?: float}
+                     borehole locations. coverage_radius is optional per point.
+        buffer_radius: Default radius in meters (fallback if coverage_radius not set)
+        name: Trace name for legend
+        line_color: RGBA line color for circle outlines
+        line_width: Line width in pixels
+        visible: Initial visibility state
+        show_legend: Whether to show in legend
+
+    Returns:
+        go.Scattergl trace with all circle outlines (no fill)
+    """
+    if not coordinates or buffer_radius <= 0:
+        return go.Scattergl(
+            x=[],
+            y=[],
+            mode="lines",
+            line=dict(color=line_color, width=line_width),
+            name=name,
+            showlegend=show_legend,
+            visible=visible,
+            hoverinfo="skip",
+        )
+
+    # Build individual circle outlines using None separators
+    # This approach draws each circle separately without merging
+    all_x: List[Optional[float]] = []
+    all_y: List[Optional[float]] = []
+
+    # Number of points per circle for smooth appearance
+    num_points = 64
+
+    for coord in coordinates:
+        cx = coord["x"]
+        cy = coord["y"]
+        radius = coord.get("coverage_radius", buffer_radius)
+
+        # Generate circle points
+        angles = np.linspace(0, 2 * np.pi, num_points, endpoint=True)
+        circle_x = cx + radius * np.cos(angles)
+        circle_y = cy + radius * np.sin(angles)
+
+        # Add circle coordinates
+        all_x.extend(circle_x.tolist())
+        all_y.extend(circle_y.tolist())
+
+        # Add None separator for next circle
+        all_x.append(None)
+        all_y.append(None)
+
+    return go.Scattergl(
+        x=all_x,
+        y=all_y,
+        mode="lines",
+        line=dict(color=line_color, width=line_width),
+        fill=None,  # No fill - outline only
+        name=name,
+        legendgroup="borehole_circles",
+        showlegend=show_legend,
+        visible=visible,
+        hoverinfo="skip",
     )
 
 

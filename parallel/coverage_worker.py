@@ -442,6 +442,7 @@ def worker_process_filter_combination(
                 "x": bh["x"],
                 "y": bh["y"],
                 "coverage_radius": bh.get("coverage_radius", max_spacing),
+                "source_pass": "First Pass",  # Default before CZRC optimization
             }
             for bh in proposed
         ]
@@ -517,6 +518,18 @@ def worker_process_filter_combination(
                     logger=None,  # Silent in worker
                 )
 
+                # Add existing borehole coverage for Tier 2 test point filtering
+                # This ensures Tier 2 test points don't spawn in already-covered areas
+                if covered_union is not None and not covered_union.is_empty:
+                    czrc_data["covered_union_wkt"] = covered_union.wkt
+                    print(
+                        f"   🔷 coverage_worker: added covered_union_wkt (area={covered_union.area/10000:.1f} ha)"
+                    )
+                else:
+                    print(
+                        f"   🔷 coverage_worker: NO covered_union (None={covered_union is None}, empty={covered_union.is_empty if covered_union else 'N/A'})"
+                    )
+
                 # Add CZRC data to result for visualization
                 result["czrc_data"] = {
                     "total_region_wkt": czrc_data.get("total_region_wkt"),
@@ -524,6 +537,8 @@ def worker_process_filter_combination(
                     "pairwise_wkts": czrc_data.get("pairwise_wkts", {}),
                     "zone_spacings": czrc_data.get("zone_spacings", {}),
                     "stats": czrc_data.get("stats", {}),
+                    # Include existing coverage for Tier 2 test point filtering
+                    "covered_union_wkt": czrc_data.get("covered_union_wkt"),
                 }
 
                 # Log CZRC stats to console
@@ -537,6 +552,19 @@ def worker_process_filter_combination(
                 # 🔗 CZRC SECOND-PASS OPTIMIZATION (New approach replacing border_consolidation)
                 # ═══════════════════════════════════════════════════════════════════
                 czrc_opt_config = CONFIG.get("czrc_optimization", {})
+                
+                # Apply testing mode mip_gap override to CZRC config
+                testing_mode = CONFIG.get("testing_mode", {})
+                if testing_mode.get("enabled", False):
+                    solver_overrides = testing_mode.get("solver_overrides", {})
+                    if "mip_gap" in solver_overrides:
+                        # Deep copy to avoid modifying global CONFIG
+                        czrc_opt_config = dict(czrc_opt_config)
+                        czrc_ilp = dict(czrc_opt_config.get("ilp", {}))
+                        czrc_ilp["mip_gap"] = solver_overrides["mip_gap"]
+                        czrc_opt_config["ilp"] = czrc_ilp
+                        print(f"   🧪 CZRC: testing mode mip_gap override applied: {solver_overrides['mip_gap']}")
+                
                 if czrc_opt_config.get("enabled", False):
                     czrc_cache = None  # Initialize for cleanup handling
                     try:
@@ -654,7 +682,33 @@ def worker_process_filter_combination(
                             f"({len(czrc_removed)} removed, {len(czrc_added)} added)"
                         )
 
-                        # Update result with optimized boreholes
+                        # Build source_pass for each proposed borehole
+                        # Uses the same per-pass data already collected for CSV export
+                        first_pass_positions = {
+                            (bh["x"], bh["y"]) for bh in first_pass_bhs
+                        }
+                        # czrc_added = boreholes added in Second Pass (Zone-Zone CZRC)
+                        second_pass_added_positions = {
+                            (bh["x"], bh["y"]) for bh in czrc_added
+                        }
+                        # third_pass_added = boreholes added in Third Pass (Cell-Cell CZRC)
+                        third_pass_added_positions = {
+                            (bh["x"], bh["y"]) for bh in third_pass_added
+                        }
+
+                        def _get_source_pass(bh: Dict[str, Any]) -> str:
+                            """Determine which pass a borehole came from."""
+                            pos = (bh["x"], bh["y"])
+                            if pos in third_pass_added_positions:
+                                return "Third Pass"
+                            if pos in second_pass_added_positions:
+                                return "Second Pass"
+                            if pos in first_pass_positions:
+                                return "First Pass"
+                            # Fallback (shouldn't happen if data is consistent)
+                            return "First Pass"
+
+                        # Update result with optimized boreholes including source_pass
                         result["proposed"] = [
                             {
                                 "x": bh["x"],
@@ -662,6 +716,7 @@ def worker_process_filter_combination(
                                 "coverage_radius": bh.get(
                                     "coverage_radius", max_spacing
                                 ),
+                                "source_pass": _get_source_pass(bh),
                             }
                             for bh in proposed
                         ]

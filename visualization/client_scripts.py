@@ -503,6 +503,31 @@ def generate_layer_toggle_scripts(
         }});
     }}
     
+    // Borehole circles toggle (outline-only circles showing coverage radii)
+    const boreholeCirclesCheckbox = document.getElementById('boreholeCirclesCheckbox');
+    if (boreholeCirclesCheckbox) {{
+        boreholeCirclesCheckbox.addEventListener('change', function() {{
+            const plotDiv = document.querySelector('.plotly-graph-div');
+            if (!plotDiv) return;
+            
+            const traceIndices = [];
+            
+            if (typeof COVERAGE_TRACE_RANGES !== 'undefined' && typeof currentCoverageCombo !== 'undefined') {{
+                const ranges = COVERAGE_TRACE_RANGES[currentCoverageCombo];
+                if (ranges && ranges.borehole_circles) {{
+                    const [startIdx, endIdx] = ranges.borehole_circles;
+                    for (let i = startIdx; i < endIdx; i++) {{
+                        traceIndices.push(i);
+                    }}
+                }}
+            }}
+            
+            if (traceIndices.length > 0) {{
+                Plotly.restyle(plotDiv, {{'visible': this.checked}}, traceIndices);
+            }}
+        }});
+    }}
+    
     const candidateGridCheckbox = document.getElementById('candidateGridCheckbox');
     if (candidateGridCheckbox) {{
         candidateGridCheckbox.addEventListener('change', function() {{
@@ -658,6 +683,7 @@ def _js_coverage_switching() -> str:
         // Show new traces (respecting checkbox states)
         const showProposed = document.getElementById('proposedBoreholesCheckbox')?.checked ?? true;
         const showGrid = document.getElementById('candidateGridCheckbox')?.checked ?? false;
+        const showCircles = document.getElementById('boreholeCirclesCheckbox')?.checked ?? false;
         
         traceTypes.forEach(function(tt) {
             const r = newRanges[tt];
@@ -665,6 +691,7 @@ def _js_coverage_switching() -> str:
             let show = true;
             if (tt === 'proposed_buffers' || tt === 'proposed_markers') show = showProposed;
             else if (tt === 'hexagon_grid') show = showGrid;
+            else if (tt === 'borehole_circles') show = showCircles;
             for (let i = r[0]; i < r[1]; i++) {
                 const idx = traceIndices.indexOf(i);
                 if (idx >= 0) visibilities[idx] = show;

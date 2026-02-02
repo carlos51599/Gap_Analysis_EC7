@@ -143,6 +143,7 @@ from Gap_Analysis_EC7.visualization import (
     build_coverage_polygon_trace,
     build_coverage_marker_trace,
     build_coverage_buffer_trace,
+    build_borehole_circles_trace,
 )
 
 # Backward compatibility aliases (old names -> new names)
@@ -603,6 +604,26 @@ def _add_proposed_traces(
         )
     )
     ranges["proposed_markers"] = (start_idx, len(fig.data))
+
+    # Borehole circles trace (outline-only circles showing coverage radii)
+    # Get styling from CONFIG - separate from proposed_marker to allow independent toggle
+    circles_config = CONFIG.get("visualization", {}).get("borehole_circles", {})
+    circle_line_color = circles_config.get("line_color", "rgba(0, 100, 255, 0.7)")
+    circle_line_width = circles_config.get("line_width", 2)
+
+    start_idx = len(fig.data)
+    fig.add_trace(
+        build_borehole_circles_trace(
+            coordinates=proposed,
+            buffer_radius=max_spacing,
+            name=f"Borehole Circles ({combo_key})",
+            line_color=circle_line_color,
+            line_width=circle_line_width,
+            visible=False,  # Hidden by default - user toggles via Layers panel
+            show_legend=False,
+        )
+    )
+    ranges["borehole_circles"] = (start_idx, len(fig.data))
 
     return ranges
 

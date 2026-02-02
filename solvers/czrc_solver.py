@@ -309,6 +309,48 @@ def generate_tier2_ring_test_points(
     return test_points
 
 
+def filter_tier2_by_existing_coverage(
+    tier2_test_points: List[Dict[str, Any]],
+    covered_union: Optional[BaseGeometry],
+) -> List[Dict[str, Any]]:
+    """
+    Filter Tier 2 test points to exclude those inside existing borehole coverage.
+
+    This prevents Tier 2 test points from spawning in areas already covered by
+    the original project boreholes (green areas in visualization). These areas
+    don't need coverage from proposed boreholes, so test points there would
+    create unnecessary ILP constraints and misleading visualizations.
+
+    Args:
+        tier2_test_points: Test points generated in Tier 2 ring
+        covered_union: Shapely geometry of existing borehole coverage (from
+            compute_coverage_zones). None means no existing coverage.
+
+    Returns:
+        Filtered list of test points outside existing coverage.
+    """
+    original_count = len(tier2_test_points)
+
+    if covered_union is None or covered_union.is_empty:
+        print(
+            f"      🔶 filter_tier2_by_existing_coverage: NO COVERAGE - returning all {original_count} points"
+        )
+        return tier2_test_points
+
+    filtered = []
+    for tp in tier2_test_points:
+        pt = Point(tp["x"], tp["y"])
+        # Keep test point only if it's NOT inside existing coverage
+        if not covered_union.contains(pt):
+            filtered.append(tp)
+
+    removed_count = original_count - len(filtered)
+    print(
+        f"      🔶 filter_tier2_by_existing_coverage: {original_count} → {len(filtered)} (removed {removed_count} in coverage)"
+    )
+    return filtered
+
+
 def classify_first_pass_boreholes(
     first_pass_boreholes: List[Dict[str, Any]],
     tier1_region: BaseGeometry,
@@ -881,6 +923,22 @@ def solve_czrc_ilp_for_pair(
             base_test_spacing_mult=base_test_mult,
             clip_geometry=zones_clip_geometry,
         )
+
+        # Filter out Tier 2 test points that fall inside existing borehole coverage
+        # This prevents spawning test points in areas already covered (green areas)
+        existing_coverage = config.get("_existing_coverage")
+        print(
+            f"   🔷 [solve_czrc_ilp_for_pair] existing_coverage={existing_coverage is not None}, tier2 count={len(tier2_ring_test_points)}"
+        )
+        if existing_coverage is not None:
+            tier2_ring_test_points = filter_tier2_by_existing_coverage(
+                tier2_ring_test_points, existing_coverage
+            )
+        else:
+            print(
+                "   ⚠️ [solve_czrc_ilp_for_pair] NO _existing_coverage in config - Tier 2 NOT filtered!"
+            )
+
         tier2_ring_total = len(tier2_ring_test_points)
 
         if tier2_ring_test_points:
@@ -1268,6 +1326,9 @@ def check_and_split_large_cluster(
     unified_tier1 = cluster["unified_tier1"]
     cluster_area = unified_tier1.area
 
+    # Start timing for split cluster (non-split timing is in solve_czrc_ilp_for_cluster)
+    split_start_time = time.perf_counter()
+
     # Check if splitting needed
     if not enabled or cluster_area <= max_area:
         # Small enough for direct ILP
@@ -1464,6 +1525,12 @@ def check_and_split_large_cluster(
     if "ilp" not in cell_czrc_config:
         cell_czrc_config = dict(cell_czrc_config)  # Don't mutate original
         cell_czrc_config["ilp"] = config.get("ilp", {})
+    # Inherit _existing_coverage for Tier 2 test point filtering
+    # This was added to top-level config in run_czrc_optimization()
+    if "_existing_coverage" not in cell_czrc_config and "_existing_coverage" in config:
+        if not isinstance(cell_czrc_config, dict):
+            cell_czrc_config = dict(cell_czrc_config)
+        cell_czrc_config["_existing_coverage"] = config["_existing_coverage"]
     cell_czrc_enabled = cell_czrc_config.get("enabled", True)
     cell_czrc_stats: Dict[str, Any] = {"status": "disabled"}
 
@@ -1518,7 +1585,11 @@ def check_and_split_large_cluster(
             cell_czrc_stats["third_pass_added"] = cell_czrc_added
     # === END THIRD PASS ===
 
+    split_elapsed = time.perf_counter() - split_start_time
+
     cluster_key = "+".join(sorted(cluster["pair_keys"]))
+    cluster_area_ha = cluster_area / 10000.0  # m² to hectares
+    cluster_max_spacing = cluster.get("overall_r_max", 100.0)  # Default fallback
     return (
         all_selected,
         deduped_removed,
@@ -1528,10 +1599,17 @@ def check_and_split_large_cluster(
             "cluster_key": cluster_key,
             "was_split": True,
             "original_area_m2": cluster_area,
+            "area_ha": cluster_area_ha,  # Tier1 area in hectares for stats reporting
+            "max_spacing_m": cluster_max_spacing,  # Max zone spacing for this cluster
             "cell_count": len(cells),
             "cell_wkts": cell_wkts,  # For visualization
             "cell_stats": cell_stats,
             "selected_count": len(all_selected),
+            "boreholes_removed": len(
+                deduped_removed
+            ),  # For per-cluster stats reporting
+            "boreholes_added": len(deduped_added),  # For per-cluster stats reporting
+            "solve_time": split_elapsed,  # Total time for this split cluster (all cells + third pass)
             "cell_czrc_stats": cell_czrc_stats,  # Third pass stats
             # Aggregated from all cells for visualization (grey markers in Second Pass Grid)
             "first_pass_candidates": all_first_pass_candidates,
@@ -1736,6 +1814,21 @@ def solve_cell_cell_czrc(
             clip_geometry=zones_clip_geometry,
         )
 
+        # Filter out Tier 2 test points that fall inside existing borehole coverage
+        # This prevents spawning test points in areas already covered (green areas)
+        existing_coverage = config.get("_existing_coverage")
+        print(
+            f"   🔷 [solve_cell_cell_czrc] existing_coverage={existing_coverage is not None}, tier2 count={len(tier2_ring_test_points)}"
+        )
+        if existing_coverage is not None:
+            tier2_ring_test_points = filter_tier2_by_existing_coverage(
+                tier2_ring_test_points, existing_coverage
+            )
+        else:
+            print(
+                "   ⚠️ [solve_cell_cell_czrc] NO _existing_coverage in config - Tier 2 NOT filtered!"
+            )
+
     # Step 3: Classify boreholes with external coverage detection
     # Use second_pass_candidates (all Second Pass output) for external coverage detection
     # This captures boreholes from OTHER cells that can cover this cell-pair's test points
@@ -1838,7 +1931,9 @@ def solve_cell_cell_czrc(
             "tier1_unsatisfied": len(tier1_unsatisfied) if tier1_unsatisfied else 0,
             "tier2_ring_test_points": len(tier2_ring_test_points),
             "precovered": precovered_ct,
-            "external_coverage_bhs": len(external),  # NEW: Track external coverage sources
+            "external_coverage_bhs": len(
+                external
+            ),  # NEW: Track external coverage sources
             "candidates": len(candidates),
             "bh_candidates": len(bh_candidates),
             "locked": len(locked),
@@ -2179,6 +2274,22 @@ def solve_czrc_ilp_for_cluster(
             base_test_spacing_mult=base_test_mult,
             clip_geometry=zones_clip_geometry,
         )
+
+        # Filter out Tier 2 test points that fall inside existing borehole coverage
+        # This prevents spawning test points in areas already covered (green areas)
+        existing_coverage = config.get("_existing_coverage")
+        print(
+            f"   🔷 [solve_czrc_ilp_for_cluster] existing_coverage={existing_coverage is not None}, tier2 count={len(tier2_ring_test_points)}"
+        )
+        if existing_coverage is not None:
+            tier2_ring_test_points = filter_tier2_by_existing_coverage(
+                tier2_ring_test_points, existing_coverage
+            )
+        else:
+            print(
+                "   ⚠️ [solve_czrc_ilp_for_cluster] NO _existing_coverage in config - Tier 2 NOT filtered!"
+            )
+
         if tier2_ring_test_points:
             tier2_ring_unsatisfied, _ = _compute_unsatisfied_test_points(
                 tier2_ring_test_points, locked, logger, external_boreholes=external
@@ -2292,6 +2403,7 @@ def solve_czrc_ilp_for_cluster(
     elapsed = time.perf_counter() - start_time
 
     cluster_key = "+".join(sorted(pair_keys))
+    cluster_area_ha = unified_tier1.area / 10000.0  # m² to hectares
     stats = {
         "status": "success",
         "cluster_key": cluster_key,
@@ -2299,6 +2411,8 @@ def solve_czrc_ilp_for_cluster(
         "is_unified_cluster": len(pair_keys) > 1,
         "overall_r_max": overall_r_max,
         "r_max": overall_r_max,  # For tier geometry export
+        "area_ha": cluster_area_ha,  # Tier1 area in hectares for stats reporting
+        "max_spacing_m": overall_r_max,  # Max zone spacing for this cluster
         "tier1_wkt": unified_tier1.wkt,  # For tier geometry export
         "tier2_wkt": unified_tier2.wkt,  # For tier geometry export
         "tier1_test_points": len(tier1_test_points),
@@ -2308,6 +2422,8 @@ def solve_czrc_ilp_for_cluster(
         "unsatisfied_count": len(unsatisfied),
         "candidates_count": len(candidates),
         "selected_count": len(selected),
+        "boreholes_removed": len(removed),  # For per-cluster stats reporting
+        "boreholes_added": len(added),  # For per-cluster stats reporting
         "solve_time": elapsed,
         "ilp_stats": ilp_stats,
         "first_pass_candidates": bh_candidates,
@@ -2395,6 +2511,27 @@ def run_czrc_optimization(
         elif coverage_clouds_wkt:
             cloud_geoms = [wkt.loads(w) for w in coverage_clouds_wkt.values()]
             zones_clip_geometry = unary_union(cloud_geoms)
+
+    # Parse existing borehole coverage for Tier 2 test point filtering
+    # This prevents Tier 2 test points from spawning in already-covered areas (green)
+    covered_union_wkt = czrc_data.get("covered_union_wkt")
+    existing_coverage: Optional[BaseGeometry] = None
+    if covered_union_wkt:
+        try:
+            existing_coverage = wkt.loads(covered_union_wkt)
+            print(
+                f"   🔷 Tier 2 filter: parsed existing coverage (area={existing_coverage.area/10000:.1f} ha)"
+            )
+        except Exception as e:
+            print(f"   ⚠️ Tier 2 filter: failed to parse covered_union_wkt: {e}")
+    else:
+        print(
+            "   🔷 Tier 2 filter: no covered_union_wkt in czrc_data (Tier 2 points won't be filtered by existing coverage)"
+        )
+
+    # Store in config for access in downstream functions
+    config = dict(config)  # Shallow copy to avoid mutating original
+    config["_existing_coverage"] = existing_coverage
 
     # Group overlapping pairs into clusters for unified grid generation
     tier1_mult = config.get("tier1_rmax_multiplier", 1.0)
@@ -2556,16 +2693,38 @@ def run_czrc_optimization(
     # Replace the aggregated second pass with the computed one
     all_second_pass_boreholes = computed_second_pass
 
+    # ═══════════════════════════════════════════════════════════════════════════
+    # FIX: Handle multi-cluster overlap case
+    # ═══════════════════════════════════════════════════════════════════════════
+    # When a borehole spans multiple clusters, it can be:
+    #   - Selected by Cluster A's ILP → in boreholes_to_add
+    #   - Not selected by Cluster B's ILP → in all_removed
+    # BUG: Same borehole in BOTH lists. The removed borehole gets re-added via
+    # boreholes_to_add, causing it to appear in Proposed Boreholes (blue markers)
+    # even though it should be removed (red markers in Second Pass are correct).
+    #
+    # CORRECT FIX: Filter boreholes_to_add to exclude any that were removed.
+    # If ANY cluster removes a borehole, it should NOT be re-added.
+    # The red markers (all_removed) are correct - don't touch them.
+    removed_positions_for_filter = {(bh["x"], bh["y"]) for bh in all_removed}
+    filtered_to_add = [
+        bh
+        for bh in boreholes_to_add
+        if (bh["x"], bh["y"]) not in removed_positions_for_filter
+    ]
+
+    # Report conflict resolution
+    conflicting_count = len(boreholes_to_add) - len(filtered_to_add)
+    if conflicting_count > 0:
+        print(
+            f"   🔧 Multi-cluster overlap: {conflicting_count} boreholes removed by one cluster, "
+            f"selected by another → removing (removed wins over re-add)"
+        )
+    boreholes_to_add = filtered_to_add
+
     # Assemble result: first-pass + new boreholes (deduplicated), minus removed
     # Build set of removed positions for efficient filtering
     removed_positions = {(bh["x"], bh["y"]) for bh in all_removed}
-
-    # DEBUG: Log for diagnostic
-    log = logger or _logger
-    log.info(
-        f"🔍 CZRC Final Assembly: first_pass={len(first_pass_boreholes)}, "
-        f"all_removed={len(all_removed)}, boreholes_to_add={len(boreholes_to_add)}"
-    )
 
     # Start with first-pass boreholes, excluding those marked for removal
     optimized = [
@@ -2573,45 +2732,11 @@ def run_czrc_optimization(
     ]
     existing_pos = {(bh["x"], bh["y"]) for bh in optimized}
 
-    # DEBUG: Check if any removed BH is in first-pass survivors
-    first_pass_survivors_pos = {(bh["x"], bh["y"]) for bh in optimized}
-    overlap_with_removed = first_pass_survivors_pos & removed_positions
-    if overlap_with_removed:
-        log.warning(
-            f"⚠️ BUG: {len(overlap_with_removed)} removed BHs survived first-pass filter!"
-        )
-
     # Add new boreholes (deduplicated)
-    # CRITICAL BUG FIX: boreholes_to_add contains ALL selected boreholes,
-    # including first-pass BHs that were RE-selected by ILP. These should
-    # NOT be added if they were also marked as REMOVED.
-    # A BH can be in both "selected" and "removed" if:
-    # 1. It was in Tier 1 for one cluster (so it's a candidate there)
-    # 2. It was NOT selected by that cluster's ILP → marked as removed
-    # 3. It was in Tier 2 for another cluster (locked, always selected)
-    # Result: Same BH is in both removed and boreholes_to_add
     for bh in boreholes_to_add:
-        pos = (bh["x"], bh["y"])
-        # CRITICAL: Also check if this borehole is in removed_positions
-        if pos not in existing_pos and pos not in removed_positions:
+        if (bh["x"], bh["y"]) not in existing_pos:
             optimized.append(bh)
-            existing_pos.add(pos)
-        elif pos in removed_positions:
-            log.debug(
-                f"   Skipping removed BH at ({pos[0]:.2f}, {pos[1]:.2f}) from boreholes_to_add"
-            )
-
-    # Final verification: check for overlap between optimized and removed
-    optimized_positions = {(bh["x"], bh["y"]) for bh in optimized}
-    final_overlap = optimized_positions & removed_positions
-    if final_overlap:
-        log.error(
-            f"❌ BUG: {len(final_overlap)} removed BHs still in optimized after assembly!"
-        )
-        for pos in list(final_overlap)[:5]:
-            log.error(f"   - ({pos[0]:.4f}, {pos[1]:.4f})")
-    else:
-        log.info(f"✅ CZRC Final: optimized={len(optimized)}, no removed BHs in output")
+            existing_pos.add((bh["x"], bh["y"]))
 
     elapsed = time.perf_counter() - start_time
 

@@ -1495,7 +1495,317 @@ def check_point_in_tier_geometries(
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 📦 MODULE EXPORTS
+# � RUN STATS SUMMARY EXPORT
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def export_run_stats_summary(
+    precomputed_coverages: Dict[str, Dict[str, Any]],
+    output_dir: Path,
+    total_time: float,
+    log: logging.Logger = None,
+) -> str:
+    """
+    Export run statistics summary to a Markdown file that overwrites on each run.
+
+    Creates a human-readable summary of First Pass, Second Pass, and Third Pass
+    optimization results including timing, borehole counts, gap percentages,
+    and termination reasons.
+
+    The file is written to Output/run_stats_summary.md and is overwritten
+    with each run to always contain the latest results.
+
+    Args:
+        precomputed_coverages: Dict mapping combo_key -> coverage result dict.
+        output_dir: Base output directory.
+        total_time: Total run time in seconds.
+        log: Logger instance (optional).
+
+    Returns:
+        Path to the created summary file.
+    """
+    if log is None:
+        log = logger
+
+    summary_path = output_dir / "run_stats_summary.md"
+    lines: List[str] = []
+
+    # Header
+    from datetime import datetime
+
+    lines.append("# EC7 Gap Analysis - Run Statistics Summary")
+    lines.append("")
+    lines.append(f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append("")
+
+    # Process each filter combination
+    for combo_key, coverage_data in precomputed_coverages.items():
+        if not isinstance(coverage_data, dict):
+            continue
+
+        lines.append("---")
+        lines.append("")
+        lines.append(f"## Filter: `{combo_key}`")
+        lines.append("")
+        lines.append(f"*{_format_combo_key_human_readable(combo_key)}*")
+        lines.append("")
+
+        opt_stats = coverage_data.get("optimization_stats", {})
+        proposed = coverage_data.get("proposed", [])
+
+        # =====================================================================
+        # FIRST PASS: Zone Decomposition
+        # =====================================================================
+        lines.append("### First Pass: Zone Decomposition (ILP per Zone)")
+        lines.append("")
+
+        first_pass_boreholes = coverage_data.get("first_pass_boreholes", [])
+        lines.append(f"- **Total Boreholes:** {len(first_pass_boreholes)}")
+
+        zone_stats = opt_stats.get("zones", {})
+        if zone_stats:
+            lines.append(f"- **Zones Processed:** {len(zone_stats)}")
+            lines.append("")
+            lines.append("| Zone | BH | Gap% | Time | Termination | Area (ha) | Spacing |")
+            lines.append("|------|----|------|------|-------------|-----------|---------|")
+
+            for zone_name, zone_info in zone_stats.items():
+                z_stats = zone_info.get("stats", {}) if isinstance(zone_info, dict) else {}
+                z_boreholes = zone_info.get("boreholes", 0) if isinstance(zone_info, dict) else 0
+                z_area = zone_info.get("area_ha", 0) if isinstance(zone_info, dict) else 0
+                z_max_spacing = zone_info.get("max_spacing_m", "N/A") if isinstance(zone_info, dict) else "N/A"
+
+                # Extract stall detection info
+                stall_det = z_stats.get("stall_detection", {})
+                final_gap = stall_det.get("final_gap_pct", None) if stall_det else None
+                term_reason = stall_det.get("termination_reason", None) if stall_det else None
+                solve_time = z_stats.get("total_time", 0)
+
+                gap_str = f"{final_gap:.1f}%" if final_gap is not None else "0%"
+                term_str = term_reason if term_reason else "Optimal"
+                lines.append(f"| {zone_name} | {z_boreholes} | {gap_str} | {solve_time:.2f}s | {term_str} | {z_area:.1f} | {z_max_spacing}m |")
+        else:
+            lines.append("- No zone-level statistics available")
+        lines.append("")
+
+        # =====================================================================
+        # SECOND PASS: CZRC (Cross-Zone Redundancy Check)
+        # =====================================================================
+        lines.append("### Second Pass: CZRC (Zone-Zone Boundary Consolidation)")
+        lines.append("")
+
+        second_pass_boreholes = coverage_data.get("second_pass_boreholes", [])
+        czrc_stats = opt_stats.get("czrc_optimization", {})
+        consol_stats = opt_stats.get("consolidation", {})
+
+        # Prefer CZRC stats if available
+        if czrc_stats:
+            original_count = czrc_stats.get("original_count", len(first_pass_boreholes))
+            final_count = czrc_stats.get("final_count", len(second_pass_boreholes))
+            # CZRC uses 'boreholes_removed' and 'boreholes_added' as keys
+            removed_count = czrc_stats.get("boreholes_removed", 0)
+            added_count = czrc_stats.get("boreholes_added", 0)
+            net_change = czrc_stats.get("net_change", final_count - original_count)
+            solve_time = czrc_stats.get("solve_time", 0)
+            status = czrc_stats.get("status", "unknown")
+            clusters_processed = czrc_stats.get("clusters_processed", 0)
+            unified_clusters = czrc_stats.get("unified_clusters", 0)
+
+            lines.append(f"- **Status:** {status}")
+            lines.append(f"- **Input Boreholes:** {original_count}")
+            lines.append(f"- **Output Boreholes:** {final_count}")
+            lines.append(f"- **Removed:** {removed_count}")
+            lines.append(f"- **Added:** {added_count}")
+            lines.append(f"- **Net Change:** {net_change:+d}")
+            lines.append(f"- **Solve Time:** {solve_time:.2f}s")
+            if clusters_processed > 0:
+                lines.append(f"- **Clusters Processed:** {clusters_processed} ({unified_clusters} unified)")
+
+            # CZRC stall detection
+            czrc_stall = czrc_stats.get("stall_detection", {})
+            if czrc_stall:
+                czrc_gap = czrc_stall.get("final_gap_pct")
+                czrc_term = czrc_stall.get("termination_reason")
+                if czrc_gap is not None:
+                    lines.append(f"- **Final MIP Gap:** {czrc_gap:.2f}%")
+                if czrc_term:
+                    lines.append(f"- **Termination:** {czrc_term}")
+
+            # Per-cluster stats if available
+            cluster_stats = czrc_stats.get("cluster_stats", {})
+            if cluster_stats:
+                lines.append("")
+                lines.append("**Cluster Details:**")
+                lines.append("")
+                lines.append("| Cluster | BH | Gap% | Time | Termination | Area (ha) | Spacing | Delta |")
+                lines.append("|---------|-----|------|------|-------------|-----------|---------|-------|")
+                for cluster_key, cluster_info in cluster_stats.items():
+                    if isinstance(cluster_info, dict):
+                        c_selected = cluster_info.get("selected_count", 0)
+                        c_removed = cluster_info.get("boreholes_removed", 0)
+                        c_added = cluster_info.get("boreholes_added", 0)
+                        c_time = cluster_info.get("solve_time", 0)
+                        c_area = cluster_info.get("area_ha", 0)
+                        c_spacing = cluster_info.get("max_spacing_m", 0)
+                        # Calculate delta (net change from input)
+                        c_delta = c_added - c_removed
+                        # Extract gap and termination from ilp_stats
+                        ilp_stats = cluster_info.get("ilp_stats", {})
+                        stall_det = ilp_stats.get("stall_detection", {})
+                        c_gap = stall_det.get("final_gap_pct")
+                        c_term = stall_det.get("termination_reason")
+                        # Format gap (None = Optimal = 0%)
+                        gap_str = f"{c_gap:.1f}%" if c_gap is not None else "0%"
+                        # Format termination (None = Optimal)
+                        term_str = c_term if c_term else "Optimal"
+                        # Truncate long cluster keys for readability
+                        display_key = cluster_key if len(cluster_key) < 25 else cluster_key[:22] + "..."
+                        was_split = cluster_info.get("was_split", False)
+                        if was_split:
+                            display_key = f"[SPLIT] {display_key}"
+                        lines.append(f"| `{display_key}` | {c_selected} | {gap_str} | {c_time:.2f}s | {term_str} | {c_area:.1f} | {c_spacing:.0f}m | {c_delta:+d} |")
+            lines.append("")
+        elif consol_stats:
+            # Legacy consolidation stats
+            original_count = consol_stats.get("original_count", len(first_pass_boreholes))
+            final_count = consol_stats.get("final_count", len(second_pass_boreholes))
+            removed_count = consol_stats.get("removed_count", 0)
+            solve_time = consol_stats.get("solve_time", 0)
+
+            lines.append("*Using Legacy Border Consolidation*")
+            lines.append("")
+            lines.append(f"- **Input Boreholes:** {original_count}")
+            lines.append(f"- **Output Boreholes:** {final_count}")
+            lines.append(f"- **Removed:** {removed_count}")
+            lines.append(f"- **Solve Time:** {solve_time:.2f}s")
+            lines.append("")
+        else:
+            lines.append("- **Status:** DISABLED or Not Run")
+            lines.append(f"- **Boreholes:** {len(second_pass_boreholes)}")
+            lines.append("")
+
+        # =====================================================================
+        # THIRD PASS: Cell-Cell CZRC
+        # =====================================================================
+        lines.append("### Third Pass: Cell-Cell Boundary Consolidation")
+        lines.append("")
+
+        # Third pass stats are inside split cluster's cell_czrc_stats
+        # Aggregate from all split clusters
+        third_pass_removed_total = 0
+        third_pass_added_total = 0
+        all_cell_pairs: Dict[str, Any] = {}
+        has_third_pass = False
+        
+        cluster_stats = czrc_stats.get("cluster_stats", {}) if czrc_stats else {}
+        for cluster_key, cluster_info in cluster_stats.items():
+            if isinstance(cluster_info, dict) and cluster_info.get("was_split", False):
+                cell_czrc = cluster_info.get("cell_czrc_stats", {})
+                if cell_czrc.get("status") == "success":
+                    has_third_pass = True
+                    # Count removed/added from third pass
+                    tp_removed = cell_czrc.get("third_pass_removed", [])
+                    tp_added = cell_czrc.get("third_pass_added", [])
+                    third_pass_removed_total += len(tp_removed) if isinstance(tp_removed, list) else 0
+                    third_pass_added_total += len(tp_added) if isinstance(tp_added, list) else 0
+                    # Collect cell pairs
+                    cell_pairs = cell_czrc.get("cell_pairs", {})
+                    for cpair_name, cpair_info in cell_pairs.items():
+                        all_cell_pairs[f"{cluster_key[:15]}:{cpair_name}"] = cpair_info
+
+        if has_third_pass:
+            lines.append(f"- **Status:** success")
+            lines.append(f"- **Removed:** {third_pass_removed_total}")
+            lines.append(f"- **Added:** {third_pass_added_total}")
+            lines.append(f"- **Net Change:** {third_pass_added_total - third_pass_removed_total:+d}")
+
+            if all_cell_pairs:
+                lines.append("")
+                lines.append("**Cell Pair Details:**")
+                lines.append("")
+                lines.append("| Cell Pair | BH | Gap% | Time | Termination | Delta |")
+                lines.append("|-----------|-----|------|------|-------------|-------|")
+                for cpair_name, cpair_info in all_cell_pairs.items():
+                    if isinstance(cpair_info, dict):
+                        cp_selected = cpair_info.get("selected_count", 0)
+                        cp_removed = cpair_info.get("removed_count", 0)
+                        cp_added = cpair_info.get("added_count", 0)
+                        cp_time = cpair_info.get("solve_time", 0)
+                        cp_delta = cp_added - cp_removed
+                        # Extract gap and termination from ilp_stats
+                        cp_ilp = cpair_info.get("ilp_stats", {})
+                        cp_stall = cp_ilp.get("stall_detection", {})
+                        cp_gap = cp_stall.get("final_gap_pct")
+                        cp_term = cp_stall.get("termination_reason")
+                        gap_str = f"{cp_gap:.1f}%" if cp_gap is not None else "0%"
+                        term_str = cp_term if cp_term else "Optimal"
+                        # Truncate long names
+                        display_name = cpair_name if len(cpair_name) < 30 else cpair_name[:27] + "..."
+                        lines.append(f"| `{display_name}` | {cp_selected} | {gap_str} | {cp_time:.2f}s | {term_str} | {cp_delta:+d} |")
+            lines.append("")
+        else:
+            lines.append("- **Status:** DISABLED or Not Applicable")
+            lines.append("")
+
+        # =====================================================================
+        # FINAL SUMMARY
+        # =====================================================================
+        lines.append("### Final Result")
+        lines.append("")
+        lines.append(f"- **Final Proposed Boreholes:** {len(proposed)}")
+
+        # Calculate totals from passes
+        p1_count = len(first_pass_boreholes)
+        p2_count = len(second_pass_boreholes)
+        p3_count = len(proposed)
+
+        if p1_count > 0:
+            second_pass_change = p2_count - p1_count
+            third_pass_change = p3_count - p2_count
+            total_change = p3_count - p1_count
+
+            lines.append(f"- **First Pass:** {p1_count} boreholes")
+            lines.append(f"- **Second Pass:** {p2_count} boreholes ({second_pass_change:+d})")
+            lines.append(f"- **Third Pass:** {p3_count} boreholes ({third_pass_change:+d})")
+            lines.append(f"- **Total Reduction:** {-total_change if total_change < 0 else 0} boreholes")
+
+            if total_change < 0:
+                pct_reduction = abs(total_change) / p1_count * 100
+                lines.append(f"- **Consolidation Efficiency:** {pct_reduction:.1f}%")
+
+        # Coverage stats
+        stats_dict = coverage_data.get("stats", {})
+        if stats_dict:
+            gap_area = stats_dict.get("gap_area_ha", 0)
+            covered_area = stats_dict.get("covered_area_ha", 0)
+            gap_count = stats_dict.get("gap_count", 0)
+            total_area = gap_area + covered_area
+            if total_area > 0:
+                gap_pct = gap_area / total_area * 100
+                lines.append(f"- **Gap Percentage:** {gap_pct:.1f}% ({gap_area:.1f} ha / {total_area:.1f} ha)")
+            lines.append(f"- **Number of Gaps:** {gap_count}")
+
+        lines.append("")
+
+    # Overall timing
+    lines.append("---")
+    lines.append("")
+    lines.append("## Overall Timing")
+    lines.append("")
+    lines.append(f"**Total Run Time:** {total_time:.2f}s ({total_time/60:.1f} minutes)")
+    lines.append("")
+
+    # Write to file (overwrite mode)
+    with open(summary_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+
+    log.info(f"   📊 Run stats summary exported to: {summary_path}")
+
+    return str(summary_path)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# �📦 MODULE EXPORTS
 # ═══════════════════════════════════════════════════════════════════════════
 
 __all__ = [
@@ -1510,6 +1820,8 @@ __all__ = [
     # Tier geometry export (diagnostic)
     "export_tier_geometries_to_geojson",
     "check_point_in_tier_geometries",
+    # Run stats summary
+    "export_run_stats_summary",
     # Main entry point
     "export_all_coverage_outputs",
 ]
