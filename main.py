@@ -1014,7 +1014,9 @@ def _generate_zone_coverage_viz(
             proposed = combo_data.get("proposed", [])
             if proposed:
                 proposed_boreholes = proposed
-                logger.info(f"   📍 Using {len(proposed)} proposed boreholes from {combo_key}")
+                logger.info(
+                    f"   📍 Using {len(proposed)} proposed boreholes from {combo_key}"
+                )
                 break
 
     if not proposed_boreholes:
