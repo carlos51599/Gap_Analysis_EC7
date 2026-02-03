@@ -53,6 +53,7 @@ from Gap_Analysis_EC7.shapefile_config import (
 from Gap_Analysis_EC7.zone_preprocessor import preprocess_zones
 from Gap_Analysis_EC7.visualization.html_builder import generate_multi_layer_html
 from Gap_Analysis_EC7.coverage_zones import compute_coverage_zones, get_coverage_summary
+from Gap_Analysis_EC7.zone_coverage_viz import generate_zone_coverage_html
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 🎯 MODULE-LEVEL CONFIG (Single Source of Truth)
@@ -979,6 +980,69 @@ def _export_analysis_outputs(
     return timings
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# 🗺️ ZONE COVERAGE INTERACTIVE VISUALIZATION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _generate_zone_coverage_viz(
+    precomputed_coverages: Dict,
+    zones_gdf: gpd.GeoDataFrame,
+    output_dir: Path,
+    logger: logging.Logger,
+) -> Optional[str]:
+    """
+    Generate interactive zone coverage visualization with proposed boreholes.
+
+    Extracts proposed boreholes from ILP optimization results and creates
+    a deck.gl-based HTML visualization where the boreholes can be dragged
+    and their coverage radius changes based on which zone they're in.
+
+    Args:
+        precomputed_coverages: Dict with optimization results containing "proposed" list
+        zones_gdf: GeoDataFrame with zone polygons and max_spacing_m
+        output_dir: Directory for output HTML
+        logger: Logger instance
+
+    Returns:
+        Path to generated HTML file, or None if no proposed boreholes
+    """
+    # Extract proposed boreholes from first combo (typically only one)
+    proposed_boreholes = []
+    for combo_key, combo_data in precomputed_coverages.items():
+        if isinstance(combo_data, dict):
+            proposed = combo_data.get("proposed", [])
+            if proposed:
+                proposed_boreholes = proposed
+                logger.info(f"   📍 Using {len(proposed)} proposed boreholes from {combo_key}")
+                break
+
+    if not proposed_boreholes:
+        logger.warning("   ⚠️ No proposed boreholes found - skipping zone coverage viz")
+        return None
+
+    # Convert proposed boreholes to GeoDataFrame (BNG CRS)
+    from shapely.geometry import Point
+
+    proposed_points = [
+        {"geometry": Point(bh["x"], bh["y"]), "id": f"PROP_{i+1:03d}"}
+        for i, bh in enumerate(proposed_boreholes)
+    ]
+    proposed_gdf = gpd.GeoDataFrame(proposed_points, crs="EPSG:27700")
+
+    # Generate the visualization
+    output_path = str(output_dir / "zone_coverage.html")
+    result_path = generate_zone_coverage_html(
+        zones_gdf=zones_gdf,
+        boreholes_gdf=proposed_gdf,
+        output_path=output_path,
+        id_field="id",
+    )
+
+    logger.info(f"   📄 Zone coverage viz: {result_path}")
+    return result_path
+
+
 def _generate_html_and_summary(
     boreholes_gdf: gpd.GeoDataFrame,
     zones_gdf: gpd.GeoDataFrame,
@@ -1096,6 +1160,27 @@ def _generate_html_and_summary(
     total_time = timings["total"]
     logger.info(f"\nTOTAL: {total_time:.2f}s")
     logger.info("=" * 60 + "\n✅ Analysis complete!")
+
+    # =========================================================================
+    # STEP 7: ZONE COVERAGE INTERACTIVE VISUALIZATION
+    # =========================================================================
+    # Generate deck.gl-based interactive visualization with proposed boreholes
+    # as movable circles. Radius changes based on zone when dragged.
+    logger.info("\nSTEP 7: Generating Zone Coverage Interactive Visualization")
+    step_start = time.perf_counter()
+
+    try:
+        _generate_zone_coverage_viz(
+            precomputed_coverages=precomputed_coverages,
+            zones_gdf=zones_gdf,
+            output_dir=output_dir,
+            logger=logger,
+        )
+        timings["7_zone_coverage_viz"] = time.perf_counter() - step_start
+        logger.info(f"   ⏱️ Step 7 completed in {timings['7_zone_coverage_viz']:.2f}s")
+    except Exception as e:
+        logger.warning(f"   ⚠️ Zone coverage visualization failed: {e}")
+        timings["7_zone_coverage_viz"] = time.perf_counter() - step_start
 
     return {
         "coverage_summary": coverage_summary,

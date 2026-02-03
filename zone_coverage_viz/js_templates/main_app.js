@@ -3,9 +3,9 @@
  * 
  * Main deck.gl application for interactive borehole coverage visualization.
  * Features:
- * - Draggable borehole markers
- * - Real-time zone-aware coverage updates
- * - Multi-zone "flower petal" coverage shapes
+ * - Draggable coverage circles (filled areas)
+ * - LIVE smooth radius changes when crossing zone boundaries
+ * - Zone-aware radius lookup using Turf.js point-in-polygon
  * - Export modified positions
  */
 
@@ -19,19 +19,18 @@
     const state = {
         deck: null,
         map: null,
-        worker: null,
-        workerReady: false,
         
         // Data
         zones: null,
         boreholes: null,
         positions: [],  // Mutable positions array [lon, lat]
         originalPositions: [],  // Original positions for reset
-        coverage: {},  // borehole_id -> geometry
+        radii: [],  // Current radius per borehole (in METERS)
         
         // Drag state
         dragging: false,
         dragIndex: null,
+        dragOffset: null,  // Offset from click point to center
         
         // Config
         config: {
@@ -42,16 +41,10 @@
                 lineColor: [100, 100, 100, 255],
                 lineWidth: 2
             },
-            boreholeStyle: {
-                radiusPixels: 8,
-                fillColor: [65, 105, 225, 255],
-                lineColor: [255, 255, 255, 255],
-                lineWidth: 2
-            },
             coverageStyle: {
                 fillColor: [100, 149, 237, 120],
-                lineColor: [70, 130, 180, 200],
-                lineWidth: 1
+                lineColor: [70, 130, 180, 255],
+                lineWidth: 2
             }
         }
     };
@@ -69,8 +62,8 @@
         // Load embedded data
         loadEmbeddedData();
         
-        // Initialize Web Worker
-        initWorker();
+        // Compute initial radii based on zone positions
+        computeAllRadii();
         
         // Initialize deck.gl
         initDeck();
@@ -99,12 +92,9 @@
         if (typeof POSITION_DATA !== 'undefined') {
             state.positions = JSON.parse(JSON.stringify(POSITION_DATA));
             state.originalPositions = JSON.parse(JSON.stringify(POSITION_DATA));
+            // Initialize radii array (will be computed in computeAllRadii)
+            state.radii = new Array(state.positions.length).fill(state.config.defaultMaxSpacing);
             console.log(`📍 Loaded ${state.positions.length} positions`);
-        }
-        
-        if (typeof COVERAGE_DATA !== 'undefined') {
-            state.coverage = COVERAGE_DATA;
-            console.log(`📐 Loaded ${Object.keys(state.coverage).length} coverage geometries`);
         }
         
         if (typeof VIZ_CONFIG !== 'undefined') {
@@ -113,75 +103,43 @@
     }
     
     /**
-     * Initialize the Web Worker for geometry computation
+     * Compute radii for all boreholes based on their current zone
      */
-    function initWorker() {
-        if (typeof WORKER_CODE === 'undefined') {
-            console.warn('⚠️ Worker code not embedded, coverage updates will be disabled');
-            return;
-        }
+    function computeAllRadii() {
+        if (!state.zones || !state.positions.length) return;
         
-        try {
-            // Create worker from embedded code
-            const blob = new Blob([WORKER_CODE], { type: 'application/javascript' });
-            const workerUrl = URL.createObjectURL(blob);
-            state.worker = new Worker(workerUrl);
-            
-            state.worker.onmessage = handleWorkerMessage;
-            state.worker.onerror = (e) => {
-                console.error('Worker error:', e);
-            };
-            
-            // Initialize worker with Turf.js and zones
-            if (typeof TURF_CODE !== 'undefined') {
-                state.worker.postMessage({
-                    type: 'INIT',
-                    id: 'init',
-                    payload: {
-                        turfCode: TURF_CODE,
-                        zones: state.zones
-                    }
-                });
-            }
-            
-            console.log('🔧 Web Worker initialized');
-        } catch (e) {
-            console.error('Failed to initialize worker:', e);
+        for (let i = 0; i < state.positions.length; i++) {
+            state.radii[i] = getRadiusForPosition(state.positions[i]);
         }
+        console.log('📐 Computed initial radii for all boreholes');
     }
     
     /**
-     * Handle messages from the Web Worker
+     * Get the radius (max_spacing) for a position based on which zone it's in
+     * Uses Turf.js point-in-polygon for zone detection
      */
-    function handleWorkerMessage(e) {
-        const { type, id, payload } = e.data;
-        
-        switch (type) {
-            case 'INIT_COMPLETE':
-                state.workerReady = true;
-                console.log('✅ Worker ready');
-                break;
-                
-            case 'COVERAGE_RESULT':
-                // Update coverage for single borehole
-                if (payload && state.dragIndex !== null) {
-                    const bhId = getBhIdByIndex(state.dragIndex);
-                    if (bhId) {
-                        state.coverage[bhId] = payload;
-                        updateLayers();
-                    }
-                }
-                break;
-                
-            case 'ALL_COVERAGE_RESULT':
-                state.coverage = payload;
-                updateLayers();
-                break;
-                
-            case 'ERROR':
-                console.error('Worker error:', payload.message);
-                break;
+    function getRadiusForPosition(position) {
+        if (!state.zones || !state.zones.features || typeof turf === 'undefined') {
+            return state.config.defaultMaxSpacing;
         }
+        
+        const [lon, lat] = position;
+        const point = turf.point([lon, lat]);
+        
+        // Find which zone contains this point
+        for (const zone of state.zones.features) {
+            try {
+                if (turf.booleanPointInPolygon(point, zone)) {
+                    const maxSpacing = zone.properties.max_spacing_m || state.config.defaultMaxSpacing;
+                    return maxSpacing;
+                }
+            } catch (e) {
+                // Skip invalid geometries
+            }
+        }
+        
+        // Not in any zone - use default
+        return state.config.defaultMaxSpacing;
     }
     
     /**
@@ -230,7 +188,7 @@
     }
     
     // =========================================================================
-    // LAYER BUILDING
+    // LAYER BUILDING - Using ScatterplotLayer for smooth radius transitions
     // =========================================================================
     
     /**
@@ -244,11 +202,11 @@
             layers.push(buildZoneLayer());
         }
         
-        // Coverage polygons (middle)
+        // Coverage circles (draggable) - using ScatterplotLayer with METERS
         layers.push(buildCoverageLayer());
         
-        // Borehole markers (top)
-        layers.push(buildBoreholeLayer());
+        // Small center dots for visual reference
+        layers.push(buildCenterDotsLayer());
         
         return layers;
     }
@@ -271,55 +229,60 @@
     }
     
     /**
-     * Build coverage polygon layer from coverage geometries
+     * Build coverage circles as ScatterplotLayer with METER-based radius
+     * This allows smooth, live radius changes when crossing zones
      */
     function buildCoverageLayer() {
-        // Convert coverage dict to GeoJSON FeatureCollection
-        const features = Object.entries(state.coverage).map(([bhId, geometry]) => ({
-            type: 'Feature',
-            id: bhId,
-            properties: { borehole_id: bhId },
-            geometry: geometry
+        // Build data array with current positions and radii
+        const data = state.positions.map((pos, i) => ({
+            position: pos,
+            radius: state.radii[i],
+            index: i,
+            id: getBhIdByIndex(i)
         }));
         
-        const data = {
-            type: 'FeatureCollection',
-            features: features
-        };
-        
-        return new deck.GeoJsonLayer({
+        return new deck.ScatterplotLayer({
             id: 'coverage',
             data: data,
-            stroked: true,
-            filled: true,
-            pickable: false,
+            pickable: true,  // DRAGGABLE
+            radiusUnits: 'meters',  // KEY: Use meters for geographic radius
+            radiusScale: 1,
+            getPosition: d => d.position,
+            getRadius: d => d.radius,  // Dynamic radius per circle
             getFillColor: state.config.coverageStyle.fillColor,
             getLineColor: state.config.coverageStyle.lineColor,
             getLineWidth: state.config.coverageStyle.lineWidth,
-            lineWidthUnits: 'pixels'
+            lineWidthUnits: 'pixels',
+            stroked: true,
+            // Smooth transitions
+            transitions: {
+                getRadius: {
+                    duration: 150,  // 150ms smooth transition
+                    easing: t => t * (2 - t)  // Ease out
+                }
+            },
+            // Highlight on hover
+            autoHighlight: true,
+            highlightColor: [100, 149, 237, 180]
         });
     }
     
     /**
-     * Build borehole scatter layer
+     * Build small center dots for visual reference (not pickable)
      */
-    function buildBoreholeLayer() {
+    function buildCenterDotsLayer() {
         return new deck.ScatterplotLayer({
-            id: 'boreholes',
+            id: 'center-dots',
             data: state.positions.map((pos, i) => ({
                 position: pos,
-                index: i,
-                id: getBhIdByIndex(i)
+                index: i
             })),
-            pickable: true,
+            pickable: false,  // NOT pickable
             radiusUnits: 'pixels',
             getPosition: d => d.position,
-            getRadius: state.config.boreholeStyle.radiusPixels,
-            getFillColor: state.config.boreholeStyle.fillColor,
-            getLineColor: state.config.boreholeStyle.lineColor,
-            getLineWidth: state.config.boreholeStyle.lineWidth,
-            lineWidthUnits: 'pixels',
-            stroked: true
+            getRadius: 4,
+            getFillColor: [0, 0, 0, 200],
+            stroked: false
         });
     }
     
@@ -333,42 +296,55 @@
     }
     
     // =========================================================================
-    // DRAG HANDLING
+    // DRAG HANDLING - Coverage circles are draggable
     // =========================================================================
     
     /**
-     * Handle drag start on borehole
+     * Handle drag start on coverage circle
      */
     function handleDragStart(info, event) {
         if (!state.config.enableDrag) return;
         
-        // Check if we're starting on a borehole
-        if (info.layer && info.layer.id === 'boreholes' && info.object) {
-            state.dragging = true;
-            state.dragIndex = info.object.index;
-            
-            // Disable map pan
-            state.deck.setProps({
-                controller: { dragPan: false }
-            });
-            
-            return true;
+        // Check if we're starting on a coverage circle
+        if (info.layer && info.layer.id === 'coverage' && info.object) {
+            const index = info.object.index;
+            if (index !== undefined && index >= 0) {
+                state.dragging = true;
+                state.dragIndex = index;
+                
+                // Store the drag offset (distance from click to center)
+                const centerPos = state.positions[index];
+                state.dragOffset = [
+                    info.coordinate[0] - centerPos[0],
+                    info.coordinate[1] - centerPos[1]
+                ];
+                
+                // Disable map pan
+                state.deck.setProps({
+                    controller: { dragPan: false }
+                });
+                
+                return true;
+            }
         }
         return false;
     }
     
     /**
-     * Handle drag movement
+     * Handle drag movement - LIVE radius updates
      */
     function handleDrag(info, event) {
         if (!state.dragging || state.dragIndex === null) return;
         
-        // Update position
-        const [lng, lat] = info.coordinate;
-        state.positions[state.dragIndex] = [lng, lat];
+        // Calculate new center position accounting for drag offset
+        const newLng = info.coordinate[0] - (state.dragOffset?.[0] || 0);
+        const newLat = info.coordinate[1] - (state.dragOffset?.[1] || 0);
         
-        // Request coverage update (throttled)
-        requestCoverageUpdate(state.dragIndex, [lng, lat]);
+        // Update position
+        state.positions[state.dragIndex] = [newLng, newLat];
+        
+        // LIVE: Update radius based on current zone - this is INSTANT
+        state.radii[state.dragIndex] = getRadiusForPosition([newLng, newLat]);
         
         // Update layers immediately for smooth visual feedback
         updateLayers();
@@ -380,14 +356,15 @@
     function handleDragEnd(info, event) {
         if (!state.dragging) return;
         
-        // Final coverage update
+        // Final position/radius update
         if (state.dragIndex !== null) {
             const pos = state.positions[state.dragIndex];
-            requestCoverageUpdate(state.dragIndex, pos, true);
+            state.radii[state.dragIndex] = getRadiusForPosition(pos);
         }
         
         state.dragging = false;
         state.dragIndex = null;
+        state.dragOffset = null;
         
         // Re-enable map pan
         state.deck.setProps({
@@ -396,44 +373,9 @@
         
         // Update modified count
         updateModifiedCount();
-    }
-    
-    // Throttle for coverage updates during drag
-    let coverageUpdateTimeout = null;
-    
-    /**
-     * Request coverage update from worker (throttled during drag)
-     */
-    function requestCoverageUpdate(index, position, immediate = false) {
-        if (!state.worker || !state.workerReady) return;
         
-        const doUpdate = () => {
-            state.worker.postMessage({
-                type: 'COMPUTE_COVERAGE',
-                id: `coverage_${index}`,
-                payload: {
-                    position: position,
-                    zones: state.zones,
-                    defaultMaxSpacing: state.config.defaultMaxSpacing
-                }
-            });
-        };
-        
-        if (immediate) {
-            if (coverageUpdateTimeout) {
-                clearTimeout(coverageUpdateTimeout);
-                coverageUpdateTimeout = null;
-            }
-            doUpdate();
-        } else {
-            // Throttle to 60fps (16ms)
-            if (!coverageUpdateTimeout) {
-                coverageUpdateTimeout = setTimeout(() => {
-                    coverageUpdateTimeout = null;
-                    doUpdate();
-                }, 16);
-            }
-        }
+        // Final layer update
+        updateLayers();
     }
     
     // =========================================================================
@@ -459,7 +401,7 @@
         // Recalculate button
         const recalcBtn = document.getElementById('recalc-btn');
         if (recalcBtn) {
-            recalcBtn.addEventListener('click', recalculateAllCoverage);
+            recalcBtn.addEventListener('click', recalculateAllRadii);
         }
     }
     
@@ -468,37 +410,19 @@
      */
     function resetPositions() {
         state.positions = JSON.parse(JSON.stringify(state.originalPositions));
-        recalculateAllCoverage();
+        computeAllRadii();  // Recalculate radii for original positions
         updateModifiedCount();
+        updateLayers();
         console.log('🔄 Positions reset to original');
     }
     
     /**
-     * Recalculate coverage for all boreholes
+     * Recalculate radii for all boreholes based on current zones
      */
-    function recalculateAllCoverage() {
-        if (!state.worker || !state.workerReady) {
-            console.warn('Worker not ready');
-            return;
-        }
-        
-        // Build borehole list with current positions
-        const boreholes = state.positions.map((pos, i) => ({
-            id: getBhIdByIndex(i),
-            position: pos
-        }));
-        
-        state.worker.postMessage({
-            type: 'COMPUTE_ALL',
-            id: 'compute_all',
-            payload: {
-                boreholes: boreholes,
-                zones: state.zones,
-                defaultMaxSpacing: state.config.defaultMaxSpacing
-            }
-        });
-        
-        console.log('📐 Recalculating all coverage...');
+    function recalculateAllRadii() {
+        computeAllRadii();
+        updateLayers();
+        console.log('📐 Recalculated all radii');
     }
     
     /**
@@ -570,9 +494,10 @@
     // Expose for debugging
     window.ZoneCoverage = {
         state,
-        recalculateAllCoverage,
+        recalculateAllRadii,
         resetPositions,
-        exportPositions
+        exportPositions,
+        getRadiusForPosition
     };
     
 })();

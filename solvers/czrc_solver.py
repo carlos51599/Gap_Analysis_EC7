@@ -76,7 +76,7 @@ def _sanitize_log_name(name: str, max_zones: int = 5) -> Tuple[str, Optional[str
     Replaces problematic characters with underscores, abbreviates zone names
     to first 2 letters, and truncates if needed. Zone names are joined with
     their numbers (em2), underscores only between different zones/cells (em2_hi1).
-    
+
     For clusters with more than max_zones zones, returns a simplified name
     like "8zones" and the full abbreviated name for logging in the file header.
 
@@ -104,7 +104,7 @@ def _sanitize_log_name(name: str, max_zones: int = 5) -> Tuple[str, Optional[str
     while i < len(parts):
         part = parts[i]
         part_lower = part.lower()
-        
+
         # First check: Is this "Cell" followed by a number? → convert to c#
         if part_lower == "cell" and i + 1 < len(parts) and parts[i + 1].isdigit():
             zone_tokens.append(f"c{parts[i + 1]}")
@@ -131,15 +131,15 @@ def _sanitize_log_name(name: str, max_zones: int = 5) -> Tuple[str, Optional[str
             zone_tokens.append(part[:2].lower())
             zone_count += 1
             i += 1
-    
+
     # Full abbreviated name
     full_name = "_".join(zone_tokens)
-    
+
     # If too many zones, use simplified count-based name
     if zone_count > max_zones:
         short_name = f"{zone_count}zones"
         return short_name, full_name
-    
+
     return full_name if full_name else "unnamed", None
 
 
@@ -2151,10 +2151,10 @@ def run_cell_czrc_pass(
                     highs_log_folder,
                     f"third_c{cluster_idx + 1:02d}_c{cell_i}_c{cell_j}.log",
                 )
-        
+
         # Write cluster composition header to log file if using simplified name
         if highs_log_file and cluster_header:
-            with open(highs_log_file, 'w') as f:
+            with open(highs_log_file, "w") as f:
                 f.write(f"# Cluster composition: {cluster_header}\n")
                 f.write(f"# Original cluster_key: {cluster_key}\n\n")
 
@@ -2453,10 +2453,10 @@ def solve_czrc_ilp_for_cluster(
                 highs_log_folder,
                 f"second_{safe_cluster_name}_c{cell_idx + 1:02d}.log",
             )
-        
+
         # Write cluster composition header to log file if using simplified name
         if cluster_header:
-            with open(highs_log_file, 'w') as f:
+            with open(highs_log_file, "w") as f:
                 f.write(f"# Cluster composition: {cluster_header}\n")
                 f.write(f"# Original cluster_key: {cluster_key}\n\n")
 

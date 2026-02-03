@@ -230,6 +230,131 @@ def generate_coverage_stats_panel_html(
 
 
 # ===========================================================================
+# CIRCLE EDITING PANEL
+# ===========================================================================
+
+
+def generate_circle_editing_panel_html(
+    panel_width: int = DEFAULT_RIGHT_PANEL_WIDTH,
+    vertical_gap: int = DEFAULT_PANEL_VERTICAL_GAP,
+) -> str:
+    """
+    Generate HTML for circle editing controls panel.
+
+    Provides:
+    - Drag mode toggle button
+    - Real-time coordinate display during drag
+    - Export buttons (JSON and CSV)
+    - Reset button to restore original positions
+    - Statistics (total circles, moved count)
+
+    Args:
+        panel_width: Panel width in pixels
+        vertical_gap: Vertical gap from previous panel
+
+    Returns:
+        HTML string for circle editing panel
+    """
+    return f"""
+<div id="circleEditingPanel" style="
+    {LIQUID_GLASS_STYLE}
+    {PANEL_STYLE_ITEM}
+    width: {panel_width}px;
+    margin-top: {vertical_gap}px;
+">
+    <div style="{PANEL_STYLE_HEADER} margin-bottom: 8px;">
+        Circle Editing
+    </div>
+
+    <!-- Drag Mode Toggle -->
+    <button id="toggleDragMode" style="
+        width: 100%;
+        padding: 8px 12px;
+        background: #28a745;
+        color: white;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 11px;
+        font-weight: 500;
+        transition: background 0.2s;
+    ">
+        Enable Drag Mode
+    </button>
+    <div id="dragModeIndicator" style="
+        display: none;
+        color: #28a745;
+        font-weight: bold;
+        text-align: center;
+        margin-top: 6px;
+        font-size: 10px;
+    ">
+        DRAG MODE ACTIVE
+    </div>
+
+    <!-- Real-time Coordinates -->
+    <div id="dragCoords" style="display: none; margin-top: 10px; padding: 8px; background: rgba(0,0,0,0.05); border-radius: 6px;">
+        <div style="font-size: 10px; color: #666; margin-bottom: 4px;">Dragging circle:</div>
+        <div style="font-size: 11px;">X: <span id="dragX" style="font-weight: bold;">-</span></div>
+        <div style="font-size: 11px;">Y: <span id="dragY" style="font-weight: bold;">-</span></div>
+    </div>
+
+    <!-- Status Messages -->
+    <div id="circleEditStatus" style="margin-top: 10px; font-size: 10px; color: #666;">
+        Click "Enable Drag Mode" to reposition circles
+    </div>
+
+    <!-- Export Section -->
+    <div style="margin-top: 12px; padding-top: 8px; border-top: 1px solid #ddd;">
+        <div style="font-weight: 500; margin-bottom: 6px; font-size: 11px;">Export Coordinates</div>
+        <div style="display: flex; gap: 6px;">
+            <button id="exportCoordsJSON" style="
+                flex: 1;
+                padding: 6px 8px;
+                background: #007bff;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 10px;
+            ">JSON</button>
+            <button id="exportCoordsCSV" style="
+                flex: 1;
+                padding: 6px 8px;
+                background: #6c757d;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 10px;
+            ">CSV</button>
+        </div>
+    </div>
+
+    <!-- Reset Section -->
+    <div style="margin-top: 8px;">
+        <button id="resetAllCircles" style="
+            width: 100%;
+            padding: 6px 8px;
+            background: #dc3545;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 10px;
+        ">Reset All Positions</button>
+    </div>
+
+    <!-- Statistics -->
+    <div id="circleStats" style="margin-top: 10px; font-size: 10px; color: #666; text-align: center;">
+        <span id="totalCircles">0</span> circles |
+        <span id="movedCircles">0</span> moved
+    </div>
+</div>
+"""
+
+
+# ===========================================================================
 # LAYERS PANEL
 # ===========================================================================
 

@@ -96,7 +96,7 @@ SHAPEFILE_CONFIG: Dict[str, Any] = {
             "layer_order": 9,  # Drawn just below embankment
             "use_for_coverage": True,  # Used for coverage analysis
             "name_column": None,  # No per-zone breakdown - single max_spacing for whole shapefile
-            "max_spacing_m": 100.0,  # Single spacing for all features
+            "max_spacing_m": 200.0,  # Single spacing for all features
             "order": 1,  # Priority for overlap resolution (lower = higher priority, used when spacing equal)
             "rendering": {
                 "boundary_color": "#0066CC",  # Blue

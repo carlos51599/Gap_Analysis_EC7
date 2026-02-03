@@ -890,6 +890,9 @@ def build_borehole_circles_trace(
     without fill, showing only the outline of each borehole's coverage radius.
     The circles are NOT merged, preserving individual borehole identity.
 
+    Each circle has customdata storing [borehole_id, center_x, center_y, radius]
+    for each point. This enables interactive features like drag-to-move.
+
     Args:
         coordinates: List of {"x": float, "y": float, "coverage_radius"?: float}
                      borehole locations. coverage_radius is optional per point.
@@ -903,6 +906,9 @@ def build_borehole_circles_trace(
     Returns:
         go.Scattergl trace with all circle outlines (no fill)
     """
+    # Number of points per circle for smooth appearance
+    NUM_CIRCLE_POINTS = 64
+
     if not coordinates or buffer_radius <= 0:
         return go.Scattergl(
             x=[],
@@ -919,17 +925,15 @@ def build_borehole_circles_trace(
     # This approach draws each circle separately without merging
     all_x: List[Optional[float]] = []
     all_y: List[Optional[float]] = []
+    all_customdata: List[Optional[List[Any]]] = []
 
-    # Number of points per circle for smooth appearance
-    num_points = 64
-
-    for coord in coordinates:
+    for i, coord in enumerate(coordinates):
         cx = coord["x"]
         cy = coord["y"]
         radius = coord.get("coverage_radius", buffer_radius)
 
-        # Generate circle points
-        angles = np.linspace(0, 2 * np.pi, num_points, endpoint=True)
+        # Generate circle points (64 points + endpoint back to start = 65 points)
+        angles = np.linspace(0, 2 * np.pi, NUM_CIRCLE_POINTS + 1, endpoint=True)
         circle_x = cx + radius * np.cos(angles)
         circle_y = cy + radius * np.sin(angles)
 
@@ -937,9 +941,15 @@ def build_borehole_circles_trace(
         all_x.extend(circle_x.tolist())
         all_y.extend(circle_y.tolist())
 
+        # Store customdata for each point: [borehole_id, center_x, center_y, radius]
+        # This enables interactive features like identifying which circle was clicked
+        circle_customdata = [i, cx, cy, radius]
+        all_customdata.extend([circle_customdata] * (NUM_CIRCLE_POINTS + 1))
+
         # Add None separator for next circle
         all_x.append(None)
         all_y.append(None)
+        all_customdata.append(None)
 
     return go.Scattergl(
         x=all_x,
@@ -951,6 +961,7 @@ def build_borehole_circles_trace(
         legendgroup="borehole_circles",
         showlegend=show_legend,
         visible=visible,
+        customdata=all_customdata,
         hoverinfo="skip",
     )
 

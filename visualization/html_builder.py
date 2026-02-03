@@ -52,6 +52,7 @@ from Gap_Analysis_EC7.visualization import (
     _generate_layers_panel_html,
     _generate_legend_panel_html,
     _generate_coverage_stats_panel_html,
+    generate_circle_editing_panel_html,
     # Trace builders
     _add_grid_cells_trace,
     _add_boreholes_trace,
@@ -61,6 +62,8 @@ from Gap_Analysis_EC7.visualization import (
     # Client scripts
     generate_coverage_data_script,
     generate_click_to_copy_script,
+    generate_circle_data_script,
+    generate_circle_drag_script,
 )
 
 # ===========================================================================
@@ -2777,7 +2780,17 @@ def _generate_sidebar_panels(
     if logger:
         logger.info("   Added external legend panel")
 
-    return layers_panel_html + filters_panel_html, legend_panel_html + stats_panels_html
+    # Circle editing panel (shown if there are proposed boreholes)
+    circle_editing_panel_html = ""
+    if has_proposed or (precomputed_coverages and coverage_trace_ranges):
+        circle_editing_panel_html = generate_circle_editing_panel_html()
+        if logger:
+            logger.info("   Added circle editing panel")
+
+    return (
+        layers_panel_html + filters_panel_html,
+        legend_panel_html + stats_panels_html + circle_editing_panel_html,
+    )
 
 
 def _generate_stats_panel_from_precomputed(
@@ -3257,6 +3270,53 @@ def _assemble_final_html(
     click_to_copy_js = generate_click_to_copy_script()
     click_to_copy_script = f"<script>\n{click_to_copy_js}</script>"
     final_html = final_html.replace("</body>", f"{click_to_copy_script}</body>")
+
+    # Embed circle data and drag scripts (for interactive circle movement)
+    final_html = _embed_circle_scripts(
+        final_html, precomputed_coverages, max_spacing, logger
+    )
+
+    return final_html
+
+
+def _embed_circle_scripts(
+    html: str,
+    precomputed_coverages: Optional[Dict[str, Dict[str, Any]]],
+    max_spacing: float,
+    logger: Optional[logging.Logger] = None,
+) -> str:
+    """
+    Embed circle data and drag scripts for interactive circle movement.
+
+    Extracts proposed borehole coordinates from the default filter combination
+    and generates JavaScript to enable drag-and-drop repositioning.
+    """
+    if not precomputed_coverages:
+        return html
+
+    # Get default combo key and extract proposed boreholes
+    default_key = _get_default_combo_key(precomputed_coverages)
+    default_combo = precomputed_coverages.get(default_key, {})
+    proposed = default_combo.get("proposed", [])
+
+    if not proposed:
+        return html
+
+    # Generate circle data script
+    circle_data_js = generate_circle_data_script(proposed, max_spacing)
+    circle_data_script = f"<script>\n{circle_data_js}</script>"
+
+    # Generate circle drag script
+    circle_drag_js = generate_circle_drag_script()
+    circle_drag_script = f"<script>\n{circle_drag_js}</script>"
+
+    # Embed scripts before </body>
+    final_html = html.replace(
+        "</body>", f"{circle_data_script}{circle_drag_script}</body>"
+    )
+
+    if logger:
+        logger.info(f"   🔄 Embedded circle editing scripts ({len(proposed)} circles)")
 
     return final_html
 

@@ -113,6 +113,7 @@ from Gap_Analysis_EC7.visualization.html_panels import (
     generate_filters_panel_html,
     generate_panel_styles_css,
     generate_slider_styles_css,
+    generate_circle_editing_panel_html,
     # Backward compatibility aliases
     _generate_legend_panel_html,
     _generate_coverage_stats_panel_html,
@@ -133,6 +134,9 @@ from Gap_Analysis_EC7.visualization.client_scripts import (
     generate_coverage_data_script,
     # Click-to-copy tooltip
     generate_click_to_copy_script,
+    # Circle editing scripts
+    generate_circle_data_script,
+    generate_circle_drag_script,
 )
 
 # ===========================================================================
@@ -204,4 +208,8 @@ __all__ = [
     "generate_coverage_data_script",
     "generate_click_to_copy_script",
     "generate_slider_styles_css",
+    # Circle editing scripts
+    "generate_circle_data_script",
+    "generate_circle_drag_script",
+    "generate_circle_editing_panel_html",
 ]

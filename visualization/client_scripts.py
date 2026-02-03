@@ -112,9 +112,7 @@ def generate_layer_toggle_scripts(
                 }
             }
             
-            if (traceIndices.length > 0) {
-                Plotly.restyle(plotDiv, {'visible': this.checked}, traceIndices);
-            }
+            setTraceVisibility(plotDiv, traceIndices, this.checked);
         });
     }
 """
@@ -151,9 +149,7 @@ def generate_layer_toggle_scripts(
                 }
             }
             
-            if (traceIndices.length > 0) {
-                Plotly.restyle(plotDiv, {'visible': this.checked}, traceIndices);
-            }
+            setTraceVisibility(plotDiv, traceIndices, this.checked);
         });
     }
 """
@@ -188,9 +184,7 @@ def generate_layer_toggle_scripts(
                 }
             }
             
-            if (traceIndices.length > 0) {
-                Plotly.restyle(plotDiv, {'visible': this.checked}, traceIndices);
-            }
+            setTraceVisibility(plotDiv, traceIndices, this.checked);
         });
     }
 """
@@ -232,9 +226,7 @@ def generate_layer_toggle_scripts(
                 }
             }
             
-            if (traceIndices.length > 0) {
-                Plotly.restyle(plotDiv, {'visible': this.checked}, traceIndices);
-            }
+            setTraceVisibility(plotDiv, traceIndices, this.checked);
         });
     }
 
@@ -258,9 +250,7 @@ def generate_layer_toggle_scripts(
                 }
             }
             
-            if (traceIndices.length > 0) {
-                Plotly.restyle(plotDiv, {'visible': this.checked}, traceIndices);
-            }
+            setTraceVisibility(plotDiv, traceIndices, this.checked);
         });
     }
 """
@@ -303,9 +293,7 @@ def generate_layer_toggle_scripts(
                 }
             }
             
-            if (traceIndices.length > 0) {
-                Plotly.restyle(plotDiv, {'visible': this.checked}, traceIndices);
-            }
+            setTraceVisibility(plotDiv, traceIndices, this.checked);
         });
     }
 """
@@ -343,9 +331,7 @@ def generate_layer_toggle_scripts(
                 }
             }
             
-            if (traceIndices.length > 0) {
-                Plotly.restyle(plotDiv, {'visible': this.checked}, traceIndices);
-            }
+            setTraceVisibility(plotDiv, traceIndices, this.checked);
         });
     }
 """
@@ -374,9 +360,7 @@ def generate_layer_toggle_scripts(
                 }
             }
             
-            if (traceIndices.length > 0) {
-                Plotly.restyle(plotDiv, {'visible': this.checked}, traceIndices);
-            }
+            setTraceVisibility(plotDiv, traceIndices, this.checked);
         });
     }
 """
@@ -405,9 +389,7 @@ def generate_layer_toggle_scripts(
                 }
             }
             
-            if (traceIndices.length > 0) {
-                Plotly.restyle(plotDiv, {'visible': this.checked}, traceIndices);
-            }
+            setTraceVisibility(plotDiv, traceIndices, this.checked);
         });
     }
 """
@@ -427,6 +409,32 @@ def generate_layer_toggle_scripts(
     
     // === VISIBILITY UPDATE FUNCTIONS ===
     
+    // Helper to toggle trace visibility AND hoverinfo together
+    // When hidden, hoverinfo is set to 'skip' so tooltips don't show
+    function setTraceVisibility(plotDiv, traceIndices, isVisible) {{
+        if (!plotDiv || traceIndices.length === 0) return;
+        
+        // Get current hoverinfo for each trace to restore when showing
+        const hoverInfoUpdates = traceIndices.map(idx => {{
+            const trace = plotDiv.data[idx];
+            if (isVisible) {{
+                // Restore original hoverinfo (use 'all' if not stored)
+                return trace._originalHoverinfo || trace.hoverinfo || 'all';
+            }} else {{
+                // Store original hoverinfo if not already stored
+                if (!trace._originalHoverinfo && trace.hoverinfo !== 'skip') {{
+                    trace._originalHoverinfo = trace.hoverinfo || 'all';
+                }}
+                return 'skip';
+            }}
+        }});
+        
+        Plotly.restyle(plotDiv, {{
+            'visible': isVisible,
+            'hoverinfo': hoverInfoUpdates
+        }}, traceIndices);
+    }}
+    
     function updateBgsLayerVisibility(layerName) {{
         const plotDiv = document.querySelector('.plotly-graph-div');
         if (!plotDiv || !bgsLayers[layerName]) return;
@@ -439,7 +447,7 @@ def generate_layer_toggle_scripts(
         }}
         
         const visibility = bgsLayerStates[layerName];
-        Plotly.restyle(plotDiv, {{'visible': visibility}}, traceIndices);
+        setTraceVisibility(plotDiv, traceIndices, visibility);
     }}
     
     // === CHECKBOX EVENT LISTENERS ===
@@ -497,9 +505,7 @@ def generate_layer_toggle_scripts(
                 }}
             }}
             
-            if (traceIndices.length > 0) {{
-                Plotly.restyle(plotDiv, {{'visible': this.checked}}, traceIndices);
-            }}
+            setTraceVisibility(plotDiv, traceIndices, this.checked);
         }});
     }}
     
@@ -522,9 +528,7 @@ def generate_layer_toggle_scripts(
                 }}
             }}
             
-            if (traceIndices.length > 0) {{
-                Plotly.restyle(plotDiv, {{'visible': this.checked}}, traceIndices);
-            }}
+            setTraceVisibility(plotDiv, traceIndices, this.checked);
         }});
     }}
     
@@ -551,9 +555,7 @@ def generate_layer_toggle_scripts(
                 }}
             }}
             
-            if (traceIndices.length > 0) {{
-                Plotly.restyle(plotDiv, {{'visible': this.checked}}, traceIndices);
-            }}
+            setTraceVisibility(plotDiv, traceIndices, this.checked);
         }});
     }}
 {second_pass_script}
@@ -568,7 +570,441 @@ def generate_layer_toggle_scripts(
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 🔍 FILTER PANEL SCRIPTS
+# � CIRCLE EDITING SCRIPTS (INTERACTIVE DRAG/EXPORT)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def generate_circle_data_script(
+    circle_coordinates: List[Dict[str, float]],
+    buffer_radius: float,
+) -> str:
+    """
+    Generate JavaScript for circle master data initialization.
+
+    Creates a global `masterBoreholeData` array containing all circle
+    centre coordinates and radii, enabling drag operations and exports.
+
+    Args:
+        circle_coordinates: List of {"x": float, "y": float, "coverage_radius"?: float}
+        buffer_radius: Default radius for circles without explicit coverage_radius
+
+    Returns:
+        JavaScript code block as string (without <script> tags)
+    """
+    # Build the master data array
+    master_data = []
+    for i, coord in enumerate(circle_coordinates):
+        cx = coord["x"]
+        cy = coord["y"]
+        radius = coord.get("coverage_radius", buffer_radius)
+        master_data.append({
+            "id": i,
+            "x": cx,
+            "y": cy,
+            "radius": radius,
+            "originalX": cx,
+            "originalY": cy,
+            "moved": False,
+        })
+
+    master_data_json = json.dumps(master_data, indent=2)
+
+    return f"""// Master data for proposed borehole circles (interactive editing)
+const masterBoreholeData = {master_data_json};
+const CIRCLE_POINTS = 64;  // Points per circle for regeneration
+"""
+
+
+def generate_circle_drag_script() -> str:
+    """
+    Generate JavaScript for circle drag-and-drop functionality.
+
+    Implements:
+    - Drag mode state management
+    - Mouse event handling (click to select, move to drag, click to drop)
+    - Real-time circle regeneration during drag
+    - Coordinate conversion (pixel <-> data coordinates)
+    - Performance throttling for smooth drag
+    - Export to JSON/CSV
+    - Reset to original positions
+
+    Returns:
+        JavaScript code block as string (without <script> tags)
+    """
+    return """
+(function() {
+    // === STATE MANAGEMENT ===
+    let dragModeEnabled = false;
+    let isDragging = false;
+    let draggedCircleId = null;
+    let lastMoveTime = 0;
+    const THROTTLE_MS = 50;  // 20 FPS for smooth drag
+
+    // === COORDINATE CONVERSION ===
+    function pixelToDataCoords(plotDiv, pixelX, pixelY) {
+        const xaxis = plotDiv._fullLayout.xaxis;
+        const yaxis = plotDiv._fullLayout.yaxis;
+        const margin = plotDiv._fullLayout.margin;
+
+        // Account for plot margins
+        const plotX = pixelX - margin.l;
+        const plotY = pixelY - margin.t;
+
+        // Convert pixel position to data coordinates
+        const dataX = xaxis.p2d(plotX);
+        const dataY = yaxis.p2d(plotY);
+
+        return { x: dataX, y: dataY };
+    }
+
+    // === CIRCLE IDENTIFICATION ===
+    function findCircleAtPoint(dataX, dataY) {
+        if (typeof masterBoreholeData === 'undefined') return null;
+        
+        // Check if click is within any circle
+        for (const circle of masterBoreholeData) {
+            const dx = dataX - circle.x;
+            const dy = dataY - circle.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist <= circle.radius) {
+                return circle.id;
+            }
+        }
+        return null;
+    }
+
+    // === CIRCLE REGENERATION ===
+    function generateCirclePoints(centerX, centerY, radius, numPoints) {
+        numPoints = numPoints || CIRCLE_POINTS;
+        const xPoints = [];
+        const yPoints = [];
+        const angleStep = (2 * Math.PI) / numPoints;
+
+        for (let i = 0; i <= numPoints; i++) {
+            const angle = i * angleStep;
+            xPoints.push(centerX + radius * Math.cos(angle));
+            yPoints.push(centerY + radius * Math.sin(angle));
+        }
+
+        return { x: xPoints, y: yPoints };
+    }
+
+    function findBoreholeCirclesTraceIndex(plotDiv) {
+        // Find trace by name or legendgroup
+        for (let i = 0; i < plotDiv.data.length; i++) {
+            const trace = plotDiv.data[i];
+            if (trace.legendgroup === 'borehole_circles' || 
+                (trace.name && trace.name.toLowerCase().includes('circle'))) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    function updateCircleInTrace(plotDiv, circleId, newX, newY) {
+        const circleTraceIdx = findBoreholeCirclesTraceIndex(plotDiv);
+        if (circleTraceIdx === -1) return;
+
+        const trace = plotDiv.data[circleTraceIdx];
+        const circle = masterBoreholeData[circleId];
+        const radius = circle.radius;
+
+        // Calculate start/end indices for this circle's points in the trace
+        // Each circle has CIRCLE_POINTS+1 points plus 1 null separator = CIRCLE_POINTS+2
+        const pointsPerCircle = CIRCLE_POINTS + 2;
+        const startIdx = circleId * pointsPerCircle;
+        const endIdx = startIdx + pointsPerCircle - 1;  // Exclude the null
+
+        // Generate new circle points
+        const newPoints = generateCirclePoints(newX, newY, radius, CIRCLE_POINTS);
+
+        // Create updated x/y arrays (copy existing)
+        const newXArray = [...trace.x];
+        const newYArray = [...trace.y];
+
+        // Replace circle points
+        for (let i = 0; i < newPoints.x.length && (startIdx + i) < endIdx; i++) {
+            newXArray[startIdx + i] = newPoints.x[i];
+            newYArray[startIdx + i] = newPoints.y[i];
+        }
+
+        // Update trace with new coordinates
+        Plotly.restyle(plotDiv, {
+            x: [newXArray],
+            y: [newYArray]
+        }, [circleTraceIdx]);
+
+        // Update master data
+        masterBoreholeData[circleId].x = newX;
+        masterBoreholeData[circleId].y = newY;
+        masterBoreholeData[circleId].moved = true;
+
+        updateCircleStats();
+    }
+
+    // === UI HELPERS ===
+    function updateStatus(message) {
+        const statusDiv = document.getElementById('circleEditStatus');
+        if (statusDiv) statusDiv.textContent = message;
+    }
+
+    function showDragCoords(x, y) {
+        const coordsDiv = document.getElementById('dragCoords');
+        if (coordsDiv) coordsDiv.style.display = 'block';
+        const xSpan = document.getElementById('dragX');
+        const ySpan = document.getElementById('dragY');
+        if (xSpan) xSpan.textContent = x.toFixed(1);
+        if (ySpan) ySpan.textContent = y.toFixed(1);
+    }
+
+    function hideDragCoords() {
+        const coordsDiv = document.getElementById('dragCoords');
+        if (coordsDiv) coordsDiv.style.display = 'none';
+    }
+
+    function countMovedCircles() {
+        if (typeof masterBoreholeData === 'undefined') return 0;
+        return masterBoreholeData.filter(c => c.moved).length;
+    }
+
+    function updateCircleStats() {
+        if (typeof masterBoreholeData === 'undefined') return;
+        const totalSpan = document.getElementById('totalCircles');
+        const movedSpan = document.getElementById('movedCircles');
+        if (totalSpan) totalSpan.textContent = masterBoreholeData.length;
+        if (movedSpan) movedSpan.textContent = countMovedCircles();
+    }
+
+    // === EXPORT FUNCTIONS ===
+    function exportCirclesJSON() {
+        if (typeof masterBoreholeData === 'undefined') {
+            showExportToast('No circle data available', false);
+            return;
+        }
+
+        const exportData = {
+            timestamp: new Date().toISOString(),
+            totalCircles: masterBoreholeData.length,
+            movedCircles: countMovedCircles(),
+            circles: masterBoreholeData.map(c => ({
+                id: c.id,
+                x: c.x,
+                y: c.y,
+                radius: c.radius,
+                originalX: c.originalX,
+                originalY: c.originalY,
+                moved: c.moved
+            }))
+        };
+
+        const jsonStr = JSON.stringify(exportData, null, 2);
+        const blob = new Blob([jsonStr], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'borehole_coordinates_' + new Date().toISOString().slice(0,10) + '.json';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        showExportToast('Coordinates exported to JSON', true);
+    }
+
+    function exportCirclesCSV() {
+        if (typeof masterBoreholeData === 'undefined') {
+            showExportToast('No circle data available', false);
+            return;
+        }
+
+        const headers = ['id', 'x', 'y', 'radius', 'original_x', 'original_y', 'moved'];
+        const rows = masterBoreholeData.map(c => [
+            c.id, c.x, c.y, c.radius, c.originalX, c.originalY, c.moved
+        ]);
+        
+        const csvContent = [headers.join(',')]
+            .concat(rows.map(r => r.join(',')))
+            .join('\\n');
+
+        const blob = new Blob([csvContent], { type: 'text/csv' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'borehole_coordinates_' + new Date().toISOString().slice(0,10) + '.csv';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        showExportToast('Coordinates exported to CSV', true);
+    }
+
+    function showExportToast(message, isSuccess) {
+        const toast = document.createElement('div');
+        toast.style.cssText = `
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 12px 24px;
+            background: ${isSuccess ? 'rgba(40, 167, 69, 0.95)' : 'rgba(220, 53, 69, 0.95)'};
+            color: white;
+            border-radius: 8px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-size: 14px;
+            z-index: 10000;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            transition: opacity 0.3s ease-out;
+            pointer-events: none;
+        `;
+        toast.textContent = message;
+        document.body.appendChild(toast);
+        setTimeout(() => {
+            toast.style.opacity = '0';
+            setTimeout(() => toast.remove(), 300);
+        }, 2000);
+    }
+
+    // === RESET FUNCTION ===
+    function resetAllCircles() {
+        if (typeof masterBoreholeData === 'undefined') return;
+        
+        const plotDiv = document.querySelector('.plotly-graph-div');
+        if (!plotDiv) return;
+
+        masterBoreholeData.forEach(circle => {
+            if (circle.moved) {
+                updateCircleInTrace(plotDiv, circle.id, circle.originalX, circle.originalY);
+                circle.x = circle.originalX;
+                circle.y = circle.originalY;
+                circle.moved = false;
+            }
+        });
+
+        updateCircleStats();
+        updateStatus('All circles reset to original positions');
+    }
+
+    // === DRAG MODE INITIALIZATION ===
+    function initDragMode() {
+        const plotDiv = document.querySelector('.plotly-graph-div');
+        if (!plotDiv) {
+            setTimeout(initDragMode, 500);
+            return;
+        }
+
+        // Toggle button handler
+        const toggleBtn = document.getElementById('toggleDragMode');
+        if (toggleBtn) {
+            toggleBtn.addEventListener('click', function() {
+                dragModeEnabled = !dragModeEnabled;
+                
+                const indicator = document.getElementById('dragModeIndicator');
+                if (dragModeEnabled) {
+                    this.textContent = 'Disable Drag Mode';
+                    this.style.background = '#dc3545';
+                    if (indicator) indicator.style.display = 'block';
+                    // Disable Plotly's default dragmode
+                    Plotly.relayout(plotDiv, { dragmode: false });
+                    updateStatus('Click on a circle to start dragging');
+                } else {
+                    this.textContent = 'Enable Drag Mode';
+                    this.style.background = '#28a745';
+                    if (indicator) indicator.style.display = 'none';
+                    // Re-enable pan mode
+                    Plotly.relayout(plotDiv, { dragmode: 'pan' });
+                    isDragging = false;
+                    draggedCircleId = null;
+                    hideDragCoords();
+                    updateStatus('Click "Enable Drag Mode" to reposition circles');
+                }
+            });
+        }
+
+        // Click handler for selecting/placing circles
+        plotDiv.addEventListener('click', function(event) {
+            if (!dragModeEnabled) return;
+            
+            const rect = plotDiv.getBoundingClientRect();
+            const pixelX = event.clientX - rect.left;
+            const pixelY = event.clientY - rect.top;
+            const dataCoords = pixelToDataCoords(plotDiv, pixelX, pixelY);
+
+            if (!isDragging) {
+                // Try to select a circle
+                const circleId = findCircleAtPoint(dataCoords.x, dataCoords.y);
+                if (circleId !== null) {
+                    isDragging = true;
+                    draggedCircleId = circleId;
+                    updateStatus('Dragging circle #' + (circleId + 1) + ' - click to place');
+                    showDragCoords(dataCoords.x, dataCoords.y);
+                }
+            } else {
+                // Place the circle at current position
+                if (draggedCircleId !== null) {
+                    updateCircleInTrace(plotDiv, draggedCircleId, dataCoords.x, dataCoords.y);
+                    updateStatus('Circle #' + (draggedCircleId + 1) + ' placed - click another to drag');
+                }
+                isDragging = false;
+                draggedCircleId = null;
+                hideDragCoords();
+            }
+        });
+
+        // Mouse move handler for drag preview
+        plotDiv.addEventListener('mousemove', function(event) {
+            if (!dragModeEnabled || !isDragging || draggedCircleId === null) return;
+            
+            const now = Date.now();
+            if (now - lastMoveTime < THROTTLE_MS) return;
+            lastMoveTime = now;
+
+            const rect = plotDiv.getBoundingClientRect();
+            const pixelX = event.clientX - rect.left;
+            const pixelY = event.clientY - rect.top;
+            const dataCoords = pixelToDataCoords(plotDiv, pixelX, pixelY);
+
+            // Update circle position in real-time
+            updateCircleInTrace(plotDiv, draggedCircleId, dataCoords.x, dataCoords.y);
+            showDragCoords(dataCoords.x, dataCoords.y);
+        });
+
+        // Escape key to cancel drag
+        document.addEventListener('keydown', function(event) {
+            if (event.key === 'Escape' && isDragging && draggedCircleId !== null) {
+                // Reset to position before this drag started
+                const circle = masterBoreholeData[draggedCircleId];
+                updateCircleInTrace(plotDiv, draggedCircleId, circle.originalX, circle.originalY);
+                circle.moved = false;
+                isDragging = false;
+                draggedCircleId = null;
+                hideDragCoords();
+                updateStatus('Drag cancelled');
+            }
+        });
+
+        // Export button handlers
+        document.getElementById('exportCoordsJSON')?.addEventListener('click', exportCirclesJSON);
+        document.getElementById('exportCoordsCSV')?.addEventListener('click', exportCirclesCSV);
+        document.getElementById('resetAllCircles')?.addEventListener('click', resetAllCircles);
+
+        // Initialize stats
+        updateCircleStats();
+        console.log('🔄 Circle drag mode initialized');
+    }
+
+    // === INITIALIZATION ===
+    if (document.readyState === 'complete') {
+        setTimeout(initDragMode, 500);
+    } else {
+        window.addEventListener('load', function() {
+            setTimeout(initDragMode, 500);
+        });
+    }
+})();
+"""
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# �🔍 FILTER PANEL SCRIPTS
 # ═══════════════════════════════════════════════════════════════════════════
 
 
@@ -597,6 +1033,9 @@ def _js_initialization() -> str:
     """Generate JS borehole data initialization function."""
     return """
     // === INITIALIZATION ===
+    // Store original hover templates for filtered boreholes
+    let originalBoreholeHovertemplates = null;
+    
     function initializeBoreholeFilter() {
         if (filterInitialized) return true;
         const plotDiv = getPlotDiv();
@@ -604,6 +1043,19 @@ def _js_initialization() -> str:
         
         const trace = plotDiv.data[BOREHOLE_TRACE_IDX];
         if (!trace.customdata || trace.customdata.length === 0) return false;
+        
+        // Store original hover templates (build array from template string + customdata)
+        const templateStr = trace.hovertemplate || '';
+        originalBoreholeHovertemplates = trace.customdata.map(function(d, idx) {
+            // Build per-point hover text from customdata
+            const locId = Array.isArray(d) ? d[0] : '';
+            const depth = Array.isArray(d) && d.length > 1 ? parseFloat(d[1]) || 0 : 0;
+            const x = trace.x[idx];
+            const y = trace.y[idx];
+            return '<b>' + locId + '</b><br>Easting: ' + Math.round(x).toLocaleString() + 
+                   '<br>Northing: ' + Math.round(y).toLocaleString() + 
+                   '<br>Final Depth: ' + depth.toFixed(1) + 'm<extra></extra>';
+        });
         
         boreholeData = trace.customdata.map(function(d) {
             if (Array.isArray(d) && d.length >= 5) {
@@ -699,7 +1151,21 @@ def _js_coverage_switching() -> str:
             }
         });
         
-        if (traceIndices.length > 0) Plotly.restyle(plotDiv, {'visible': visibilities}, traceIndices);
+        // Update visibility and hoverinfo together (hide tooltips for hidden traces)
+        if (traceIndices.length > 0) {
+            const hoverInfoUpdates = visibilities.map(function(v, idx) {
+                const trace = plotDiv.data[traceIndices[idx]];
+                if (v) {
+                    return trace._originalHoverinfo || trace.hoverinfo || 'all';
+                } else {
+                    if (!trace._originalHoverinfo && trace.hoverinfo !== 'skip') {
+                        trace._originalHoverinfo = trace.hoverinfo || 'all';
+                    }
+                    return 'skip';
+                }
+            });
+            Plotly.restyle(plotDiv, {'visible': visibilities, 'hoverinfo': hoverInfoUpdates}, traceIndices);
+        }
         currentCoverageCombo = newComboKey;
     }"""
 
@@ -713,15 +1179,25 @@ def _js_filter_application() -> str:
         const plotDiv = getPlotDiv();
         if (!plotDiv) return;
         
-        const opacities = boreholeData.map(function(bh) {
-            if (bh.depth < minDepthFilter) return 0;
-            if (filterSPT && !bh.has_spt) return 0;
-            if (filterTriaxialTotal && !bh.has_triaxial_total) return 0;
-            if (filterTriaxialEffective && !bh.has_triaxial_effective) return 0;
-            return 1;
+        const opacities = [];
+        const hovertemplates = [];
+        
+        boreholeData.forEach(function(bh, idx) {
+            let visible = true;
+            if (bh.depth < minDepthFilter) visible = false;
+            if (filterSPT && !bh.has_spt) visible = false;
+            if (filterTriaxialTotal && !bh.has_triaxial_total) visible = false;
+            if (filterTriaxialEffective && !bh.has_triaxial_effective) visible = false;
+            
+            opacities.push(visible ? 1 : 0);
+            // Set hovertemplate to empty string for hidden points (disables tooltip)
+            hovertemplates.push(visible ? originalBoreholeHovertemplates[idx] : '');
         });
         
-        Plotly.restyle(plotDiv, {'marker.opacity': [opacities]}, [BOREHOLE_TRACE_IDX]);
+        Plotly.restyle(plotDiv, {
+            'marker.opacity': [opacities],
+            'hovertemplate': [hovertemplates]
+        }, [BOREHOLE_TRACE_IDX]);
         updateCountDisplay(opacities.filter(function(o) { return o > 0; }).length);
         updateCoverageVisibility();
     }"""
@@ -962,8 +1438,13 @@ def generate_click_to_copy_script() -> str:
             setTimeout(function() { lastHoverText = null; }, 500);
         });
         
-        // Copy on click
+        // Copy on Ctrl+Click (changed from regular click to allow circle dragging)
         plotDiv.on('plotly_click', function(data) {
+            // Only copy if Ctrl key is held down
+            if (!window.event || !window.event.ctrlKey) {
+                return;  // Allow normal click for circle dragging
+            }
+            
             if (data && data.points && data.points.length > 0) {
                 const point = data.points[0];
                 let clickText = '';
@@ -1015,7 +1496,7 @@ def generate_click_to_copy_script() -> str:
             }
         });
         
-        console.log('📋 Click-to-copy tooltip handler attached');
+        console.log('📋 Ctrl+Click-to-copy tooltip handler attached');
     }
     
     // === INITIALIZATION ===

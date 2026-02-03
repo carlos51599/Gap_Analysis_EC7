@@ -96,15 +96,17 @@ def generate_html(
     <script src="https://unpkg.com/deck.gl@latest/dist.min.js"></script>
     <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
     <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
+    <!-- Turf.js on main thread for instant coverage updates -->
+    <script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
 """
         turf_cdn = """
-    <!-- Turf.js from CDN (for worker initialization) -->
+    <!-- Turf.js code stored for Web Worker initialization -->
     <script>
-        // Fetch Turf.js code for Web Worker
+        // Fetch Turf.js code for Web Worker (already loaded on main thread)
         fetch('https://unpkg.com/@turf/turf@6.5.0/turf.min.js')
             .then(r => r.text())
             .then(code => { window.TURF_CODE = code; })
-            .catch(e => console.warn('Failed to load Turf.js:', e));
+            .catch(e => console.warn('Failed to load Turf.js for worker:', e));
     </script>
 """
     else:
