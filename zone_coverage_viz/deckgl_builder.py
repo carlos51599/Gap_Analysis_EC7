@@ -140,7 +140,7 @@ def generate_zone_coverage_html(
     logger.info("📜 Loading JavaScript templates...")
     try:
         main_app_code = load_js_template("main_app.js")
-        worker_code = load_js_template("geometry_worker.js")
+        worker_code = load_js_template("coverage_worker.js")
         ui_code = load_js_template("ui_controls.js")
     except FileNotFoundError as e:
         logger.error(f"❌ Failed to load JS template: {e}")

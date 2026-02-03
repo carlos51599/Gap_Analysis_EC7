@@ -99,16 +99,8 @@ def generate_html(
     <!-- Turf.js on main thread for instant coverage updates -->
     <script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
 """
-        turf_cdn = """
-    <!-- Turf.js code stored for Web Worker initialization -->
-    <script>
-        // Fetch Turf.js code for Web Worker (already loaded on main thread)
-        fetch('https://unpkg.com/@turf/turf@6.5.0/turf.min.js')
-            .then(r => r.text())
-            .then(code => { window.TURF_CODE = code; })
-            .catch(e => console.warn('Failed to load Turf.js for worker:', e));
-    </script>
-"""
+        # Worker loads Turf.js via importScripts, no need for TURF_CODE fetch
+        turf_cdn = ""
     else:
         # Bundled libraries (would need to be embedded)
         lib_scripts = """

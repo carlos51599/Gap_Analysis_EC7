@@ -1,11 +1,17 @@
 /**
- * Zone-Aware Coverage Visualization
+ * Zone-Aware Coverage Visualization - HYBRID APPROACH
  * 
  * Main deck.gl application for interactive borehole coverage visualization.
+ * 
+ * DUAL-LAYER ARCHITECTURE:
+ * 1. ScatterplotLayer: Shows PREVIEW circles during drag (fast, responsive)
+ * 2. GeoJsonLayer: Shows ACCURATE clipped coverage after drag-end (computed by Worker)
+ * 
  * Features:
- * - Draggable coverage circles (filled areas)
- * - LIVE smooth radius changes when crossing zone boundaries
- * - Zone-aware radius lookup using Turf.js point-in-polygon
+ * - Draggable borehole markers
+ * - PREVIEW: Simple circles that change radius by zone (during drag)
+ * - ACCURATE: Clipped polygons computed by Web Worker (on drag-end)
+ * - Zone-aware coverage using Turf.js buffer + intersection
  * - Export modified positions
  */
 
@@ -25,7 +31,11 @@
         boreholes: null,
         positions: [],  // Mutable positions array [lon, lat]
         originalPositions: [],  // Original positions for reset
-        radii: [],  // Current radius per borehole (in METERS)
+        radii: [],  // Current radius per borehole (in METERS) - for preview
+        
+        // Accurate coverage geometries (computed on main thread)
+        accurateCoverage: [],  // Array of GeoJSON features per borehole
+        showAccurateCoverage: true,  // Toggle between preview and accurate
         
         // Drag state
         dragging: false,
@@ -45,6 +55,12 @@
                 fillColor: [100, 149, 237, 120],
                 lineColor: [70, 130, 180, 255],
                 lineWidth: 2
+            },
+            // Accurate coverage uses slightly different style
+            accurateCoverageStyle: {
+                fillColor: [34, 139, 34, 100],  // Forest green
+                lineColor: [34, 139, 34, 200],
+                lineWidth: 2
             }
         }
     };
@@ -57,12 +73,12 @@
      * Initialize the application
      */
     function init() {
-        console.log('🚀 Initializing Zone Coverage Visualization');
+        console.log('🚀 Initializing Zone Coverage Visualization (Hybrid Mode)');
         
         // Load embedded data
         loadEmbeddedData();
         
-        // Compute initial radii based on zone positions
+        // Compute initial radii based on zone positions (for preview)
         computeAllRadii();
         
         // Initialize deck.gl
@@ -71,7 +87,197 @@
         // Setup UI handlers
         setupUI();
         
+        // Compute accurate coverage on main thread (after UI is ready)
+        setTimeout(() => {
+            computeAllAccurateCoverage();
+        }, 100);
+        
         console.log('✅ Initialization complete');
+    }
+    
+    // =========================================================================
+    // ACCURATE COVERAGE COMPUTATION (Main Thread)
+    // =========================================================================
+    
+    /**
+     * Compute zone-aware coverage for all boreholes
+     * Uses Turf.js on the main thread
+     */
+    function computeAllAccurateCoverage() {
+        if (typeof turf === 'undefined') {
+            console.warn('⚠️ Cannot compute coverage - Turf.js not loaded');
+            return;
+        }
+        if (!state.zones) {
+            console.warn('⚠️ Cannot compute coverage - zones not loaded');
+            return;
+        }
+        if (!state.zones.features || state.zones.features.length === 0) {
+            console.warn('⚠️ Cannot compute coverage - zones.features empty');
+            return;
+        }
+        if (!state.positions.length) {
+            console.warn('⚠️ Cannot compute coverage - positions empty');
+            return;
+        }
+        
+        console.log('📐 Computing accurate zone-clipped coverage...');
+        console.log(`   - ${state.zones.features.length} zones available`);
+        console.log(`   - ${state.positions.length} boreholes to process`);
+        console.log(`   - First zone max_spacing_m: ${state.zones.features[0].properties?.max_spacing_m}`);
+        console.log(`   - First borehole position: ${state.positions[0]}`);
+        const startTime = performance.now();
+        
+        const coverages = [];
+        for (let i = 0; i < state.positions.length; i++) {
+            const coverage = computeSingleAccurateCoverage(i, state.positions[i]);
+            if (coverage) {
+                coverages.push(coverage);
+            }
+        }
+        
+        state.accurateCoverage = coverages;
+        const elapsed = performance.now() - startTime;
+        console.log(`✅ Computed ${coverages.length} accurate coverages in ${elapsed.toFixed(0)}ms`);
+        
+        updateLayers();
+    }
+    
+    /**
+     * Compute zone-aware coverage for a single borehole position
+     * 
+     * Algorithm:
+     * 1. For each zone within range of the borehole
+     * 2. Buffer the borehole point by that zone's max_spacing_m
+     * 3. Intersect the buffer with the zone polygon
+     * 4. Union all intersected pieces
+     * 5. Return the final coverage geometry
+     */
+    function computeSingleAccurateCoverage(boreholeIndex, position) {
+        if (!position) return null;
+        
+        const isFirstBorehole = boreholeIndex === 0;
+        
+        try {
+            const [lon, lat] = position;
+            const point = turf.point([lon, lat]);
+            const fragments = [];
+            
+            if (isFirstBorehole) {
+                console.log(`🔍 Debug first borehole at [${lon}, ${lat}]`);
+            }
+            
+            let zonesChecked = 0;
+            let zonesSkipped = 0;
+            
+            for (const zone of state.zones.features) {
+                const maxSpacing = zone.properties.max_spacing_m || state.config.defaultMaxSpacing;
+                
+                // Quick bbox check - skip zones too far away
+                const bbox = turf.bbox(zone);
+                const margin = degreesFromMeters(maxSpacing, lat);
+                
+                if (lon < bbox[0] - margin || lon > bbox[2] + margin ||
+                    lat < bbox[1] - margin || lat > bbox[3] + margin) {
+                    zonesSkipped++;
+                    continue;
+                }
+                
+                zonesChecked++;
+                
+                // Buffer the point by this zone's spacing (Turf uses km)
+                const buffer = turf.buffer(point, maxSpacing / 1000, { units: 'kilometers' });
+                if (!buffer) {
+                    if (isFirstBorehole) console.log(`   Buffer failed for zone ${zone.properties?.zone_name}`);
+                    continue;
+                }
+                
+                // Intersect with zone polygon (Turf.js v7 API: single FeatureCollection)
+                try {
+                    if (isFirstBorehole && zonesChecked === 1) {
+                        console.log(`   Buffer type: ${buffer.type}, geometry.type: ${buffer.geometry?.type}`);
+                        console.log(`   Zone type: ${zone.type}, geometry.type: ${zone.geometry?.type}`);
+                        console.log(`   Buffer coords length: ${buffer.geometry?.coordinates?.[0]?.length}`);
+                        console.log(`   Zone coords length: ${zone.geometry?.coordinates?.[0]?.length}`);
+                        console.log(`   First zone coord: ${JSON.stringify(zone.geometry?.coordinates?.[0]?.[0])}`);
+                        
+                        // Try the operation step by step
+                        const fc = turf.featureCollection([buffer, zone]);
+                        console.log(`   FeatureCollection features: ${fc.features?.length}`);
+                        console.log(`   FC feature 0 type: ${fc.features?.[0]?.geometry?.type}`);
+                        console.log(`   FC feature 1 type: ${fc.features?.[1]?.geometry?.type}`);
+                    }
+                    
+                    const intersection = turf.intersect(
+                        turf.featureCollection([buffer, zone])
+                    );
+                    
+                    if (isFirstBorehole) {
+                        console.log(`   Zone: ${zone.properties?.zone_name}, maxSpacing: ${maxSpacing}m, intersection: ${intersection ? 'YES' : 'NO'}`);
+                    }
+                    
+                    if (intersection && !isEmptyGeometry(intersection)) {
+                        fragments.push(intersection);
+                    }
+                } catch (e) {
+                    // Skip invalid intersections
+                    if (isFirstBorehole) console.log(`   Intersection error: ${e.message}`);
+                    console.debug(`Intersection failed for zone:`, e.message);
+                }
+            }
+            
+            if (isFirstBorehole) {
+                console.log(`   Zones checked: ${zonesChecked}, skipped (bbox): ${zonesSkipped}, fragments: ${fragments.length}`);
+            }
+            
+            // Union all fragments (Turf.js v7 API: single FeatureCollection)
+            let coverage = null;
+            if (fragments.length === 1) {
+                coverage = fragments[0];
+            } else if (fragments.length > 1) {
+                try {
+                    // Turf.js v7: union takes a single FeatureCollection
+                    coverage = turf.union(turf.featureCollection(fragments));
+                } catch (e) {
+                    console.debug(`Union failed:`, e.message);
+                    coverage = fragments[0];
+                }
+            }
+            
+            // Add borehole index as property
+            if (coverage) {
+                coverage.properties = coverage.properties || {};
+                coverage.properties.boreholeIndex = boreholeIndex;
+            }
+            
+            return coverage;
+            
+        } catch (e) {
+            console.warn(`Failed to compute coverage for borehole ${boreholeIndex}:`, e);
+            return null;
+        }
+    }
+    
+    /**
+     * Convert meters to approximate degrees at a given latitude
+     */
+    function degreesFromMeters(meters, latitude) {
+        const metersPerDegree = 111320 * Math.cos(latitude * Math.PI / 180);
+        return meters / metersPerDegree;
+    }
+    
+    /**
+     * Check if a geometry is empty
+     */
+    function isEmptyGeometry(geom) {
+        if (!geom) return true;
+        if (geom.type === 'GeometryCollection' && (!geom.geometries || geom.geometries.length === 0)) {
+            return true;
+        }
+        if (geom.geometry) {
+            return isEmptyGeometry(geom.geometry);
+        }
+        return false;
     }
     
     /**
@@ -193,6 +399,12 @@
     
     /**
      * Build all deck.gl layers
+     * 
+     * Layer order (bottom to top):
+     * 1. Zone boundaries
+     * 2. Accurate coverage (GeoJsonLayer) - when not dragging
+     * 3. Preview circles (ScatterplotLayer) - during drag
+     * 4. Center dots (for reference)
      */
     function buildLayers() {
         const layers = [];
@@ -202,10 +414,17 @@
             layers.push(buildZoneLayer());
         }
         
-        // Coverage circles (draggable) - using ScatterplotLayer with METERS
-        layers.push(buildCoverageLayer());
+        // Accurate coverage from Web Worker (when available and not dragging)
+        if (state.showAccurateCoverage && state.accurateCoverage.length > 0 && !state.dragging) {
+            layers.push(buildAccurateCoverageLayer());
+        }
         
-        // Small center dots for visual reference
+        // Preview circles (during drag or when no accurate coverage available)
+        if (state.dragging || state.accurateCoverage.length === 0) {
+            layers.push(buildPreviewCoverageLayer());
+        }
+        
+        // Small center dots for visual reference and picking
         layers.push(buildCenterDotsLayer());
         
         return layers;
@@ -229,10 +448,36 @@
     }
     
     /**
-     * Build coverage circles as ScatterplotLayer with METER-based radius
-     * This allows smooth, live radius changes when crossing zones
+     * Build ACCURATE coverage layer using Web Worker computed geometries
+     * These are proper zone-clipped polygons
      */
-    function buildCoverageLayer() {
+    function buildAccurateCoverageLayer() {
+        // Build a FeatureCollection from all coverage geometries
+        const features = state.accurateCoverage.filter(f => f != null);
+        
+        const data = {
+            type: 'FeatureCollection',
+            features: features
+        };
+        
+        return new deck.GeoJsonLayer({
+            id: 'accurate-coverage',
+            data: data,
+            stroked: true,
+            filled: true,
+            pickable: false,  // Not pickable - we pick on center dots
+            getFillColor: state.config.accurateCoverageStyle.fillColor,
+            getLineColor: state.config.accurateCoverageStyle.lineColor,
+            getLineWidth: state.config.accurateCoverageStyle.lineWidth,
+            lineWidthUnits: 'pixels'
+        });
+    }
+    
+    /**
+     * Build PREVIEW coverage circles as ScatterplotLayer
+     * Shows during drag for responsive feedback
+     */
+    function buildPreviewCoverageLayer() {
         // Build data array with current positions and radii
         const data = state.positions.map((pos, i) => ({
             position: pos,
@@ -242,9 +487,9 @@
         }));
         
         return new deck.ScatterplotLayer({
-            id: 'coverage',
+            id: 'preview-coverage',
             data: data,
-            pickable: true,  // DRAGGABLE
+            pickable: false,  // Not pickable - we pick on center dots
             radiusUnits: 'meters',  // KEY: Use meters for geographic radius
             radiusScale: 1,
             getPosition: d => d.position,
@@ -260,15 +505,12 @@
                     duration: 150,  // 150ms smooth transition
                     easing: t => t * (2 - t)  // Ease out
                 }
-            },
-            // Highlight on hover
-            autoHighlight: true,
-            highlightColor: [100, 149, 237, 180]
+            }
         });
     }
     
     /**
-     * Build small center dots for visual reference (not pickable)
+     * Build small center dots - THESE are pickable for dragging
      */
     function buildCenterDotsLayer() {
         return new deck.ScatterplotLayer({
@@ -277,12 +519,18 @@
                 position: pos,
                 index: i
             })),
-            pickable: false,  // NOT pickable
+            pickable: true,  // PICKABLE for drag
             radiusUnits: 'pixels',
             getPosition: d => d.position,
-            getRadius: 4,
+            getRadius: 8,  // Larger for easier picking
             getFillColor: [0, 0, 0, 200],
-            stroked: false
+            stroked: true,
+            getLineColor: [255, 255, 255, 255],
+            getLineWidth: 2,
+            lineWidthUnits: 'pixels',
+            // Highlight on hover
+            autoHighlight: true,
+            highlightColor: [255, 100, 100, 255]
         });
     }
     
@@ -296,17 +544,17 @@
     }
     
     // =========================================================================
-    // DRAG HANDLING - Coverage circles are draggable
+    // DRAG HANDLING - Center dots are draggable, coverage updates accordingly
     // =========================================================================
     
     /**
-     * Handle drag start on coverage circle
+     * Handle drag start on center dot
      */
     function handleDragStart(info, event) {
         if (!state.config.enableDrag) return;
         
-        // Check if we're starting on a coverage circle
-        if (info.layer && info.layer.id === 'coverage' && info.object) {
+        // Check if we're starting on a center dot
+        if (info.layer && info.layer.id === 'center-dots' && info.object) {
             const index = info.object.index;
             if (index !== undefined && index >= 0) {
                 state.dragging = true;
@@ -324,6 +572,9 @@
                     controller: { dragPan: false }
                 });
                 
+                // Show preview layer during drag
+                updateLayers();
+                
                 return true;
             }
         }
@@ -331,7 +582,7 @@
     }
     
     /**
-     * Handle drag movement - LIVE radius updates
+     * Handle drag movement - LIVE preview radius updates
      */
     function handleDrag(info, event) {
         if (!state.dragging || state.dragIndex === null) return;
@@ -343,7 +594,7 @@
         // Update position
         state.positions[state.dragIndex] = [newLng, newLat];
         
-        // LIVE: Update radius based on current zone - this is INSTANT
+        // LIVE: Update PREVIEW radius based on current zone
         state.radii[state.dragIndex] = getRadiusForPosition([newLng, newLat]);
         
         // Update layers immediately for smooth visual feedback
@@ -351,15 +602,17 @@
     }
     
     /**
-     * Handle drag end
+     * Handle drag end - Compute ACCURATE coverage on main thread
      */
     function handleDragEnd(info, event) {
         if (!state.dragging) return;
         
-        // Final position/radius update
-        if (state.dragIndex !== null) {
-            const pos = state.positions[state.dragIndex];
-            state.radii[state.dragIndex] = getRadiusForPosition(pos);
+        const draggedIndex = state.dragIndex;
+        
+        // Final position/radius update for preview
+        if (draggedIndex !== null) {
+            const pos = state.positions[draggedIndex];
+            state.radii[draggedIndex] = getRadiusForPosition(pos);
         }
         
         state.dragging = false;
@@ -374,7 +627,23 @@
         // Update modified count
         updateModifiedCount();
         
-        // Final layer update
+        // Compute ACCURATE coverage for this borehole on main thread
+        if (draggedIndex !== null) {
+            const coverage = computeSingleAccurateCoverage(draggedIndex, state.positions[draggedIndex]);
+            if (coverage) {
+                // Find and replace this borehole's coverage
+                const existingIdx = state.accurateCoverage.findIndex(
+                    c => c?.properties?.boreholeIndex === draggedIndex
+                );
+                if (existingIdx >= 0) {
+                    state.accurateCoverage[existingIdx] = coverage;
+                } else {
+                    state.accurateCoverage.push(coverage);
+                }
+            }
+        }
+        
+        // Final layer update (shows accurate coverage)
         updateLayers();
     }
     
@@ -413,6 +682,10 @@
         computeAllRadii();  // Recalculate radii for original positions
         updateModifiedCount();
         updateLayers();
+        
+        // Request accurate coverage for all reset positions
+        requestAllCoverage();
+        
         console.log('🔄 Positions reset to original');
     }
     
@@ -422,7 +695,29 @@
     function recalculateAllRadii() {
         computeAllRadii();
         updateLayers();
+        
+        // Also request accurate coverage
+        requestAllCoverage();
+        
         console.log('📐 Recalculated all radii');
+    }
+    
+    /**
+     * Toggle between preview and accurate coverage display
+     */
+    function toggleAccurateCoverage() {
+        state.showAccurateCoverage = !state.showAccurateCoverage;
+        updateLayers();
+        console.log(`🔄 Accurate coverage: ${state.showAccurateCoverage ? 'ON' : 'OFF'}`);
+    }
+    
+    /**
+     * Request recomputation of all accurate coverage geometries
+     * Called after reset or recalculate operations
+     */
+    function requestAllCoverage() {
+        console.log('📐 Requesting full coverage recomputation...');
+        computeAllAccurateCoverage();
     }
     
     /**
@@ -497,7 +792,9 @@
         recalculateAllRadii,
         resetPositions,
         exportPositions,
-        getRadiusForPosition
+        getRadiusForPosition,
+        toggleAccurateCoverage,
+        requestAllCoverage
     };
     
 })();
