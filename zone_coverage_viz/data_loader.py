@@ -67,8 +67,10 @@ class DataLoader:
         # Loaded data (cached)
         self._zones_data: Optional[Dict[str, Any]] = None
         self._boreholes_data: Optional[Dict[str, Any]] = None
+        self._existing_coverage_data: Optional[Dict[str, Any]] = None
         self._zones_gdf: Optional[gpd.GeoDataFrame] = None
         self._boreholes_gdf: Optional[gpd.GeoDataFrame] = None
+        self._existing_coverage_gdf: Optional[gpd.GeoDataFrame] = None
 
         # Coordinate transformer
         self._wgs84_to_bng = Transformer.from_crs(CRS_WGS84, CRS_BNG, always_xy=True)
@@ -107,13 +109,27 @@ class DataLoader:
         self._boreholes_data = data.get(
             "boreholes", {"type": "FeatureCollection", "features": []}
         )
+        self._existing_coverage_data = data.get("existing_coverage", None)
 
         # Convert to GeoDataFrames (in BNG for geometry operations)
         self._zones_gdf = self._geojson_to_gdf(self._zones_data, CRS_BNG)
         self._boreholes_gdf = self._geojson_to_gdf(self._boreholes_data, CRS_BNG)
 
+        if self._existing_coverage_data:
+            self._existing_coverage_gdf = self._geojson_to_gdf(
+                self._existing_coverage_data, CRS_BNG
+            )
+            existing_count = len(self._existing_coverage_gdf)
+        else:
+            existing_count = 0
+
         logger.info(
             f"Loaded {len(self._zones_gdf)} zones, {len(self._boreholes_gdf)} boreholes"
+            + (
+                f", {existing_count} existing coverage polygons"
+                if existing_count
+                else ""
+            )
         )
 
     def _geojson_to_gdf(
@@ -363,6 +379,19 @@ class DataLoader:
             features.append(feature)
 
         return {"type": "FeatureCollection", "features": features}
+
+    def get_existing_coverage_geojson(self) -> Optional[Dict[str, Any]]:
+        """Get existing borehole coverage as GeoJSON FeatureCollection in WGS84.
+
+        Returns:
+            GeoJSON FeatureCollection or None if not available
+        """
+        # If we loaded from JSON, return the original
+        if self._existing_coverage_data is not None:
+            return self._existing_coverage_data
+
+        # Otherwise no existing coverage available
+        return None
 
     def update_borehole_position(
         self,

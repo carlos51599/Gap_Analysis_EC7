@@ -39,7 +39,7 @@ DEFAULT_DATA_DIR = Path(__file__).parent.parent / "Output"
 
 # Server configuration
 SERVER_HOST = "127.0.0.1"
-SERVER_PORT = 5050
+SERVER_PORT = 5051
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 🌐 FLASK APPLICATION
@@ -194,6 +194,29 @@ def compute_all_coverages() -> Dict[str, Any]:
                 coverages.append(coverage)
 
     return jsonify({"type": "FeatureCollection", "features": coverages})
+
+
+@app.route("/api/existing-coverage", methods=["GET"])
+def get_existing_coverage() -> Dict[str, Any]:
+    """
+    Get existing borehole coverage polygons (from main.py output).
+
+    Returns:
+        GeoJSON FeatureCollection with existing coverage polygons,
+        or empty FeatureCollection if not available.
+    """
+    if data_loader is None:
+        return jsonify({"error": "Server not initialized"}), 500
+
+    existing = data_loader.get_existing_coverage_geojson()
+    logger.info(
+        f"📊 Existing coverage: {type(existing)}, features: {len(existing.get('features', [])) if existing else 0}"
+    )
+
+    if existing is None:
+        return jsonify({"type": "FeatureCollection", "features": []})
+
+    return jsonify(existing)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

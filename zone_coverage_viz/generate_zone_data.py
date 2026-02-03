@@ -141,6 +141,53 @@ def load_boreholes(output_dir: Path) -> gpd.GeoDataFrame:
     return gdf
 
 
+def load_existing_coverage(output_dir: Path) -> gpd.GeoDataFrame | None:
+    """Load existing borehole coverage from covered.geojson.
+
+    Searches for the most recent coverage_polygons output folder.
+    Returns None if not found.
+    """
+    coverage_dir = output_dir / "coverage_polygons"
+
+    if not coverage_dir.exists():
+        logger.warning("   ⚠️ coverage_polygons directory not found")
+        return None
+
+    # Find subdirectories (each represents a combo_key like d45_spt0_txt0_txe0)
+    combo_dirs = [d for d in coverage_dir.iterdir() if d.is_dir()]
+
+    if not combo_dirs:
+        logger.warning("   ⚠️ No combo directories found in coverage_polygons")
+        return None
+
+    # Use most recent
+    combo_dir = sorted(combo_dirs, key=lambda d: d.stat().st_mtime, reverse=True)[0]
+    covered_path = combo_dir / "covered.geojson"
+
+    if not covered_path.exists():
+        logger.warning(f"   ⚠️ covered.geojson not found in {combo_dir.name}")
+        return None
+
+    logger.info(f"📂 Loading existing coverage from: {combo_dir.name}/covered.geojson")
+
+    gdf = gpd.read_file(covered_path)
+
+    # The covered.geojson may have incorrect CRS metadata (says WGS84 but has BNG coords)
+    # Force BNG CRS based on coordinate values (BNG has 6-digit eastings/northings)
+    if gdf.crs is None or gdf.crs.to_epsg() == 4326:
+        # Check if coordinates look like BNG (6-digit values)
+        sample_coord = gdf.geometry.iloc[0].centroid.coords[0]
+        if abs(sample_coord[0]) > 1000:  # BNG coordinates are typically 400000-700000
+            logger.info(
+                f"   ⚠️ Forcing CRS to BNG (coords look like BNG: {sample_coord[0]:.0f}, {sample_coord[1]:.0f})"
+            )
+            gdf = gdf.set_crs(CRS_BNG, allow_override=True)
+
+    logger.info(f"   ✅ Loaded existing coverage ({len(gdf)} features, CRS: {gdf.crs})")
+
+    return gdf
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 📤 EXPORT
 # ═══════════════════════════════════════════════════════════════════════════
@@ -195,6 +242,9 @@ def generate_zone_coverage_data() -> None:
     logger.info("\n📂 Loading boreholes...")
     boreholes_gdf = load_boreholes(output_dir)
 
+    logger.info("\n📂 Loading existing coverage...")
+    existing_coverage_gdf = load_existing_coverage(output_dir)
+
     # Convert to GeoJSON
     logger.info("\n📝 Converting to GeoJSON...")
 
@@ -221,6 +271,20 @@ def generate_zone_coverage_data() -> None:
         "boreholes": boreholes_geojson,
     }
 
+    # Add existing coverage if loaded
+    if existing_coverage_gdf is not None:
+        existing_coverage_geojson = gdf_to_geojson(
+            existing_coverage_gdf,
+            {
+                "layer": "layer",
+                "combo_key": "combo_key",
+            },
+        )
+        output_data["existing_coverage"] = existing_coverage_geojson
+        logger.info(
+            f"   ✅ Added existing coverage ({len(existing_coverage_geojson['features'])} features)"
+        )
+
     # Write file
     output_path = output_dir / OUTPUT_FILENAME
     with open(output_path, "w", encoding="utf-8") as f:
@@ -229,6 +293,10 @@ def generate_zone_coverage_data() -> None:
     logger.info(f"\n✅ Generated: {output_path}")
     logger.info(f"   {len(zones_geojson['features'])} zones")
     logger.info(f"   {len(boreholes_geojson['features'])} boreholes")
+    if existing_coverage_gdf is not None:
+        logger.info(
+            f"   {len(existing_coverage_geojson['features'])} existing coverage polygons"
+        )
     logger.info("=" * 60)
 
 
