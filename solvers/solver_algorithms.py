@@ -1016,6 +1016,21 @@ def _solve_ilp_highspy(
         else:
             solver_status = "feasible"
 
+        # Capture actual final MIP gap from solver (not just from stall detection callback)
+        # Compute manually from bounds since info.mip_gap may be 0 for "Optimal" status
+        final_mip_gap_pct = None
+        primal = info.objective_function_value
+        if hasattr(info, "mip_dual_bound") and primal != 0:
+            dual = info.mip_dual_bound
+            # Relative gap = |primal - dual| / |primal| * 100
+            final_mip_gap_pct = abs(primal - dual) / abs(primal) * 100.0
+
+        # Update stall_stats if callback didn't capture the final gap
+        if stall_stats["final_gap_pct"] is None and final_mip_gap_pct is not None:
+            stall_stats["final_gap_pct"] = final_mip_gap_pct
+            if solver_status == "optimal":
+                stall_stats["termination_reason"] = "Optimal"
+
         stats = {
             "method": "ilp_highspy",
             "formulation": "full_coverage" if use_full_coverage else "partial_coverage",
@@ -1035,6 +1050,7 @@ def _solve_ilp_highspy(
             and len(warm_start_indices) > 0,
             "warm_start_count": len(warm_start_indices) if warm_start_indices else 0,
             "stall_detection": stall_stats,
+            "final_mip_gap_pct": final_mip_gap_pct,
         }
 
         status_emoji = "✅" if solver_status == "optimal" else "⚡"

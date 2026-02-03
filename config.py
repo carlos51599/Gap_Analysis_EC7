@@ -33,6 +33,26 @@ from typing import Dict, Any, TypeVar, Callable, Optional
 
 T = TypeVar("T")
 
+# ═══════════════════════════════════════════════════════════════════════════
+# 📍 DYNAMIC PATH DETECTION
+# ═══════════════════════════════════════════════════════════════════════════
+# Auto-detect module location for worktree-safe paths.
+# Structure: Embankment_Grid / {Main|Worktree} / Gap_Analysis_EC7 / config.py
+#
+# This allows the same config.py to work in both:
+#   - Embankment_Grid/Main/Gap_Analysis_EC7/
+#   - Embankment_Grid/Worktree/Gap_Analysis_EC7/
+# ═══════════════════════════════════════════════════════════════════════════
+_THIS_FILE = os.path.abspath(__file__)
+_MODULE_DIR = os.path.dirname(_THIS_FILE)  # .../Gap_Analysis_EC7/
+_MODULE_NAME = os.path.basename(_MODULE_DIR)  # "Gap_Analysis_EC7"
+_BRANCH_DIR = os.path.dirname(_MODULE_DIR)  # .../Main/ or .../Worktree/
+_BRANCH_NAME = os.path.basename(_BRANCH_DIR)  # "Main" or "Worktree"
+_WORKSPACE_ROOT = os.path.dirname(_BRANCH_DIR)  # .../Embankment_Grid/
+
+# Module-relative path prefix (e.g., "Main/Gap_Analysis_EC7" or "Worktree/Gap_Analysis_EC7")
+_MODULE_PATH = f"{_BRANCH_NAME}/{_MODULE_NAME}"
+
 
 def _env_or_default(
     key: str, default: T, type_fn: Optional[Callable[[str], T]] = None
@@ -770,7 +790,7 @@ CONFIG: Dict[str, Any] = {
         # unless explicitly overridden in this section's "ilp" subsection.
         "cell_boundary_consolidation": {
             # Master switch for third pass cell-cell CZRC
-            "enabled": True,
+            "enabled": False,
             # Tier 1 multiplier (same as zone CZRC - inherit from parent)
             "tier1_rmax_multiplier": 1.0,
             # Tier 2 multiplier (same as zone CZRC - inherit from parent)
@@ -879,8 +899,8 @@ CONFIG: Dict[str, Any] = {
         # Use when you've changed algorithm implementation details (ILP logic, etc.)
         # that aren't captured in the cache fingerprint
         "force_overwrite": True,
-        # Cache storage directory (relative to workspace root)
-        "cache_dir": "Gap_Analysis_EC7/cache",
+        # Cache storage directory (auto-detected: {Branch}/Gap_Analysis_EC7/cache)
+        "cache_dir": f"{_MODULE_PATH}/cache",
         # Maximum cache entries to keep (oldest are pruned)
         "max_cache_entries": 10,
         # Auto-expire cache entries older than this
@@ -892,11 +912,12 @@ CONFIG: Dict[str, Any] = {
     # 📂 FILE PATHS (Rarely changed - at bottom)
     # ═══════════════════════════════════════════════════════════════════════
     # MODIFICATION POINT: Update these paths for your project
+    # NOTE: output_dir and log_dir use _MODULE_PATH for worktree-safe isolation
     "file_paths": {
         "embankment_shp": "LocationGroupsZones/LocationGroupsZones.shp",
         "boreholes_csv": "Openground CSVs/GIR Location Group/Location Details.csv",
-        "output_dir": "Gap_Analysis_EC7/Output",
-        "log_dir": "Gap_Analysis_EC7/logs",
+        "output_dir": f"{_MODULE_PATH}/Output",
+        "log_dir": f"{_MODULE_PATH}/logs",
     },
     # ═══════════════════════════════════════════════════════════════════════
     # 🎨 VISUALIZATION SETTINGS (Rarely changed - at bottom)

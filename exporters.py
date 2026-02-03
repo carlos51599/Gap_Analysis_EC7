@@ -1575,13 +1575,18 @@ def export_run_stats_summary(
                 z_area = zone_info.get("area_ha", 0) if isinstance(zone_info, dict) else 0
                 z_max_spacing = zone_info.get("max_spacing_m", "N/A") if isinstance(zone_info, dict) else "N/A"
 
-                # Extract stall detection info
+                # Extract stall detection info (primary source for MIP gap)
                 stall_det = z_stats.get("stall_detection", {})
                 final_gap = stall_det.get("final_gap_pct", None) if stall_det else None
                 term_reason = stall_det.get("termination_reason", None) if stall_det else None
                 solve_time = z_stats.get("total_time", 0)
 
-                gap_str = f"{final_gap:.1f}%" if final_gap is not None else "0%"
+                # Fallback: use final_mip_gap_pct from solver info if stall detection missed it
+                if final_gap is None:
+                    final_gap = z_stats.get("final_mip_gap_pct", None)
+
+                # Use N/A for unknown gaps (shouldn't happen with updated solver)
+                gap_str = f"{final_gap:.1f}%" if final_gap is not None else "N/A"
                 term_str = term_reason if term_reason else "Optimal"
                 lines.append(f"| {zone_name} | {z_boreholes} | {gap_str} | {solve_time:.2f}s | {term_str} | {z_area:.1f} | {z_max_spacing}m |")
         else:
@@ -1674,8 +1679,11 @@ def export_run_stats_summary(
                         stall_det = ilp_stats.get("stall_detection", {})
                         c_gap = stall_det.get("final_gap_pct")
                         c_term = stall_det.get("termination_reason")
-                        # Format gap (None = Optimal = 0%)
-                        gap_str = f"{c_gap:.1f}%" if c_gap is not None else "0%"
+                        # Fallback: use final_mip_gap_pct from ilp_stats if stall detection missed it
+                        if c_gap is None:
+                            c_gap = ilp_stats.get("final_mip_gap_pct")
+                        # Format gap (use N/A if still unknown)
+                        gap_str = f"{c_gap:.1f}%" if c_gap is not None else "N/A"
                         # Format termination (None = Optimal)
                         term_str = c_term if c_term else "Optimal"
                         # Truncate long cluster keys for readability
@@ -1759,7 +1767,11 @@ def export_run_stats_summary(
                         cp_stall = cp_ilp.get("stall_detection", {})
                         cp_gap = cp_stall.get("final_gap_pct")
                         cp_term = cp_stall.get("termination_reason")
-                        gap_str = f"{cp_gap:.1f}%" if cp_gap is not None else "0%"
+                        # Fallback: use final_mip_gap_pct from ilp_stats if stall detection missed it
+                        if cp_gap is None:
+                            cp_gap = cp_ilp.get("final_mip_gap_pct")
+                        # Format gap (use N/A if still unknown)
+                        gap_str = f"{cp_gap:.1f}%" if cp_gap is not None else "N/A"
                         term_str = cp_term if cp_term else "Optimal"
                         # Truncate long names
                         display_name = cpair_name if len(cpair_name) < 30 else cpair_name[:27] + "..."
@@ -1815,7 +1827,9 @@ def export_run_stats_summary(
                 pct_reduction = abs(total_change) / p1_count * 100
                 lines.append(f"- **Consolidation Efficiency:** {pct_reduction:.1f}%")
 
-        # Coverage stats
+        # Coverage stats (INITIAL gaps before adding proposed boreholes)
+        # These stats represent the gaps that were identified for borehole placement.
+        # After adding proposed boreholes, coverage should approach 100%.
         stats_dict = coverage_data.get("stats", {})
         if stats_dict:
             gap_area = stats_dict.get("gap_area_ha", 0)
@@ -1823,9 +1837,10 @@ def export_run_stats_summary(
             gap_count = stats_dict.get("gap_count", 0)
             total_area = gap_area + covered_area
             if total_area > 0:
-                gap_pct = gap_area / total_area * 100
-                lines.append(f"- **Gap Percentage:** {gap_pct:.1f}% ({gap_area:.1f} ha / {total_area:.1f} ha)")
-            lines.append(f"- **Number of Gaps:** {gap_count}")
+                # Show initial coverage percentage (what existing filtered boreholes covered)
+                coverage_pct = covered_area / total_area * 100
+                lines.append(f"- **Initial Coverage (Filtered BHs):** {coverage_pct:.1f}% ({covered_area:.1f} ha / {total_area:.1f} ha)")
+            lines.append(f"- **Initial Gap Polygons:** {gap_count}")
 
         lines.append("")
 

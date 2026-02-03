@@ -30,10 +30,13 @@ import geopandas as gpd
 from shapely.geometry import Point
 
 # Add parent directory to path for imports
+# Structure: Embankment_Grid / {Main|Worktree} / Gap_Analysis_EC7 / main.py
+# Go up 2 levels to reach {Main|Worktree} for module imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# Workspace root for resolving config paths
-WORKSPACE_ROOT = Path(__file__).parent.parent
+# Workspace root for resolving config paths (shared resources)
+# Go up 3 levels to reach Embankment_Grid where shared resources live
+WORKSPACE_ROOT = Path(__file__).parent.parent.parent
 
 from Gap_Analysis_EC7.config import CONFIG
 from Gap_Analysis_EC7.config_types import AppConfig, VisualizationConfig
