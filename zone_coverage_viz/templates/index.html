@@ -1,0 +1,784 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zone Coverage Visualization</title>
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+        
+        #map {
+            width: 100%;
+            height: 100vh;
+            background: #f5f5f5;
+        }
+        
+        .info-panel {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            z-index: 1000;
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+            max-width: 300px;
+            font-size: 14px;
+        }
+        
+        .info-panel h3 {
+            margin-bottom: 10px;
+            color: #333;
+        }
+        
+        .info-panel .stat {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+        }
+        
+        .info-panel .stat-label {
+            color: #666;
+        }
+        
+        .info-panel .stat-value {
+            font-weight: bold;
+            color: #333;
+        }
+        
+        .info-panel .divider {
+            border-top: 1px solid #eee;
+            margin: 10px 0;
+        }
+        
+        .zone-legend {
+            margin-top: 10px;
+        }
+        
+        .zone-legend-item {
+            display: flex;
+            align-items: center;
+            margin-bottom: 5px;
+        }
+        
+        .zone-legend-color {
+            width: 16px;
+            height: 16px;
+            margin-right: 8px;
+            border-radius: 3px;
+        }
+        
+        .loading-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(255,255,255,0.9);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 2000;
+        }
+        
+        .loading-spinner {
+            text-align: center;
+        }
+        
+        .loading-spinner .spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #3498db;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .borehole-marker {
+            width: 10px;
+            height: 10px;
+            background: #000000;
+            border: none;
+            border-radius: 50%;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+            cursor: grab;
+        }
+        
+        .borehole-marker:active {
+            cursor: grabbing;
+        }
+        
+        .borehole-marker.dragging {
+            opacity: 0.7;
+            transform: scale(1.2);
+        }
+        
+        .toggle-row {
+            margin: 5px 0;
+        }
+        
+        .toggle-label {
+            display: flex;
+            align-items: center;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        
+        .toggle-label input {
+            margin-right: 8px;
+            cursor: pointer;
+        }
+        
+        .action-buttons {
+            margin-top: 10px;
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        
+        .action-btn {
+            padding: 8px 12px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 500;
+            transition: background 0.2s, opacity 0.2s;
+        }
+        
+        .action-btn:hover {
+            opacity: 0.9;
+        }
+        
+        .action-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .btn-undo {
+            background: #95a5a6;
+            color: white;
+        }
+        
+        .btn-add {
+            background: #27ae60;
+            color: white;
+        }
+        
+        .btn-add.active {
+            background: #e74c3c;
+        }
+        
+        .add-mode-indicator {
+            position: absolute;
+            top: 50px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #27ae60;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: bold;
+            z-index: 1000;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+            display: none;
+        }
+        
+        .help-text {
+            font-size: 11px;
+            color: #888;
+            margin-top: 8px;
+            line-height: 1.4;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    
+    <div class="add-mode-indicator" id="addModeIndicator">
+        📍 Click on map to add borehole (ESC to cancel)
+    </div>
+    
+    <div class="info-panel" id="infoPanel">
+        <h3>Zone Coverage</h3>
+        <div class="stat">
+            <span class="stat-label">Boreholes:</span>
+            <span class="stat-value" id="boreholeCount">-</span>
+        </div>
+        <div class="stat">
+            <span class="stat-label">Zones:</span>
+            <span class="stat-value" id="zoneCount">-</span>
+        </div>
+        <div class="divider"></div>
+        <div class="action-buttons">
+            <button class="action-btn btn-undo" id="undoBtn" disabled title="Undo last action">
+                ↩ Undo
+            </button>
+            <button class="action-btn btn-add" id="addBoreholeBtn" title="Add new borehole">
+                + Add Borehole
+            </button>
+        </div>
+        <div class="help-text">
+            <strong>Shift+Click</strong> on borehole to delete
+        </div>
+        <div class="divider"></div>
+        <div class="toggle-row">
+            <label class="toggle-label">
+                <input type="checkbox" id="toggleBaseMap" checked>
+                <span>Show Background Map</span>
+            </label>
+        </div>
+        <div class="divider"></div>
+        <div id="selectedBorehole" style="display: none;">
+            <h4 style="margin-bottom: 5px;">Selected Borehole</h4>
+            <div class="stat">
+                <span class="stat-label">ID:</span>
+                <span class="stat-value" id="selectedId">-</span>
+            </div>
+            <div class="stat">
+                <span class="stat-label">Zone:</span>
+                <span class="stat-value" id="selectedZone">-</span>
+            </div>
+            <div class="stat">
+                <span class="stat-label">Radius:</span>
+                <span class="stat-value" id="selectedRadius">-</span>
+            </div>
+        </div>
+        <div class="zone-legend" id="zoneLegend"></div>
+    </div>
+    
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="loading-spinner">
+            <div class="spinner"></div>
+            <div>Loading data...</div>
+        </div>
+    </div>
+    
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    
+    <script>
+        // ═══════════════════════════════════════════════════════════════════
+        // 🗺️ MAP INITIALIZATION
+        // ═══════════════════════════════════════════════════════════════════
+        
+        // Initialize map (centered on UK)
+        const map = L.map('map').setView([51.5, -1.0], 14);
+        
+        // Add base layer (OpenStreetMap) with very reduced opacity
+        const baseLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; OpenStreetMap contributors',
+            opacity: 0.25
+        }).addTo(map);
+        
+        // Layer groups
+        const zonesLayer = L.geoJSON(null, {
+            style: {
+                color: '#666666',
+                weight: 2,
+                opacity: 0.8,
+                fillColor: '#ffffff',
+                fillOpacity: 1
+            },
+            onEachFeature: (feature, layer) => {
+                const props = feature.properties || {};
+                layer.bindPopup(`
+                    <strong>${props.display_name || 'Zone'}</strong><br>
+                    Max Spacing: ${props.max_spacing_m || 100}m
+                `);
+            }
+        });
+        
+        // Existing borehole coverage (green, below proposed)
+        const existingCoverageLayer = L.geoJSON(null, {
+            style: {
+                color: '#27ae60',
+                weight: 2,
+                opacity: 0.7,
+                fillColor: '#2ecc71',
+                fillOpacity: 0.35
+            }
+        });
+        
+        const coverageLayer = L.geoJSON(null, {
+            style: {
+                color: '#2980b9',
+                weight: 3,
+                opacity: 0.8,
+                fillColor: '#3498db',
+                fillOpacity: 0.25
+            }
+        });
+        
+        const boreholesLayer = L.layerGroup();
+        
+        // Add layers to map in order (zones at bottom, existing coverage, proposed coverage, boreholes on top)
+        zonesLayer.addTo(map);
+        existingCoverageLayer.addTo(map);
+        coverageLayer.addTo(map);
+        boreholesLayer.addTo(map);
+        
+        // ═══════════════════════════════════════════════════════════════════
+        // 📊 DATA STORAGE
+        // ═══════════════════════════════════════════════════════════════════
+        
+        let boreholeMarkers = [];
+        let zonesData = null;
+        let boreholesData = null;
+        
+        // Undo history stack
+        let undoHistory = [];
+        const MAX_UNDO_HISTORY = 50;
+        
+        // Add borehole mode
+        let addBoreholeMode = false;
+        
+        // Zone colors
+        const zoneColors = {
+            'Embankment': '#e74c3c',
+            'Highways': '#3498db'
+        };
+        
+        // ═══════════════════════════════════════════════════════════════════
+        // 🔄 API FUNCTIONS
+        // ═══════════════════════════════════════════════════════════════════
+        
+        async function fetchZones() {
+            try {
+                const response = await fetch('/api/zones');
+                const data = await response.json();
+                return data;
+            } catch (error) {
+                console.error('Failed to fetch zones:', error);
+                return { type: 'FeatureCollection', features: [] };
+            }
+        }
+        
+        async function fetchBoreholes() {
+            try {
+                const response = await fetch('/api/boreholes');
+                const data = await response.json();
+                return data;
+            } catch (error) {
+                console.error('Failed to fetch boreholes:', error);
+                return { type: 'FeatureCollection', features: [] };
+            }
+        }
+        
+        async function fetchAllCoverages() {
+            try {
+                const response = await fetch('/api/coverage/all');
+                const data = await response.json();
+                return data;
+            } catch (error) {
+                console.error('Failed to fetch coverages:', error);
+                return { type: 'FeatureCollection', features: [] };
+            }
+        }
+        
+        async function fetchExistingCoverage() {
+            try {
+                const response = await fetch('/api/existing-coverage');
+                const data = await response.json();
+                return data;
+            } catch (error) {
+                console.error('Failed to fetch existing coverage:', error);
+                return { type: 'FeatureCollection', features: [] };
+            }
+        }
+        
+        async function updateBoreholePosition(index, lon, lat) {
+            try {
+                const response = await fetch('/api/coverage/update', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ index, lon, lat })
+                });
+                const data = await response.json();
+                return data;
+            } catch (error) {
+                console.error('Failed to update borehole:', error);
+                return null;
+            }
+        }
+        
+        async function deleteBorehole(index) {
+            try {
+                const response = await fetch('/api/borehole/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ index })
+                });
+                const data = await response.json();
+                return data;
+            } catch (error) {
+                console.error('Failed to delete borehole:', error);
+                return null;
+            }
+        }
+        
+        async function addNewBorehole(lon, lat, locationId = null) {
+            try {
+                const body = { lon, lat };
+                if (locationId) body.location_id = locationId;
+                
+                const response = await fetch('/api/borehole/add', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                const data = await response.json();
+                return data;
+            } catch (error) {
+                console.error('Failed to add borehole:', error);
+                return null;
+            }
+        }
+        
+        // ═══════════════════════════════════════════════════════════════════
+        // 🔄 UNDO SYSTEM
+        // ═══════════════════════════════════════════════════════════════════
+        
+        function saveStateForUndo() {
+            // Deep clone current boreholes data
+            const snapshot = JSON.parse(JSON.stringify(boreholesData));
+            undoHistory.push(snapshot);
+            
+            // Limit history size
+            if (undoHistory.length > MAX_UNDO_HISTORY) {
+                undoHistory.shift();
+            }
+            
+            updateUndoButton();
+        }
+        
+        function updateUndoButton() {
+            const undoBtn = document.getElementById('undoBtn');
+            undoBtn.disabled = undoHistory.length === 0;
+        }
+        
+        async function performUndo() {
+            if (undoHistory.length === 0) return;
+            
+            const previousState = undoHistory.pop();
+            boreholesData = previousState;
+            
+            // Re-render boreholes
+            renderBoreholes(boreholesData);
+            
+            // Re-compute coverages
+            const coverages = await fetchAllCoverages();
+            renderCoverages(coverages);
+            
+            updateUndoButton();
+            console.log('↩️ Undo performed');
+        }
+        
+        // ═══════════════════════════════════════════════════════════════════
+        // 🎨 RENDERING FUNCTIONS
+        // ═══════════════════════════════════════════════════════════════════
+        
+        function renderZones(geojson) {
+            zonesLayer.clearLayers();
+            zonesLayer.addData(geojson);
+            
+            // Update info panel
+            document.getElementById('zoneCount').textContent = geojson.features.length;
+            
+            // Build legend
+            const legendEl = document.getElementById('zoneLegend');
+            const uniqueZones = {};
+            geojson.features.forEach(f => {
+                const name = f.properties.display_name || 'Zone';
+                const spacing = f.properties.max_spacing_m || 100;
+                if (!uniqueZones[name]) {
+                    uniqueZones[name] = spacing;
+                }
+            });
+            
+            legendEl.innerHTML = Object.entries(uniqueZones).map(([name, spacing]) => `
+                <div class="zone-legend-item">
+                    <div class="zone-legend-color" style="background: ${zoneColors[name] || '#3498db'}"></div>
+                    <span>${name} (${spacing}m)</span>
+                </div>
+            `).join('');
+        }
+        
+        function renderBoreholes(geojson) {
+            boreholesLayer.clearLayers();
+            boreholeMarkers = [];
+            
+            geojson.features.forEach((feature, index) => {
+                const coords = feature.geometry.coordinates;
+                const [lon, lat] = coords;
+                
+                // Create custom marker
+                const icon = L.divIcon({
+                    className: 'borehole-marker',
+                    iconSize: [12, 12],
+                    iconAnchor: [6, 6]
+                });
+                
+                const marker = L.marker([lat, lon], {
+                    icon: icon,
+                    draggable: true,
+                    autoPan: true
+                });
+                
+                // Store metadata
+                marker.boreholeIndex = index;
+                marker.boreholeId = feature.properties.location_id || `PROP_${index}`;
+                
+                // Bind popup
+                marker.bindPopup(`<strong>${marker.boreholeId}</strong>`);
+                
+                // Handle drag events
+                marker.on('dragstart', () => {
+                    // Save state BEFORE dragging for undo
+                    saveStateForUndo();
+                    marker._icon.classList.add('dragging');
+                });
+                
+                marker.on('dragend', async (e) => {
+                    marker._icon.classList.remove('dragging');
+                    
+                    const newLatLng = e.target.getLatLng();
+                    const result = await updateBoreholePosition(
+                        marker.boreholeIndex,
+                        newLatLng.lng,
+                        newLatLng.lat
+                    );
+                    
+                    if (result && result.coverage) {
+                        // Update local data
+                        boreholesData.features[marker.boreholeIndex].geometry.coordinates = [newLatLng.lng, newLatLng.lat];
+                        
+                        // Update single coverage polygon
+                        updateSingleCoverage(marker.boreholeIndex, result.coverage);
+                        
+                        // Update info panel
+                        showBoreholeInfo(marker, result.zone_info);
+                    }
+                });
+                
+                // Shift+Click to delete
+                marker.on('click', async (e) => {
+                    if (e.originalEvent.shiftKey) {
+                        // Save state for undo before deleting
+                        saveStateForUndo();
+                        
+                        const result = await deleteBorehole(marker.boreholeIndex);
+                        if (result && result.success) {
+                            // Update local data
+                            boreholesData = result.boreholes;
+                            
+                            // Re-render boreholes with new indices
+                            renderBoreholes(boreholesData);
+                            
+                            // Refresh all coverages
+                            const coverages = await fetchAllCoverages();
+                            renderCoverages(coverages);
+                            
+                            console.log(`🗑️ Deleted borehole ${marker.boreholeId}`);
+                        }
+                    } else {
+                        showBoreholeInfo(marker, null);
+                    }
+                });
+                
+                marker.addTo(boreholesLayer);
+                boreholeMarkers.push(marker);
+            });
+            
+            // Update info panel
+            document.getElementById('boreholeCount').textContent = geojson.features.length;
+        }
+        
+        function renderCoverages(geojson) {
+            coverageLayer.clearLayers();
+            coverageLayer.addData(geojson);
+        }
+        
+        function renderExistingCoverage(geojson) {
+            existingCoverageLayer.clearLayers();
+            if (geojson && geojson.features && geojson.features.length > 0) {
+                existingCoverageLayer.addData(geojson);
+                console.log(`✅ Rendered ${geojson.features.length} existing coverage polygons`);
+            }
+        }
+        
+        function updateSingleCoverage(boreholeIndex, coverage) {
+            // Remove old coverage for this borehole
+            coverageLayer.eachLayer(layer => {
+                if (layer.feature?.properties?.borehole_index === boreholeIndex) {
+                    coverageLayer.removeLayer(layer);
+                }
+            });
+            
+            // Add new coverage
+            if (coverage && coverage.geometry) {
+                coverage.properties = coverage.properties || {};
+                coverage.properties.borehole_index = boreholeIndex;
+                coverageLayer.addData(coverage);
+            }
+        }
+        
+        function showBoreholeInfo(marker, zoneInfo) {
+            const panel = document.getElementById('selectedBorehole');
+            panel.style.display = 'block';
+            
+            document.getElementById('selectedId').textContent = marker.boreholeId;
+            
+            if (zoneInfo) {
+                const zones = Object.keys(zoneInfo);
+                document.getElementById('selectedZone').textContent = zones.join(', ') || 'Outside zones';
+                
+                const radii = Object.values(zoneInfo);
+                document.getElementById('selectedRadius').textContent = 
+                    radii.length > 0 ? radii.map(r => `${r}m`).join(', ') : '-';
+            } else {
+                document.getElementById('selectedZone').textContent = '-';
+                document.getElementById('selectedRadius').textContent = '-';
+            }
+        }
+        
+        // ═══════════════════════════════════════════════════════════════════
+        // 🚀 INITIALIZATION
+        // ═══════════════════════════════════════════════════════════════════
+        
+        async function initialize() {
+            const loadingOverlay = document.getElementById('loadingOverlay');
+            
+            try {
+                // Load zones
+                zonesData = await fetchZones();
+                renderZones(zonesData);
+                
+                // Load existing coverage (green, from main.py output)
+                const existingCoverage = await fetchExistingCoverage();
+                renderExistingCoverage(existingCoverage);
+                
+                // Load boreholes
+                boreholesData = await fetchBoreholes();
+                renderBoreholes(boreholesData);
+                
+                // Load initial coverages (blue, proposed)
+                const coverages = await fetchAllCoverages();
+                renderCoverages(coverages);
+                
+                // Fit map to zones bounds
+                if (zonesLayer.getBounds().isValid()) {
+                    map.fitBounds(zonesLayer.getBounds(), { padding: [20, 20] });
+                }
+                
+                console.log('✅ Initialization complete');
+                
+            } catch (error) {
+                console.error('❌ Initialization failed:', error);
+                alert('Failed to load data. Check console for details.');
+            } finally {
+                loadingOverlay.style.display = 'none';
+            }
+        }
+        
+        // Start initialization
+        initialize();
+        
+        // Toggle base map visibility
+        document.getElementById('toggleBaseMap').addEventListener('change', function() {
+            if (this.checked) {
+                baseLayer.setOpacity(0.25);
+            } else {
+                baseLayer.setOpacity(0);
+            }
+        });
+        
+        // ═══════════════════════════════════════════════════════════════════
+        // 🔘 BUTTON HANDLERS
+        // ═══════════════════════════════════════════════════════════════════
+        
+        // Undo button
+        document.getElementById('undoBtn').addEventListener('click', performUndo);
+        
+        // Add borehole button
+        document.getElementById('addBoreholeBtn').addEventListener('click', function() {
+            addBoreholeMode = !addBoreholeMode;
+            
+            const btn = this;
+            const indicator = document.getElementById('addModeIndicator');
+            
+            if (addBoreholeMode) {
+                btn.classList.add('active');
+                btn.textContent = '✕ Cancel';
+                indicator.style.display = 'block';
+                map.getContainer().style.cursor = 'crosshair';
+            } else {
+                btn.classList.remove('active');
+                btn.textContent = '+ Add Borehole';
+                indicator.style.display = 'none';
+                map.getContainer().style.cursor = '';
+            }
+        });
+        
+        // ESC key to cancel add mode
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape' && addBoreholeMode) {
+                document.getElementById('addBoreholeBtn').click();
+            }
+        });
+        
+        // Map click handler for adding boreholes
+        map.on('click', async function(e) {
+            if (!addBoreholeMode) return;
+            
+            const lat = e.latlng.lat;
+            const lon = e.latlng.lng;
+            
+            // Save state for undo
+            saveStateForUndo();
+            
+            // Add the borehole
+            const result = await addNewBorehole(lon, lat);
+            
+            if (result && result.success) {
+                // Update local data
+                boreholesData = result.boreholes;
+                
+                // Re-render all boreholes
+                renderBoreholes(boreholesData);
+                
+                // Add the new coverage
+                if (result.coverage) {
+                    result.coverage.properties = result.coverage.properties || {};
+                    result.coverage.properties.borehole_index = result.index;
+                    coverageLayer.addData(result.coverage);
+                }
+                
+                console.log(`➕ Added borehole at (${lon.toFixed(6)}, ${lat.toFixed(6)})`);
+            }
+            
+            // Exit add mode after adding
+            document.getElementById('addBoreholeBtn').click();
+        });
+    </script>
+</body>
+</html>

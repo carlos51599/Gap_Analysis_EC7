@@ -424,3 +424,95 @@ class DataLoader:
                 features[index]["geometry"]["coordinates"] = [lon, lat]
 
         logger.debug(f"Updated borehole {index} to ({x:.2f}, {y:.2f})")
+
+    def delete_borehole(self, index: int) -> bool:
+        """
+        Delete a borehole by index.
+
+        Args:
+            index: Borehole index (0-based)
+
+        Returns:
+            True if deleted successfully, False otherwise.
+        """
+        if self._boreholes_gdf is None or index >= len(self._boreholes_gdf):
+            logger.warning(f"Invalid borehole index for deletion: {index}")
+            return False
+
+        # Delete from GeoDataFrame
+        self._boreholes_gdf = self._boreholes_gdf.drop(index).reset_index(drop=True)
+
+        # Also delete from JSON data if present
+        if self._boreholes_data is not None:
+            features = self._boreholes_data.get("features", [])
+            if index < len(features):
+                features.pop(index)
+                # Re-index remaining features
+                for i, feature in enumerate(features):
+                    feature["properties"]["index"] = i
+
+        logger.info(f"🗑️ Deleted borehole at index {index}")
+        return True
+
+    def add_borehole(
+        self,
+        lon: float,
+        lat: float,
+        location_id: Optional[str] = None,
+    ) -> int:
+        """
+        Add a new borehole at the specified location.
+
+        Args:
+            lon: Longitude in WGS84
+            lat: Latitude in WGS84
+            location_id: Optional location ID (auto-generated if not provided)
+
+        Returns:
+            Index of the newly added borehole.
+        """
+        # Convert WGS84 to BNG
+        x, y = self._wgs84_to_bng.transform(lon, lat)
+
+        # Generate location ID if not provided
+        new_index = len(self._boreholes_gdf) if self._boreholes_gdf is not None else 0
+        if location_id is None:
+            location_id = f"NEW_{new_index:03d}"
+
+        # Create new row
+        new_row = gpd.GeoDataFrame(
+            [{"Location_ID": location_id, "index": new_index}],
+            geometry=[Point(x, y)],
+            crs=CRS_BNG,
+        )
+
+        # Add to GeoDataFrame
+        if self._boreholes_gdf is None or self._boreholes_gdf.empty:
+            self._boreholes_gdf = new_row
+        else:
+            self._boreholes_gdf = pd.concat(
+                [self._boreholes_gdf, new_row], ignore_index=True
+            )
+
+        # Also add to JSON data if present
+        if self._boreholes_data is not None:
+            new_feature = {
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [lon, lat]},
+                "properties": {"index": new_index, "location_id": location_id},
+            }
+            self._boreholes_data.setdefault("features", []).append(new_feature)
+
+        logger.info(f"➕ Added borehole {location_id} at ({lon:.6f}, {lat:.6f})")
+        return new_index
+
+    def restore_state(self, boreholes_geojson: Dict[str, Any]) -> None:
+        """
+        Restore boreholes state from a GeoJSON snapshot (for undo).
+
+        Args:
+            boreholes_geojson: GeoJSON FeatureCollection to restore.
+        """
+        self._boreholes_data = boreholes_geojson
+        self._boreholes_gdf = self._geojson_to_gdf(boreholes_geojson, CRS_BNG)
+        logger.info(f"🔄 Restored state with {len(self._boreholes_gdf)} boreholes")

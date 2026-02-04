@@ -170,6 +170,89 @@ def update_borehole_coverage() -> Dict[str, Any]:
     return jsonify({"coverage": coverage, "zone_info": zone_info})
 
 
+@app.route("/api/borehole/delete", methods=["POST"])
+def delete_borehole() -> Dict[str, Any]:
+    """
+    Delete a borehole by index.
+
+    Request Body:
+        {
+            "index": int   # Borehole index (0-based)
+        }
+
+    Returns:
+        {
+            "success": bool,
+            "boreholes": GeoJSON FeatureCollection (updated list)
+        }
+    """
+    if data_loader is None:
+        return jsonify({"error": "Server not initialized"}), 500
+
+    data = request.get_json()
+    if not data or "index" not in data:
+        return jsonify({"error": "Missing index in request body"}), 400
+
+    index = int(data["index"])
+    success = data_loader.delete_borehole(index)
+
+    if success:
+        boreholes = data_loader.get_boreholes_geojson()
+        return jsonify({"success": True, "boreholes": boreholes})
+    else:
+        return jsonify({"success": False, "error": "Invalid index"}), 400
+
+
+@app.route("/api/borehole/add", methods=["POST"])
+def add_borehole() -> Dict[str, Any]:
+    """
+    Add a new borehole at the specified location.
+
+    Request Body:
+        {
+            "lon": float,        # Longitude (WGS84)
+            "lat": float,        # Latitude (WGS84)
+            "location_id": str   # Optional location ID
+        }
+
+    Returns:
+        {
+            "success": bool,
+            "index": int (new borehole index),
+            "coverage": GeoJSON Feature with coverage polygon,
+            "boreholes": GeoJSON FeatureCollection (updated list)
+        }
+    """
+    if coverage_service is None or data_loader is None:
+        return jsonify({"error": "Server not initialized"}), 500
+
+    data = request.get_json()
+    if not data or "lon" not in data or "lat" not in data:
+        return jsonify({"error": "Missing lon/lat in request body"}), 400
+
+    lon = float(data["lon"])
+    lat = float(data["lat"])
+    location_id = data.get("location_id")
+
+    # Add the borehole
+    new_index = data_loader.add_borehole(lon, lat, location_id)
+
+    # Compute coverage for new position
+    coverage = coverage_service.compute_coverage(lon, lat)
+
+    # Get updated boreholes list
+    boreholes = data_loader.get_boreholes_geojson()
+
+    return jsonify(
+        {
+            "success": True,
+            "index": new_index,
+            "coverage": coverage,
+            "boreholes": boreholes,
+        }
+    )
+
+
 @app.route("/api/coverage/all", methods=["GET"])
 def compute_all_coverages() -> Dict[str, Any]:
     """
