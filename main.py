@@ -1205,7 +1205,7 @@ def run_ec7_analysis() -> dict:
                 "require_triaxial_effective": filter_config.require_triaxial_effective,
             }
 
-        return _generate_html_and_summary(
+        result = _generate_html_and_summary(
             boreholes_gdf,
             zones_gdf,
             all_shapefiles,
@@ -1221,6 +1221,19 @@ def run_ec7_analysis() -> dict:
             logger,
             default_filter,
         )
+
+        # Phase 5: Generate zone_coverage_data.json for zone_coverage_viz
+        try:
+            from zone_coverage_viz.generate_zone_data import generate_zone_coverage_data
+
+            logger.info("\n📊 Generating zone_coverage_viz data...")
+            generate_zone_coverage_data()
+        except ImportError:
+            logger.warning("   ⚠️ zone_coverage_viz not available, skipping data export")
+        except Exception as e:
+            logger.warning(f"   ⚠️ Failed to generate zone_coverage_viz data: {e}")
+
+        return result
 
     except Exception as e:
         logger.error(f"❌ Analysis failed: {str(e)}")
