@@ -27,7 +27,7 @@ import logging
 from flask import Flask, jsonify, request, render_template, send_from_directory
 from flask_cors import CORS
 
-from zone_coverage_viz.config import get_frontend_config
+from zone_coverage_viz.viz_config import get_frontend_config
 from zone_coverage_viz.data_loader import DataLoader
 from zone_coverage_viz.geometry_service import CoverageService
 
