@@ -155,7 +155,7 @@ def compute_coverage() -> Dict[str, Any]:
 @app.route("/api/coverage/update", methods=["POST"])
 def update_borehole_coverage() -> Dict[str, Any]:
     """
-    Update a borehole position and recompute its coverage.
+    Update a borehole position and recompute its coverage. Returns stats (delta update).
 
     Request Body:
         {
@@ -167,7 +167,8 @@ def update_borehole_coverage() -> Dict[str, Any]:
     Returns:
         {
             "coverage": GeoJSON Feature with coverage polygon,
-            "zone_info": {zone_name: max_spacing_m} for intersected zones
+            "zone_info": {zone_name: max_spacing_m} for intersected zones,
+            "stats": coverage statistics (avoids separate call)
         }
     """
     if coverage_service is None or data_loader is None:
@@ -185,21 +186,27 @@ def update_borehole_coverage() -> Dict[str, Any]:
     index = int(data["index"])
     lon = float(data["lon"])
     lat = float(data["lat"])
+    
+    # Get borehole ID for cache
+    borehole_id = data_loader.get_borehole_id(index)
 
     # Update borehole position in data loader
     data_loader.update_borehole_position(index, lon, lat)
 
-    # Compute coverage for new position
-    coverage = coverage_service.compute_coverage(lon, lat)
+    # Compute coverage using cache (updates cache entry)
+    coverage = coverage_service.compute_coverage_cached(borehole_id, lon, lat)
     zone_info = coverage_service.get_zone_info(lon, lat)
+    
+    # Get stats from cache (includes updated coverage)
+    stats = coverage_service.get_stats_from_cache()
 
-    return jsonify({"coverage": coverage, "zone_info": zone_info})
+    return jsonify({"coverage": coverage, "zone_info": zone_info, "stats": stats})
 
 
 @app.route("/api/borehole/delete", methods=["POST"])
 def delete_borehole() -> Dict[str, Any]:
     """
-    Delete a borehole by index.
+    Delete a borehole by index. Returns updated stats (delta update pattern).
 
     Request Body:
         {
@@ -209,10 +216,12 @@ def delete_borehole() -> Dict[str, Any]:
     Returns:
         {
             "success": bool,
-            "boreholes": GeoJSON FeatureCollection (updated list)
+            "boreholes": GeoJSON FeatureCollection (updated list),
+            "deleted_id": str (ID of deleted borehole),
+            "stats": coverage statistics (avoids separate /api/coverage/stats call)
         }
     """
-    if data_loader is None:
+    if data_loader is None or coverage_service is None:
         return jsonify({"error": "Server not initialized"}), 500
 
     data = request.get_json()
@@ -220,11 +229,26 @@ def delete_borehole() -> Dict[str, Any]:
         return jsonify({"error": "Missing index in request body"}), 400
 
     index = int(data["index"])
-    success = data_loader.delete_borehole(index)
+    
+    # Delete and get the borehole ID
+    deleted_id = data_loader.delete_borehole(index)
 
-    if success:
+    if deleted_id:
+        # Invalidate cache for deleted borehole
+        coverage_service.invalidate_cache(deleted_id)
+        
+        # Get updated boreholes
         boreholes = data_loader.get_boreholes_geojson()
-        return jsonify({"success": True, "boreholes": boreholes})
+        
+        # Get stats from cache (fast - no re-computation needed)
+        stats = coverage_service.get_stats_from_cache()
+        
+        return jsonify({
+            "success": True, 
+            "boreholes": boreholes,
+            "deleted_id": deleted_id,
+            "stats": stats
+        })
     else:
         return jsonify({"success": False, "error": "Invalid index"}), 400
 
@@ -232,7 +256,7 @@ def delete_borehole() -> Dict[str, Any]:
 @app.route("/api/borehole/add", methods=["POST"])
 def add_borehole() -> Dict[str, Any]:
     """
-    Add a new borehole at the specified location.
+    Add a new borehole at the specified location. Returns stats (delta update pattern).
 
     Request Body:
         {
@@ -245,8 +269,10 @@ def add_borehole() -> Dict[str, Any]:
         {
             "success": bool,
             "index": int (new borehole index),
+            "borehole_id": str (new borehole's ID),
             "coverage": GeoJSON Feature with coverage polygon,
-            "boreholes": GeoJSON FeatureCollection (updated list)
+            "boreholes": GeoJSON FeatureCollection (updated list),
+            "stats": coverage statistics (avoids separate call)
         }
     """
     if coverage_service is None or data_loader is None:
@@ -262,19 +288,27 @@ def add_borehole() -> Dict[str, Any]:
 
     # Add the borehole
     new_index = data_loader.add_borehole(lon, lat, location_id)
+    
+    # Get the assigned ID
+    borehole_id = data_loader.get_borehole_id(new_index)
 
-    # Compute coverage for new position
-    coverage = coverage_service.compute_coverage(lon, lat)
+    # Compute coverage using cache (will be stored)
+    coverage = coverage_service.compute_coverage_cached(borehole_id, lon, lat)
 
     # Get updated boreholes list
     boreholes = data_loader.get_boreholes_geojson()
+    
+    # Get stats from cache (includes the new borehole)
+    stats = coverage_service.get_stats_from_cache()
 
     return jsonify(
         {
             "success": True,
             "index": new_index,
+            "borehole_id": borehole_id,
             "coverage": coverage,
             "boreholes": boreholes,
+            "stats": stats,
         }
     )
 
@@ -283,26 +317,32 @@ def add_borehole() -> Dict[str, Any]:
 def compute_all_coverages() -> Dict[str, Any]:
     """
     Compute coverage polygons for all boreholes at their current positions.
+    Uses caching for performance. Also returns stats to avoid separate call.
 
     Returns:
-        GeoJSON FeatureCollection with coverage polygons for all boreholes.
+        {
+            "type": "FeatureCollection",
+            "features": [...coverage polygons...],
+            "stats": coverage statistics
+        }
     """
     if coverage_service is None or data_loader is None:
         return jsonify({"error": "Server not initialized"}), 500
 
     boreholes = data_loader.get_boreholes_geojson()
-    coverages = []
-
-    for i, feature in enumerate(boreholes.get("features", [])):
-        coords = feature.get("geometry", {}).get("coordinates", [])
-        if len(coords) >= 2:
-            lon, lat = coords[0], coords[1]
-            coverage = coverage_service.compute_coverage(lon, lat)
-            if coverage:
-                coverage["properties"]["borehole_index"] = i
-                coverages.append(coverage)
-
-    return jsonify({"type": "FeatureCollection", "features": coverages})
+    
+    # Use cached computation (populates cache for future delta updates)
+    coverages_fc = coverage_service.compute_all_coverages_and_cache(boreholes)
+    
+    # Get stats from cache (fast after caching)
+    stats = coverage_service.get_stats_from_cache()
+    
+    # Return both coverages and stats in one response
+    return jsonify({
+        "type": "FeatureCollection",
+        "features": coverages_fc.get("features", []),
+        "stats": stats
+    })
 
 
 @app.route("/api/coverage/stats", methods=["GET"])

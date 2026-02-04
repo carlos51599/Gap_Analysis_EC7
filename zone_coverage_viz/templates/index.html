@@ -204,7 +204,7 @@
         .coverage-stats {
             margin-top: 10px;
             padding: 10px;
-            background: #f8f9fa;
+            background: white;
             border-radius: 6px;
         }
         
@@ -592,15 +592,17 @@
             // Re-render boreholes
             renderBoreholes(boreholesData);
             
-            // Re-compute coverages
-            const coverages = await fetchAllCoverages();
-            renderCoverages(coverages);
+            // Re-compute coverages (this uses cache and includes stats)
+            const coverageData = await fetchAllCoverages();
+            renderCoverages(coverageData);
+            
+            // Use stats from response if available (delta update)
+            if (coverageData.stats) {
+                renderCoverageStats(coverageData.stats);
+            }
             
             updateUndoButton();
             console.log('↩️ Undo performed');
-            
-            // Refresh coverage stats
-            await refreshCoverageStats();
         }
         
         // ═══════════════════════════════════════════════════════════════════
@@ -633,6 +635,12 @@
         
         async function refreshCoverageStats() {
             const stats = await fetchCoverageStats();
+            if (!stats) return;
+            renderCoverageStats(stats);
+        }
+        
+        function renderCoverageStats(stats) {
+            // Render stats to UI - can be called directly with stats from other endpoints
             if (!stats) return;
             
             const container = document.getElementById('coverageStatsContent');
@@ -776,9 +784,6 @@
                 grabCircle.visibleCircle = visibleCircle;
                 grabCircle.markerGroup = markerGroup;
                 
-                // Bind popup to grab circle
-                grabCircle.bindPopup(`<strong>${boreholeId}</strong>`);
-                
                 // Custom drag handling
                 let isDragging = false;
                 let dragStartLatLng = null;
@@ -842,8 +847,10 @@
                             // Update info panel
                             showBoreholeInfo(grabCircle, result.zone_info);
                             
-                            // Refresh coverage stats
-                            await refreshCoverageStats();
+                            // Update stats from response (delta update - no extra API call)
+                            if (result.stats) {
+                                renderCoverageStats(result.stats);
+                            }
                         }
                     }
                 }
@@ -854,7 +861,11 @@
                         // Save state for undo before deleting
                         saveStateForUndo();
                         
-                        const result = await deleteBorehole(grabCircle.boreholeIndex);
+                        // Store the borehole ID before deletion for coverage removal
+                        const deletedId = grabCircle.boreholeId;
+                        const deletedIndex = grabCircle.boreholeIndex;
+                        
+                        const result = await deleteBorehole(deletedIndex);
                         if (result && result.success) {
                             // Update local data
                             boreholesData = result.boreholes;
@@ -862,14 +873,16 @@
                             // Re-render boreholes with new indices
                             renderBoreholes(boreholesData);
                             
-                            // Refresh all coverages
-                            const coverages = await fetchAllCoverages();
-                            renderCoverages(coverages);
+                            // Remove just the deleted borehole's coverage (delta update)
+                            removeCoverageByBoreholeId(result.deleted_id || deletedId);
+                            removeCoverageByBoreholeIndex(deletedIndex);
                             
-                            // Refresh coverage stats
-                            await refreshCoverageStats();
+                            // Update stats from response (delta update - no extra API call)
+                            if (result.stats) {
+                                renderCoverageStats(result.stats);
+                            }
                             
-                            console.log(`🗑️ Deleted borehole ${grabCircle.boreholeId}`);
+                            console.log(`🗑️ Deleted borehole ${deletedId}`);
                         }
                     } else {
                         showBoreholeInfo(grabCircle, null);
@@ -895,6 +908,24 @@
                 existingCoverageLayer.addData(geojson);
                 console.log(`✅ Rendered ${geojson.features.length} existing coverage polygons`);
             }
+        }
+        
+        function removeCoverageByBoreholeId(boreholeId) {
+            // Remove coverage polygon for a specific borehole ID (used in delta delete)
+            coverageLayer.eachLayer(layer => {
+                if (layer.feature?.properties?.borehole_id === boreholeId) {
+                    coverageLayer.removeLayer(layer);
+                }
+            });
+        }
+        
+        function removeCoverageByBoreholeIndex(boreholeIndex) {
+            // Remove coverage polygon for a specific borehole index
+            coverageLayer.eachLayer(layer => {
+                if (layer.feature?.properties?.borehole_index === boreholeIndex) {
+                    coverageLayer.removeLayer(layer);
+                }
+            });
         }
         
         function updateSingleCoverage(boreholeIndex, coverage) {
@@ -975,12 +1006,14 @@
                 boreholesData = await fetchBoreholes();
                 renderBoreholes(boreholesData);
                 
-                // Load initial coverages (blue, proposed)
-                const coverages = await fetchAllCoverages();
-                renderCoverages(coverages);
+                // Load initial coverages (blue, proposed) - now includes stats
+                const coverageData = await fetchAllCoverages();
+                renderCoverages(coverageData);
                 
-                // Load coverage stats
-                await refreshCoverageStats();
+                // Use stats from coverage response (delta update - no separate API call)
+                if (coverageData.stats) {
+                    renderCoverageStats(coverageData.stats);
+                }
                 
                 // Load data timestamp
                 await updateDataTimestamp();
@@ -1070,13 +1103,16 @@
                 if (result.coverage) {
                     result.coverage.properties = result.coverage.properties || {};
                     result.coverage.properties.borehole_index = result.index;
+                    result.coverage.properties.borehole_id = result.borehole_id;
                     coverageLayer.addData(result.coverage);
                 }
                 
-                // Refresh coverage stats
-                await refreshCoverageStats();
+                // Use stats from response (delta update - no extra API call)
+                if (result.stats) {
+                    renderCoverageStats(result.stats);
+                }
                 
-                console.log(`➕ Added borehole at (${lon.toFixed(6)}, ${lat.toFixed(6)})`);
+                console.log(`➕ Added borehole ${result.borehole_id || result.index} at (${lon.toFixed(6)}, ${lat.toFixed(6)})`);
             }
             
             // Exit add mode after adding
