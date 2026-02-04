@@ -316,7 +316,9 @@ class CoverageService:
             if total_coverage is not None:
                 try:
                     covered_in_zone = total_coverage.intersection(zone_geom)
-                    covered_area = covered_in_zone.area if not covered_in_zone.is_empty else 0.0
+                    covered_area = (
+                        covered_in_zone.area if not covered_in_zone.is_empty else 0.0
+                    )
                 except Exception:
                     covered_area = 0.0
             else:
@@ -324,18 +326,24 @@ class CoverageService:
 
             coverage_pct = (covered_area / zone_area * 100.0) if zone_area > 0 else 0.0
 
-            per_zone_stats.append({
-                "zone_name": zone_name,
-                "total_area_m2": round(zone_area, 1),
-                "covered_area_m2": round(covered_area, 1),
-                "coverage_pct": round(coverage_pct, 1),
-            })
+            per_zone_stats.append(
+                {
+                    "zone_name": zone_name,
+                    "total_area_m2": round(zone_area, 1),
+                    "covered_area_m2": round(covered_area, 1),
+                    "coverage_pct": round(coverage_pct, 1),
+                }
+            )
 
             total_zone_area += zone_area
             total_covered_area += covered_area
 
         # Compute overall stats
-        overall_pct = (total_covered_area / total_zone_area * 100.0) if total_zone_area > 0 else 0.0
+        overall_pct = (
+            (total_covered_area / total_zone_area * 100.0)
+            if total_zone_area > 0
+            else 0.0
+        )
 
         return {
             "per_zone": per_zone_stats,

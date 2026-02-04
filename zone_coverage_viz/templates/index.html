@@ -372,6 +372,7 @@
                 fillColor: '#ffffff',
                 fillOpacity: 1
             },
+            interactive: false,  // Let mouse events pass through to boreholes
             onEachFeature: (feature, layer) => {
                 const props = feature.properties || {};
                 layer.bindPopup(`
@@ -389,7 +390,8 @@
                 opacity: 0.7,
                 fillColor: '#2ecc71',
                 fillOpacity: 0.35
-            }
+            },
+            interactive: false  // Let mouse events pass through to boreholes
         });
         
         const coverageLayer = L.geoJSON(null, {
@@ -399,7 +401,8 @@
                 opacity: 0.8,
                 fillColor: '#3498db',
                 fillOpacity: 0.25
-            }
+            },
+            interactive: false  // Let mouse events pass through to boreholes
         });
         
         const boreholesLayer = L.layerGroup();
@@ -832,11 +835,11 @@
                             newLatLng.lat
                         );
                         
-                        if (result && result.coverage) {
+                        if (result) {
                             // Update local data
                             boreholesData.features[grabCircle.boreholeIndex].geometry.coordinates = [newLatLng.lng, newLatLng.lat];
                             
-                            // Update single coverage polygon
+                            // Update single coverage polygon (handles null coverage for points outside zones)
                             updateSingleCoverage(grabCircle.boreholeIndex, result.coverage);
                             
                             // Update info panel
@@ -898,14 +901,17 @@
         }
         
         function updateSingleCoverage(boreholeIndex, coverage) {
-            // Remove old coverage for this borehole
+            // Remove ALL coverages for this borehole (handle potential duplicates)
+            const toRemove = [];
             coverageLayer.eachLayer(layer => {
-                if (layer.feature?.properties?.borehole_index === boreholeIndex) {
-                    coverageLayer.removeLayer(layer);
+                const props = layer.feature?.properties;
+                if (props && props.borehole_index === boreholeIndex) {
+                    toRemove.push(layer);
                 }
             });
+            toRemove.forEach(layer => coverageLayer.removeLayer(layer));
             
-            // Add new coverage
+            // Add new coverage if valid
             if (coverage && coverage.geometry) {
                 coverage.properties = coverage.properties || {};
                 coverage.properties.borehole_index = boreholeIndex;

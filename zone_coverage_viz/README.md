@@ -56,14 +56,14 @@ zone_coverage_viz/
 
 ## API Endpoints
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/` | GET | Map interface |
-| `/api/zones` | GET | Zone polygons with max_spacing_m |
-| `/api/boreholes` | GET | Proposed borehole positions |
-| `/api/coverage/all` | GET | All proposed coverage polygons |
-| `/api/coverage/existing` | GET | Existing borehole coverage |
-| `/api/coverage/update` | POST | Recompute coverage for moved borehole |
+| Endpoint                 | Method | Description                           |
+| ------------------------ | ------ | ------------------------------------- |
+| `/`                      | GET    | Map interface                         |
+| `/api/zones`             | GET    | Zone polygons with max_spacing_m      |
+| `/api/boreholes`         | GET    | Proposed borehole positions           |
+| `/api/coverage/all`      | GET    | All proposed coverage polygons        |
+| `/api/coverage/existing` | GET    | Existing borehole coverage            |
+| `/api/coverage/update`   | POST   | Recompute coverage for moved borehole |
 
 ## Requirements
 

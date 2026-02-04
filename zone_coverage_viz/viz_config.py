@@ -38,8 +38,12 @@ class MapConfig:
         """Create from dictionary."""
         center = d.get("center", [51.5, -1.0])
         return cls(
-            center_lat=center[0] if isinstance(center, list) else d.get("center_lat", 51.5),
-            center_lon=center[1] if isinstance(center, list) else d.get("center_lon", -1.0),
+            center_lat=(
+                center[0] if isinstance(center, list) else d.get("center_lat", 51.5)
+            ),
+            center_lon=(
+                center[1] if isinstance(center, list) else d.get("center_lon", -1.0)
+            ),
             zoom=d.get("zoom", 14),
             base_layer_opacity=d.get("base_layer_opacity", 0.25),
         )
@@ -63,18 +67,23 @@ class BoreholeMarkerConfig:
     """Configuration for borehole marker appearance."""
 
     visible_radius_m: float = 8.0
-    grab_radius_m: float = 24.0
+    grab_radius_multiplier: float = 2.0  # Grab area = visible_radius * multiplier
     color: str = "#000000"
     fill_color: str = "#000000"
     fill_opacity: float = 1.0
     weight: int = 0
+
+    @property
+    def grab_radius_m(self) -> float:
+        """Computed grab radius based on visible radius and multiplier."""
+        return self.visible_radius_m * self.grab_radius_multiplier
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "BoreholeMarkerConfig":
         """Create from dictionary."""
         return cls(
             visible_radius_m=d.get("visible_radius_m", 8.0),
-            grab_radius_m=d.get("grab_radius_m", 24.0),
+            grab_radius_multiplier=d.get("grab_radius_multiplier", 8.0),
             color=d.get("color", "#000000"),
             fill_color=d.get("fill_color", "#000000"),
             fill_opacity=d.get("fill_opacity", 1.0),
@@ -85,7 +94,8 @@ class BoreholeMarkerConfig:
         """Convert to dictionary for JSON serialization."""
         return {
             "visible_radius_m": self.visible_radius_m,
-            "grab_radius_m": self.grab_radius_m,
+            "grab_radius_multiplier": self.grab_radius_multiplier,
+            "grab_radius_m": self.grab_radius_m,  # Computed value for frontend
             "color": self.color,
             "fill_color": self.fill_color,
             "fill_opacity": self.fill_opacity,
@@ -258,19 +268,37 @@ class VizConfig:
         """Create from dictionary."""
         return cls(
             map=MapConfig.from_dict(d.get("map", {})),
-            borehole_marker=BoreholeMarkerConfig.from_dict(d.get("borehole_marker", {})),
-            zone_colors=d.get("zone_colors", {"Embankment": "#e74c3c", "Highways": "#3498db"}),
+            borehole_marker=BoreholeMarkerConfig.from_dict(
+                d.get("borehole_marker", {})
+            ),
+            zone_colors=d.get(
+                "zone_colors", {"Embankment": "#e74c3c", "Highways": "#3498db"}
+            ),
             default_zone_color=d.get("default_zone_color", "#3498db"),
-            zone_polygon_style=PolygonStyleConfig.from_dict(d.get("zone_polygon_style", {})),
+            zone_polygon_style=PolygonStyleConfig.from_dict(
+                d.get("zone_polygon_style", {})
+            ),
             proposed_coverage_style=PolygonStyleConfig.from_dict(
-                d.get("proposed_coverage_style", {
-                    "color": "#2980b9", "weight": 3, "fill_color": "#3498db", "fill_opacity": 0.25
-                })
+                d.get(
+                    "proposed_coverage_style",
+                    {
+                        "color": "#2980b9",
+                        "weight": 3,
+                        "fill_color": "#3498db",
+                        "fill_opacity": 0.25,
+                    },
+                )
             ),
             existing_coverage_style=PolygonStyleConfig.from_dict(
-                d.get("existing_coverage_style", {
-                    "color": "#27ae60", "weight": 2, "fill_color": "#2ecc71", "fill_opacity": 0.35
-                })
+                d.get(
+                    "existing_coverage_style",
+                    {
+                        "color": "#27ae60",
+                        "weight": 2,
+                        "fill_color": "#2ecc71",
+                        "fill_opacity": 0.35,
+                    },
+                )
             ),
             coverage_stats=CoverageStatsConfig.from_dict(d.get("coverage_stats", {})),
             ui=UIConfig.from_dict(d.get("ui", {})),
