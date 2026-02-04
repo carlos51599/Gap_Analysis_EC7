@@ -112,25 +112,6 @@
             100% { transform: rotate(360deg); }
         }
         
-        .borehole-marker {
-            width: 10px;
-            height: 10px;
-            background: #000000;
-            border: none;
-            border-radius: 50%;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.3);
-            cursor: grab;
-        }
-        
-        .borehole-marker:active {
-            cursor: grabbing;
-        }
-        
-        .borehole-marker.dragging {
-            opacity: 0.7;
-            transform: scale(1.2);
-        }
-        
         .toggle-row {
             margin: 5px 0;
         }
@@ -665,6 +646,10 @@
             `).join('');
         }
         
+        // Borehole marker configuration (meters)
+        const BOREHOLE_VISIBLE_RADIUS_M = 8;  // Visible black dot radius
+        const BOREHOLE_GRAB_RADIUS_M = 24;    // Invisible grab area (3x visible)
+        
         function renderBoreholes(geojson) {
             boreholesLayer.clearLayers();
             boreholeMarkers = [];
@@ -672,66 +657,119 @@
             geojson.features.forEach((feature, index) => {
                 const coords = feature.geometry.coordinates;
                 const [lon, lat] = coords;
+                const latlng = [lat, lon];
                 
-                // Create custom marker
-                const icon = L.divIcon({
-                    className: 'borehole-marker',
-                    iconSize: [12, 12],
-                    iconAnchor: [6, 6]
+                const boreholeId = feature.properties.location_id || `PROP_${index}`;
+                
+                // Create invisible grab circle (larger, for easier dragging)
+                const grabCircle = L.circle(latlng, {
+                    radius: BOREHOLE_GRAB_RADIUS_M,
+                    color: 'transparent',
+                    fillColor: 'transparent',
+                    fillOpacity: 0,
+                    weight: 0,
+                    interactive: true,
+                    bubblingMouseEvents: false
                 });
                 
-                const marker = L.marker([lat, lon], {
-                    icon: icon,
-                    draggable: true,
-                    autoPan: true
+                // Create visible dot circle (smaller, black)
+                const visibleCircle = L.circle(latlng, {
+                    radius: BOREHOLE_VISIBLE_RADIUS_M,
+                    color: '#000000',
+                    fillColor: '#000000',
+                    fillOpacity: 1,
+                    weight: 0,
+                    interactive: false  // Events handled by grab circle
                 });
                 
-                // Store metadata
-                marker.boreholeIndex = index;
-                marker.boreholeId = feature.properties.location_id || `PROP_${index}`;
+                // Group them together
+                const markerGroup = L.layerGroup([grabCircle, visibleCircle]);
                 
-                // Bind popup
-                marker.bindPopup(`<strong>${marker.boreholeId}</strong>`);
+                // Store metadata on grab circle (which handles events)
+                grabCircle.boreholeIndex = index;
+                grabCircle.boreholeId = boreholeId;
+                grabCircle.visibleCircle = visibleCircle;
+                grabCircle.markerGroup = markerGroup;
                 
-                // Handle drag events
-                marker.on('dragstart', () => {
+                // Bind popup to grab circle
+                grabCircle.bindPopup(`<strong>${boreholeId}</strong>`);
+                
+                // Custom drag handling
+                let isDragging = false;
+                let dragStartLatLng = null;
+                
+                grabCircle.on('mousedown', (e) => {
+                    if (e.originalEvent.shiftKey) return; // Don't start drag on shift+click
+                    
+                    isDragging = true;
+                    dragStartLatLng = grabCircle.getLatLng();
+                    
                     // Save state BEFORE dragging for undo
                     saveStateForUndo();
-                    marker._icon.classList.add('dragging');
+                    
+                    // Disable map dragging
+                    map.dragging.disable();
+                    
+                    // Change cursor
+                    map.getContainer().style.cursor = 'grabbing';
+                    
+                    // Handle mouse move on map
+                    map.on('mousemove', onDragMove);
+                    map.on('mouseup', onDragEnd);
                 });
                 
-                marker.on('dragend', async (e) => {
-                    marker._icon.classList.remove('dragging');
+                function onDragMove(e) {
+                    if (!isDragging) return;
                     
-                    const newLatLng = e.target.getLatLng();
-                    const result = await updateBoreholePosition(
-                        marker.boreholeIndex,
-                        newLatLng.lng,
-                        newLatLng.lat
-                    );
+                    const newLatLng = e.latlng;
+                    grabCircle.setLatLng(newLatLng);
+                    visibleCircle.setLatLng(newLatLng);
+                }
+                
+                async function onDragEnd(e) {
+                    if (!isDragging) return;
                     
-                    if (result && result.coverage) {
-                        // Update local data
-                        boreholesData.features[marker.boreholeIndex].geometry.coordinates = [newLatLng.lng, newLatLng.lat];
+                    isDragging = false;
+                    map.dragging.enable();
+                    map.getContainer().style.cursor = '';
+                    
+                    // Remove event listeners
+                    map.off('mousemove', onDragMove);
+                    map.off('mouseup', onDragEnd);
+                    
+                    const newLatLng = grabCircle.getLatLng();
+                    
+                    // Only update if position actually changed
+                    if (newLatLng.lat !== dragStartLatLng.lat || newLatLng.lng !== dragStartLatLng.lng) {
+                        const result = await updateBoreholePosition(
+                            grabCircle.boreholeIndex,
+                            newLatLng.lng,
+                            newLatLng.lat
+                        );
                         
-                        // Update single coverage polygon
-                        updateSingleCoverage(marker.boreholeIndex, result.coverage);
-                        
-                        // Update info panel
-                        showBoreholeInfo(marker, result.zone_info);
-                        
-                        // Refresh coverage stats
-                        await refreshCoverageStats();
+                        if (result && result.coverage) {
+                            // Update local data
+                            boreholesData.features[grabCircle.boreholeIndex].geometry.coordinates = [newLatLng.lng, newLatLng.lat];
+                            
+                            // Update single coverage polygon
+                            updateSingleCoverage(grabCircle.boreholeIndex, result.coverage);
+                            
+                            // Update info panel
+                            showBoreholeInfo(grabCircle, result.zone_info);
+                            
+                            // Refresh coverage stats
+                            await refreshCoverageStats();
+                        }
                     }
-                });
+                }
                 
                 // Shift+Click to delete
-                marker.on('click', async (e) => {
+                grabCircle.on('click', async (e) => {
                     if (e.originalEvent.shiftKey) {
                         // Save state for undo before deleting
                         saveStateForUndo();
                         
-                        const result = await deleteBorehole(marker.boreholeIndex);
+                        const result = await deleteBorehole(grabCircle.boreholeIndex);
                         if (result && result.success) {
                             // Update local data
                             boreholesData = result.boreholes;
@@ -746,15 +784,15 @@
                             // Refresh coverage stats
                             await refreshCoverageStats();
                             
-                            console.log(`🗑️ Deleted borehole ${marker.boreholeId}`);
+                            console.log(`🗑️ Deleted borehole ${grabCircle.boreholeId}`);
                         }
                     } else {
-                        showBoreholeInfo(marker, null);
+                        showBoreholeInfo(grabCircle, null);
                     }
                 });
                 
-                marker.addTo(boreholesLayer);
-                boreholeMarkers.push(marker);
+                markerGroup.addTo(boreholesLayer);
+                boreholeMarkers.push(grabCircle);  // Store grab circle as the main reference
             });
             
             // Update info panel
