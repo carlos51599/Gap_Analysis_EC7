@@ -906,15 +906,8 @@
         }
         
         // Update borehole visibility based on zone visibility settings
-        // BATCHED: Removes layers from map before modifications to prevent individual redraws
         function updateBoreholeVisibilityForZones() {
             if (!zonesData || !boreholesData) return;
-            
-            // BATCHED: Remove coverage layer from map to batch style updates
-            const coverageWasOnMap = map.hasLayer(coverageLayer);
-            if (coverageWasOnMap) {
-                map.removeLayer(coverageLayer);
-            }
             
             // Track which boreholes are hidden (by index)
             const hiddenBoreholeIndices = new Set();
@@ -951,7 +944,6 @@
             });
             
             // Update coverage layer visibility based on borehole visibility
-            // (layer is off map, so setStyle calls don't trigger redraws)
             coverageLayer.eachLayer((layer) => {
                 const props = layer.feature?.properties;
                 if (props && props.borehole_index !== undefined) {
@@ -967,11 +959,6 @@
                     }
                 }
             });
-            
-            // BATCHED: Re-add coverage layer (single DOM update with all styles applied)
-            if (coverageWasOnMap) {
-                coverageLayer.addTo(map);
-            }
         }
         
         // Simple point-in-polygon test for GeoJSON geometry
@@ -1076,12 +1063,6 @@
         }
         
         function renderBoreholes(geojson) {
-            // BATCHED: Remove layer from map during creation to prevent incremental renders
-            const wasOnMap = map.hasLayer(boreholesLayer);
-            if (wasOnMap) {
-                map.removeLayer(boreholesLayer);
-            }
-            
             boreholesLayer.clearLayers();
             boreholeMarkers = [];
             
@@ -1261,12 +1242,6 @@
             
             // Update info panel
             document.getElementById('boreholeCount').textContent = geojson.features.length;
-            
-            // BATCHED: Re-add layer to map (single DOM update with all markers)
-            // Note: batchedRerender() and initialization handle their own layer management
-            if (wasOnMap) {
-                boreholesLayer.addTo(map);
-            }
         }
         
         function renderCoverages(geojson) {
@@ -1274,14 +1249,10 @@
             coverageLayer.addData(geojson);
         }
         
-        // BATCHED RENDER: Re-render boreholes and coverages without z-order flash
-        // Temporarily removes layers, updates them, then re-adds in correct z-order
+        // BATCHED RENDER: Re-render boreholes and coverages, fixing z-order at the end
+        // Instead of removing layers during network calls, we just ensure correct z-order after
         async function batchedRerender(boreholesGeojson, fetchCoveragesFromServer = true) {
-            // Remove layers from map to prevent visual flash
-            map.removeLayer(boreholesLayer);
-            map.removeLayer(coverageLayer);
-            
-            // Update boreholes data
+            // Update boreholes data (renderBoreholes handles its own batching)
             renderBoreholes(boreholesGeojson);
             
             // Fetch and update coverages if needed
@@ -1290,12 +1261,13 @@
                 renderCoverages(coverages);
             }
             
-            // Re-apply zone visibility (modifies layer contents before adding to map)
+            // Re-apply zone visibility
             updateBoreholeVisibilityForZones();
             
-            // Re-add layers in correct z-order (coverages below boreholes)
-            coverageLayer.addTo(map);
-            boreholesLayer.addTo(map);
+            // FIX Z-ORDER: Bring boreholes layer to front (ensures it's above coverages)
+            if (map.hasLayer(boreholesLayer)) {
+                boreholesLayer.bringToFront();
+            }
         }
         
         function renderExistingCoverage(geojson) {
@@ -1561,10 +1533,6 @@
                 // Update local data
                 boreholesData = result.boreholes;
                 
-                // BATCHED: Remove layers, update, re-add in correct z-order
-                map.removeLayer(boreholesLayer);
-                map.removeLayer(coverageLayer);
-                
                 // Re-render all boreholes
                 renderBoreholes(boreholesData);
                 
@@ -1575,12 +1543,13 @@
                     coverageLayer.addData(result.coverage);
                 }
                 
-                // Re-apply zone visibility before adding layers back
+                // Re-apply zone visibility
                 updateBoreholeVisibilityForZones();
                 
-                // Re-add layers in correct z-order (coverages below boreholes)
-                coverageLayer.addTo(map);
-                boreholesLayer.addTo(map);
+                // FIX Z-ORDER: Bring boreholes layer to front
+                if (map.hasLayer(boreholesLayer)) {
+                    boreholesLayer.bringToFront();
+                }
                 
                 // Refresh coverage stats
                 await refreshCoverageStats();
