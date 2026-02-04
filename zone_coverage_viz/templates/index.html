@@ -210,6 +210,16 @@
             line-height: 1.4;
         }
         
+        .delete-hint {
+            display: inline-block;
+            background: #e74c3c;
+            color: white;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 500;
+        }
+        
         .coverage-stats {
             margin-top: 10px;
             padding: 10px;
@@ -299,7 +309,7 @@
             </button>
         </div>
         <div class="help-text">
-            <strong>Shift+Click</strong> on borehole to delete
+            <span class="delete-hint">Shift+Click on borehole to delete</span>
         </div>
         <div class="divider"></div>
         <div class="toggle-row">
@@ -650,7 +660,7 @@
             legendEl.innerHTML = Object.entries(uniqueZones).map(([name, spacing]) => `
                 <div class="zone-legend-item">
                     <div class="zone-legend-color" style="background: ${zoneColors[name] || '#3498db'}"></div>
-                    <span>${name} (${spacing}m)</span>
+                    <span>${name}</span>
                 </div>
             `).join('');
         }
