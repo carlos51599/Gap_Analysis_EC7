@@ -72,6 +72,7 @@ class BoreholeMarkerConfig:
     fill_color: str = "#000000"
     fill_opacity: float = 1.0
     weight: int = 0
+    hover_scale: float = 2.0  # Scale factor on hover (2.0 = double size)
 
     @property
     def grab_radius_m(self) -> float:
@@ -88,6 +89,7 @@ class BoreholeMarkerConfig:
             fill_color=d.get("fill_color", "#000000"),
             fill_opacity=d.get("fill_opacity", 1.0),
             weight=d.get("weight", 0),
+            hover_scale=d.get("hover_scale", 2.0),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -100,6 +102,7 @@ class BoreholeMarkerConfig:
             "fill_color": self.fill_color,
             "fill_opacity": self.fill_opacity,
             "weight": self.weight,
+            "hover_scale": self.hover_scale,
         }
 
 
@@ -295,8 +298,8 @@ class VizConfig:
                     {
                         "color": "#27ae60",
                         "weight": 2,
-                        "fill_color": "#2ecc71",
-                        "fill_opacity": 0.35,
+                        "fill_color": "#3ff88c",
+                        "fill_opacity": 0.8,
                     },
                 )
             ),

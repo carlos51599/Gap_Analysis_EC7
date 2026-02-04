@@ -78,6 +78,10 @@ class DataLoader:
         self._data_file_modified: Optional[datetime] = None
         self._data_loaded_at: Optional[datetime] = None
 
+        # Source file tracking for timestamp consistency
+        self._source_files: List[Dict[str, Any]] = []
+        self._generated_at: Optional[str] = None
+
         # Coordinate transformer
         self._wgs84_to_bng = Transformer.from_crs(CRS_WGS84, CRS_BNG, always_xy=True)
         self._bng_to_wgs84 = Transformer.from_crs(CRS_BNG, CRS_WGS84, always_xy=True)
@@ -121,6 +125,10 @@ class DataLoader:
             "boreholes", {"type": "FeatureCollection", "features": []}
         )
         self._existing_coverage_data = data.get("existing_coverage", None)
+
+        # Extract source files for timestamp consistency check
+        self._source_files = data.get("source_files", [])
+        self._generated_at = data.get("generated_at", None)
 
         # Convert to GeoDataFrames (in BNG for geometry operations)
         self._zones_gdf = self._geojson_to_gdf(self._zones_data, CRS_BNG)
@@ -530,12 +538,13 @@ class DataLoader:
 
     def get_data_info(self) -> Dict[str, Any]:
         """
-        Get information about the loaded data including timestamps.
+        Get information about the loaded data including timestamps and source files.
 
         Returns:
-            Dict with data_file_modified, data_loaded_at, zone_count, borehole_count.
+            Dict with data_file_modified, data_loaded_at, zone_count, borehole_count,
+            source_files (list), and timestamp_warning if files have inconsistent timestamps.
         """
-        return {
+        result = {
             "data_file_modified": (
                 self._data_file_modified.isoformat()
                 if self._data_file_modified
@@ -548,4 +557,40 @@ class DataLoader:
             "borehole_count": (
                 len(self._boreholes_gdf) if self._boreholes_gdf is not None else 0
             ),
+            "source_files": self._source_files,
+            "generated_at": self._generated_at,
         }
+
+        # Check for timestamp consistency - ONLY for dynamic files (boreholes, coverage)
+        # Shapefiles (zones) are static reference data and shouldn't trigger warnings
+        if self._source_files:
+            dynamic_files = [
+                f
+                for f in self._source_files
+                if f.get("type") in ("boreholes", "existing_coverage")
+            ]
+            epochs = [f.get("epoch", 0) for f in dynamic_files if f.get("epoch")]
+            if epochs:
+                min_ts = min(epochs)
+                max_ts = max(epochs)
+                diff_hours = (max_ts - min_ts) / 3600
+
+                if diff_hours > 1.0:  # More than 1 hour difference
+                    oldest = min(
+                        dynamic_files, key=lambda f: f.get("epoch", float("inf"))
+                    )
+                    newest = max(dynamic_files, key=lambda f: f.get("epoch", 0))
+                    result["timestamp_warning"] = {
+                        "message": f"Dynamic files differ by {diff_hours:.1f} hours",
+                        "oldest": {
+                            "name": oldest.get("name"),
+                            "display": oldest.get("display"),
+                        },
+                        "newest": {
+                            "name": newest.get("name"),
+                            "display": newest.get("display"),
+                        },
+                        "diff_hours": round(diff_hours, 1),
+                    }
+
+        return result

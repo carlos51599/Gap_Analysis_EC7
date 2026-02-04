@@ -383,13 +383,14 @@
         });
         
         // Existing borehole coverage (green, below proposed)
+        // Note: Style will be updated from CONFIG after data is loaded in renderExistingCoverage()
         const existingCoverageLayer = L.geoJSON(null, {
             style: {
                 color: '#27ae60',
                 weight: 2,
-                opacity: 0.7,
-                fillColor: '#2ecc71',
-                fillOpacity: 0.35
+                opacity: 0.8,
+                fillColor: '#5feb5f',  // Matches ec7_coverage.html: rgba(95, 235, 95, 0.85)
+                fillOpacity: 0.85
             },
             interactive: false  // Let mouse events pass through to boreholes
         });
@@ -412,7 +413,7 @@
         existingCoverageLayer.addTo(map);
         coverageLayer.addTo(map);
         boreholesLayer.addTo(map);
-        
+
         // ═══════════════════════════════════════════════════════════════════
         // 📊 DATA STORAGE
         // ═══════════════════════════════════════════════════════════════════
@@ -693,6 +694,33 @@
             } else {
                 container.innerHTML = '';
             }
+            
+            // Check for timestamp warning and show alert if files are out of sync
+            if (dataInfo.timestamp_warning) {
+                const warning = dataInfo.timestamp_warning;
+                container.innerHTML += ` <span style="color: #e74c3c; cursor: pointer;" title="Click for details" onclick="showTimestampWarning()">⚠️ ${warning.diff_hours}h diff</span>`;
+                
+                // Store warning details globally for the popup
+                window.timestampWarning = warning;
+            }
+            
+            // Log source files to console for debugging
+            if (dataInfo.source_files && dataInfo.source_files.length > 0) {
+                console.log('📁 Source files:');
+                dataInfo.source_files.forEach(f => {
+                    console.log(`   ${f.type}: ${f.name} (${f.display})`);
+                });
+            }
+        }
+        
+        function showTimestampWarning() {
+            if (!window.timestampWarning) return;
+            const w = window.timestampWarning;
+            alert(`⚠️ Source File Timestamp Mismatch\n\n` +
+                  `${w.message}\n\n` +
+                  `Oldest: ${w.oldest.name}\n  (${w.oldest.display})\n\n` +
+                  `Newest: ${w.newest.name}\n  (${w.newest.display})\n\n` +
+                  `Recommendation: Re-run main.py to regenerate all files.`);
         }
         
         function renderZones(geojson) {
@@ -782,8 +810,25 @@
                 // Bind popup to grab circle
                 grabCircle.bindPopup(`<strong>${boreholeId}</strong>`);
                 
+                // Hover effects for better visual feedback
+                const hoverScale = CONFIG?.borehole_marker?.hover_scale || 2.0;  // From config or default
+                let isDragging = false;  // Track drag state for hover effects
+                
+                grabCircle.on('mouseover', () => {
+                    if (!isDragging) {
+                        visibleCircle.setRadius(visibleRadius * hoverScale);
+                        map.getContainer().style.cursor = 'grab';
+                    }
+                });
+                
+                grabCircle.on('mouseout', () => {
+                    if (!isDragging) {
+                        visibleCircle.setRadius(visibleRadius);
+                        map.getContainer().style.cursor = '';
+                    }
+                });
+                
                 // Custom drag handling
-                let isDragging = false;
                 let dragStartLatLng = null;
                 
                 grabCircle.on('mousedown', (e) => {
@@ -896,6 +941,20 @@
             existingCoverageLayer.clearLayers();
             if (geojson && geojson.features && geojson.features.length > 0) {
                 existingCoverageLayer.addData(geojson);
+                
+                // Apply style from config (must be after addData since setStyle only affects existing features)
+                if (CONFIG && CONFIG.existingCoverageStyle) {
+                    const style = CONFIG.existingCoverageStyle;
+                    existingCoverageLayer.setStyle({
+                        color: style.color || '#27ae60',
+                        weight: style.weight || 2,
+                        opacity: style.opacity || 0.7,
+                        fillColor: style.fill_color || '#2ecc71',
+                        fillOpacity: style.fill_opacity || 0.35
+                    });
+                    console.log(`🎨 Applied existing coverage style: fillColor=${style.fill_color}`);
+                }
+                
                 console.log(`✅ Rendered ${geojson.features.length} existing coverage polygons`);
             }
         }
@@ -954,6 +1013,18 @@
             // Update base layer opacity
             if (CONFIG.map && CONFIG.map.base_layer_opacity !== undefined) {
                 baseLayer.setOpacity(CONFIG.map.base_layer_opacity);
+            }
+            
+            // Update existing coverage style from config
+            if (CONFIG.existingCoverageStyle) {
+                const style = CONFIG.existingCoverageStyle;
+                existingCoverageLayer.setStyle({
+                    color: style.color || '#27ae60',
+                    weight: style.weight || 2,
+                    opacity: style.opacity || 0.7,
+                    fillColor: style.fill_color || '#2ecc71',
+                    fillOpacity: style.fill_opacity || 0.35
+                });
             }
             
             console.log('📋 Config applied:', CONFIG);

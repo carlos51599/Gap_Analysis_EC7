@@ -16,6 +16,8 @@ from pathlib import Path
 import json
 import logging
 import sys
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple
 
 import geopandas as gpd
 import pandas as pd
@@ -60,13 +62,30 @@ def find_workspace_root() -> Path:
     raise FileNotFoundError("Could not find workspace root with 'Project Shapefiles'")
 
 
+def get_file_timestamp(file_path: Path) -> Dict[str, str]:
+    """Get file modification timestamp as ISO string and human-readable format."""
+    if not file_path.exists():
+        return {"iso": None, "display": "not found"}
+    mtime = file_path.stat().st_mtime
+    dt = datetime.fromtimestamp(mtime)
+    return {
+        "iso": dt.isoformat(),
+        "display": dt.strftime("%d %b %Y, %H:%M"),
+        "epoch": mtime,
+    }
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 📂 DATA LOADING
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-def load_zones(workspace_root: Path) -> gpd.GeoDataFrame:
-    """Load zone shapefiles and add max_spacing_m from config."""
+def load_zones(workspace_root: Path) -> Tuple[gpd.GeoDataFrame, List[Dict]]:
+    """Load zone shapefiles and add max_spacing_m from config.
+
+    Returns:
+        Tuple of (combined GeoDataFrame, list of source file info dicts)
+    """
     # Add Gap_Analysis_EC7 to path for shapefile_config import
     sys.path.insert(0, str(GAP_ANALYSIS_DIR))
 
@@ -76,6 +95,7 @@ def load_zones(workspace_root: Path) -> gpd.GeoDataFrame:
     logger.info(f"📂 Coverage layers: {coverage_keys}")
 
     zones_list = []
+    source_files = []
 
     for layer_key in coverage_keys:
         layer_config = get_layer_config(layer_key)
@@ -84,6 +104,16 @@ def load_zones(workspace_root: Path) -> gpd.GeoDataFrame:
         if not file_path.exists():
             logger.warning(f"   ⚠️ Shapefile not found: {file_path}")
             continue
+
+        # Track source file
+        source_files.append(
+            {
+                "name": layer_key,
+                "path": str(file_path.relative_to(workspace_root)),
+                "type": "zones",
+                **get_file_timestamp(file_path),
+            }
+        )
 
         # Load shapefile
         gdf = gpd.read_file(file_path)
@@ -105,13 +135,17 @@ def load_zones(workspace_root: Path) -> gpd.GeoDataFrame:
         combined = pd.concat(zones_list, ignore_index=True)
         if combined.crs is None:
             combined = combined.set_crs(CRS_BNG)
-        return combined
+        return combined, source_files
 
     raise ValueError("No zones loaded!")
 
 
-def load_boreholes(output_dir: Path) -> gpd.GeoDataFrame:
-    """Load proposed boreholes from most recent CSV."""
+def load_boreholes(output_dir: Path) -> Tuple[gpd.GeoDataFrame, Dict]:
+    """Load proposed boreholes from most recent CSV.
+
+    Returns:
+        Tuple of (GeoDataFrame, source file info dict)
+    """
     proposed_dir = output_dir / "proposed_boreholes"
 
     if not proposed_dir.exists():
@@ -129,6 +163,14 @@ def load_boreholes(output_dir: Path) -> gpd.GeoDataFrame:
     csv_file = sorted(csv_files, key=lambda f: f.stat().st_mtime, reverse=True)[0]
     logger.info(f"📂 Loading boreholes from: {csv_file.name}")
 
+    # Track source file
+    source_info = {
+        "name": csv_file.stem,
+        "path": str(csv_file.relative_to(output_dir.parent)),
+        "type": "boreholes",
+        **get_file_timestamp(csv_file),
+    }
+
     # Load CSV
     df = pd.read_csv(csv_file)
 
@@ -138,37 +180,62 @@ def load_boreholes(output_dir: Path) -> gpd.GeoDataFrame:
 
     logger.info(f"   ✅ Loaded {len(gdf)} proposed boreholes")
 
-    return gdf
+    return gdf, source_info
 
 
-def load_existing_coverage(output_dir: Path) -> gpd.GeoDataFrame | None:
+def load_existing_coverage(
+    output_dir: Path,
+) -> Tuple[Optional[gpd.GeoDataFrame], Optional[Dict]]:
     """Load existing borehole coverage from covered.geojson.
 
     Searches for the most recent coverage_polygons output folder.
-    Returns None if not found.
+    Returns (None, None) if not found.
+
+    Returns:
+        Tuple of (GeoDataFrame or None, source file info dict or None)
     """
     coverage_dir = output_dir / "coverage_polygons"
 
     if not coverage_dir.exists():
         logger.warning("   ⚠️ coverage_polygons directory not found")
-        return None
+        return None, None
 
     # Find subdirectories (each represents a combo_key like d45_spt0_txt0_txe0)
     combo_dirs = [d for d in coverage_dir.iterdir() if d.is_dir()]
 
     if not combo_dirs:
         logger.warning("   ⚠️ No combo directories found in coverage_polygons")
-        return None
+        return None, None
 
-    # Use most recent
-    combo_dir = sorted(combo_dirs, key=lambda d: d.stat().st_mtime, reverse=True)[0]
+    # Find the combo with the most recently modified covered.geojson file
+    # (Folder mtime doesn't update when files inside are modified on Windows)
+    def get_covered_mtime(combo_dir: Path) -> float:
+        covered_path = combo_dir / "covered.geojson"
+        if covered_path.exists():
+            return covered_path.stat().st_mtime
+        return 0.0  # Non-existent files sort last
+
+    combo_dirs_with_coverage = [
+        d for d in combo_dirs if (d / "covered.geojson").exists()
+    ]
+
+    if not combo_dirs_with_coverage:
+        logger.warning("   ⚠️ No combo directories contain covered.geojson")
+        return None, None
+
+    # Sort by covered.geojson file modification time
+    combo_dir = sorted(combo_dirs_with_coverage, key=get_covered_mtime, reverse=True)[0]
     covered_path = combo_dir / "covered.geojson"
 
-    if not covered_path.exists():
-        logger.warning(f"   ⚠️ covered.geojson not found in {combo_dir.name}")
-        return None
-
     logger.info(f"📂 Loading existing coverage from: {combo_dir.name}/covered.geojson")
+
+    # Track source file
+    source_info = {
+        "name": f"{combo_dir.name}/covered.geojson",
+        "path": str(covered_path.relative_to(output_dir.parent)),
+        "type": "existing_coverage",
+        **get_file_timestamp(covered_path),
+    }
 
     gdf = gpd.read_file(covered_path)
 
@@ -185,7 +252,7 @@ def load_existing_coverage(output_dir: Path) -> gpd.GeoDataFrame | None:
 
     logger.info(f"   ✅ Loaded existing coverage ({len(gdf)} features, CRS: {gdf.crs})")
 
-    return gdf
+    return gdf, source_info
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -235,15 +302,22 @@ def generate_zone_coverage_data() -> None:
     logger.info(f"\n📍 Workspace root: {workspace_root}")
     logger.info(f"📍 Output directory: {output_dir}")
 
+    # Track source files for timestamp consistency check
+    source_files = []
+
     # Load data
     logger.info("\n📂 Loading zones...")
-    zones_gdf = load_zones(workspace_root)
+    zones_gdf, zones_sources = load_zones(workspace_root)
+    source_files.extend(zones_sources)
 
     logger.info("\n📂 Loading boreholes...")
-    boreholes_gdf = load_boreholes(output_dir)
+    boreholes_gdf, boreholes_source = load_boreholes(output_dir)
+    source_files.append(boreholes_source)
 
     logger.info("\n📂 Loading existing coverage...")
-    existing_coverage_gdf = load_existing_coverage(output_dir)
+    existing_coverage_gdf, existing_coverage_source = load_existing_coverage(output_dir)
+    if existing_coverage_source:
+        source_files.append(existing_coverage_source)
 
     # Convert to GeoJSON
     logger.info("\n📝 Converting to GeoJSON...")
@@ -264,11 +338,37 @@ def generate_zone_coverage_data() -> None:
         },
     )
 
+    # Check timestamp consistency for DYNAMIC files only (boreholes + coverage)
+    # Shapefiles (zones) are static reference data and don't need timestamp checks
+    dynamic_files = [
+        f for f in source_files if f.get("type") in ("boreholes", "existing_coverage")
+    ]
+    timestamps = [f.get("epoch", 0) for f in dynamic_files if f.get("epoch")]
+    if timestamps:
+        min_ts = min(timestamps)
+        max_ts = max(timestamps)
+        diff_seconds = max_ts - min_ts
+        newest_file = max(dynamic_files, key=lambda f: f.get("epoch", 0))
+        oldest_file = min(dynamic_files, key=lambda f: f.get("epoch", 0))
+
+        if diff_seconds > 3600:  # More than 1 hour difference
+            logger.warning(
+                f"   ⚠️ Dynamic file timestamps differ by {diff_seconds/3600:.1f} hours!"
+            )
+            logger.warning(
+                f"      Oldest: {oldest_file['name']} ({oldest_file['display']})"
+            )
+            logger.warning(
+                f"      Newest: {newest_file['name']} ({newest_file['display']})"
+            )
+
     # Combine
     output_data = {
         "crs": CRS_WGS84,
         "zones": zones_geojson,
         "boreholes": boreholes_geojson,
+        "source_files": source_files,
+        "generated_at": datetime.now().isoformat(),
     }
 
     # Add existing coverage if loaded
