@@ -276,8 +276,19 @@ def compute_czrc_tiers(
     Returns:
         Tuple of (tier1_region, tier2_region, r_max)
     """
-    # Parse zone names from pair_key (underscore-separated)
-    zones = pair_key.split("_")
+    # Parse zone names from pair_key
+    # Handle two formats:
+    #   1. Zone-zone pairs: "Embankment_Highways" → ["Embankment", "Highways"]
+    #   2. Cell-cell pairs: "Cell_0_Cell_1" → ["Cell_0", "Cell_1"]
+    # BUG FIX: Simple split("_") breaks Cell_i_Cell_j format into
+    # ["Cell", "0", "Cell", "1"] which doesn't match zone_spacings keys.
+    parts = pair_key.split("_")
+    if len(parts) == 4 and parts[0] == "Cell" and parts[2] == "Cell":
+        # Cell-cell format: "Cell_0_Cell_1" → ["Cell_0", "Cell_1"]
+        zones = [f"Cell_{parts[1]}", f"Cell_{parts[3]}"]
+    else:
+        # Zone-zone format: "Embankment_Highways" → ["Embankment", "Highways"]
+        zones = parts
 
     # Get maximum spacing from zones in this pair (default 100m if not found)
     r_values = [zone_spacings.get(z, 100.0) for z in zones]
@@ -1834,7 +1845,13 @@ def solve_cell_cell_czrc(
     # Step 1: Compute tiers (REUSE existing function)
     tier1_mult = config.get("tier1_rmax_multiplier", 1.0)
     tier2_mult = config.get("tier2_rmax_multiplier", 2.0)
-    cell_spacings = {f"Cell_{cell_i}": spacing, f"Cell_{cell_j}": spacing}
+    
+    # BUG FIX: Compute R_max from actual boreholes' coverage_radius, not uniform spacing
+    # This ensures cells with mixed-spacing boreholes use the correct tier boundaries.
+    # Boreholes inherit coverage_radius from their origin zone (e.g., 100m or 200m).
+    bh_radii = [bh.get("coverage_radius", spacing) for bh in cell_boreholes]
+    computed_r_max = max(bh_radii) if bh_radii else spacing
+    cell_spacings = {f"Cell_{cell_i}": computed_r_max, f"Cell_{cell_j}": computed_r_max}
 
     tier1_region, tier2_region, r_max = compute_czrc_tiers(
         czrc_region, cell_spacings, pair_key, tier1_mult, tier2_mult

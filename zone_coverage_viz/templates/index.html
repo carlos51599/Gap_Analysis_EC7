@@ -168,6 +168,17 @@
             background: #e74c3c;
         }
         
+        .btn-reset {
+            background: #3498db;
+            color: white;
+        }
+        
+        .btn-export {
+            background: #9b59b6;
+            color: white;
+            width: 100%;
+        }
+        
         .add-mode-indicator {
             position: absolute;
             top: 50px;
@@ -192,13 +203,16 @@
         }
         
         .delete-hint {
-            display: inline-block;
+            display: block;
+            width: 100%;
             background: #e74c3c;
             color: white;
             padding: 6px 12px;
             border-radius: 20px;
             font-size: 11px;
             font-weight: 500;
+            text-align: center;
+            box-sizing: border-box;
         }
         
         .coverage-stats {
@@ -395,6 +409,9 @@
             <button class="action-btn btn-add" id="addBoreholeBtn" title="Add new borehole">
                 + Add Borehole
             </button>
+            <button class="action-btn btn-reset" id="resetBtn" title="Reset to original positions">
+                ⟲ Reset
+            </button>
         </div>
         <div class="help-text">
             <span class="delete-hint">Shift+Click on borehole to delete</span>
@@ -421,6 +438,12 @@
                 <span class="stat-label">Radius:</span>
                 <span class="stat-value" id="selectedRadius">-</span>
             </div>
+        </div>
+        <div class="divider"></div>
+        <div class="action-buttons">
+            <button class="action-btn btn-export" id="exportCsvBtn" title="Export borehole coordinates to CSV">
+                📥 Export CSV
+            </button>
         </div>
     </div>
     
@@ -512,6 +535,7 @@
         let boreholeMarkers = [];
         let zonesData = null;
         let boreholesData = null;
+        let originalBoreholesData = null;  // Store initial state for reset
         
         // Undo history stack
         let undoHistory = [];
@@ -638,6 +662,21 @@
             }
         }
         
+        async function restoreBoreholes(boreholesGeojson) {
+            try {
+                const response = await fetch('/api/borehole/restore', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ boreholes: boreholesGeojson })
+                });
+                const data = await response.json();
+                return data;
+            } catch (error) {
+                console.error('Failed to restore boreholes:', error);
+                return null;
+            }
+        }
+        
         async function addNewBorehole(lon, lat, locationId = null) {
             try {
                 const body = { lon, lat };
@@ -684,6 +723,32 @@
             const previousState = undoHistory.pop();
             boreholesData = previousState;
             
+            // Sync restored state to server
+            await restoreBoreholes(boreholesData);
+            
+            // Re-render boreholes
+            renderBoreholes(boreholesData);
+            
+            // Re-compute coverages (now server has correct state)
+            const coverages = await fetchAllCoverages();
+            renderCoverages(coverages);
+            
+            updateUndoButton();
+            console.log('↩️ Undo performed');
+            
+            // Refresh coverage stats
+            await refreshCoverageStats();
+        }
+        
+        async function performReset() {
+            if (!originalBoreholesData) return;
+            
+            // Restore to original state
+            boreholesData = JSON.parse(JSON.stringify(originalBoreholesData));
+            
+            // Sync restored state to server
+            await restoreBoreholes(boreholesData);
+            
             // Re-render boreholes
             renderBoreholes(boreholesData);
             
@@ -691,8 +756,10 @@
             const coverages = await fetchAllCoverages();
             renderCoverages(coverages);
             
+            // Clear undo history
+            undoHistory = [];
             updateUndoButton();
-            console.log('↩️ Undo performed');
+            console.log('🔄 Reset to original state');
             
             // Refresh coverage stats
             await refreshCoverageStats();
@@ -1123,6 +1190,7 @@
                 
                 // Load boreholes
                 boreholesData = await fetchBoreholes();
+                originalBoreholesData = JSON.parse(JSON.stringify(boreholesData));  // Save initial state for reset
                 renderBoreholes(boreholesData);
                 
                 // Load initial coverages (blue, proposed)
@@ -1177,6 +1245,14 @@
         
         // Undo button
         document.getElementById('undoBtn').addEventListener('click', performUndo);
+        
+        // Reset button
+        document.getElementById('resetBtn').addEventListener('click', performReset);
+        
+        // Export CSV button
+        document.getElementById('exportCsvBtn').addEventListener('click', function() {
+            window.location.href = '/api/boreholes/export';
+        });
         
         // Add borehole button
         document.getElementById('addBoreholeBtn').addEventListener('click', function() {

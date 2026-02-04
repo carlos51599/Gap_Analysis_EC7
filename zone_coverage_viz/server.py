@@ -23,9 +23,19 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 import json
 import logging
+import io
+import csv
 
-from flask import Flask, jsonify, request, render_template, send_from_directory
+from flask import (
+    Flask,
+    jsonify,
+    request,
+    render_template,
+    send_from_directory,
+    Response,
+)
 from flask_cors import CORS
+from pyproj import Transformer
 
 from zone_coverage_viz.viz_config import get_frontend_config
 from zone_coverage_viz.data_loader import DataLoader
@@ -276,6 +286,77 @@ def add_borehole() -> Dict[str, Any]:
             "coverage": coverage,
             "boreholes": boreholes,
         }
+    )
+
+
+@app.route("/api/borehole/restore", methods=["POST"])
+def restore_boreholes() -> Dict[str, Any]:
+    """
+    Restore boreholes state from a GeoJSON snapshot (for undo).
+
+    Request Body:
+        {
+            "boreholes": GeoJSON FeatureCollection to restore
+        }
+
+    Returns:
+        {
+            "success": bool
+        }
+    """
+    if data_loader is None:
+        return jsonify({"error": "Server not initialized"}), 500
+
+    data = request.get_json()
+    if not data or "boreholes" not in data:
+        return jsonify({"error": "Missing boreholes in request body"}), 400
+
+    boreholes_geojson = data["boreholes"]
+    data_loader.restore_state(boreholes_geojson)
+
+    return jsonify({"success": True})
+
+
+@app.route("/api/boreholes/export", methods=["GET"])
+def export_boreholes_csv() -> Response:
+    """
+    Export current borehole positions as CSV with Easting/Northing coordinates.
+
+    Returns:
+        CSV file download with columns: ID, Easting, Northing, Zone
+    """
+    if data_loader is None:
+        return jsonify({"error": "Server not initialized"}), 500
+
+    boreholes_geojson = data_loader.get_boreholes_geojson()
+
+    # Create transformer: WGS84 (lat/lng) -> British National Grid (easting/northing)
+    transformer = Transformer.from_crs("EPSG:4326", "EPSG:27700", always_xy=True)
+
+    # Build CSV in memory
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["ID", "Easting", "Northing", "Zone"])
+
+    for feature in boreholes_geojson.get("features", []):
+        props = feature.get("properties", {})
+        coords = feature.get("geometry", {}).get("coordinates", [0, 0])
+
+        # coords are [lon, lat] in WGS84
+        lon, lat = coords[0], coords[1]
+        easting, northing = transformer.transform(lon, lat)
+
+        borehole_id = props.get("id", "")
+        zone = props.get("zone", "")
+
+        writer.writerow([borehole_id, f"{easting:.2f}", f"{northing:.2f}", zone])
+
+    # Return as downloadable CSV
+    output.seek(0)
+    return Response(
+        output.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": "attachment; filename=boreholes_export.csv"},
     )
 
 
