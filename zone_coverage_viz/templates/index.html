@@ -219,11 +219,11 @@
             justify-content: space-between;
             align-items: center;
             margin-bottom: 6px;
-            font-size: 12px;
+            font-size: 13px;
         }
         
         .coverage-stats .zone-name {
-            color: #666;
+            color: #333;
             max-width: 120px;
             overflow: hidden;
             text-overflow: ellipsis;
@@ -306,7 +306,7 @@
         
         .left-panel-header h4 {
             margin: 0;
-            font-size: 13px;
+            font-size: 14px;
             color: #333;
         }
         
@@ -363,7 +363,7 @@
     <!-- Left Panel - Coverage by Zone -->
     <div class="left-panel" id="leftPanel">
         <div class="left-panel-header">
-            <h4>📊 Coverage by Zone</h4>
+            <h4>Coverage by Zone</h4>
         </div>
         <div class="left-panel-content coverage-stats">
             <div id="coverageStatsContent">
@@ -378,7 +378,7 @@
     </div>
     
     <div class="info-panel" id="infoPanel">
-        <h3>Zone Coverage</h3>
+        <h3>Overview</h3>
         <div class="stat">
             <span class="stat-label">Boreholes:</span>
             <span class="stat-value" id="boreholeCount">-</span>
@@ -422,7 +422,6 @@
                 <span class="stat-value" id="selectedRadius">-</span>
             </div>
         </div>
-        <div class="zone-legend" id="zoneLegend"></div>
     </div>
     
     <div class="loading-overlay" id="loadingOverlay">
@@ -821,24 +820,6 @@
             
             // Update info panel
             document.getElementById('zoneCount').textContent = geojson.features.length;
-            
-            // Build legend
-            const legendEl = document.getElementById('zoneLegend');
-            const uniqueZones = {};
-            geojson.features.forEach(f => {
-                const name = f.properties.display_name || 'Zone';
-                const spacing = f.properties.max_spacing_m || 100;
-                if (!uniqueZones[name]) {
-                    uniqueZones[name] = spacing;
-                }
-            });
-            
-            legendEl.innerHTML = Object.entries(uniqueZones).map(([name, spacing]) => `
-                <div class="zone-legend-item">
-                    <div class="zone-legend-color" style="background: ${zoneColors[name] || '#3498db'}"></div>
-                    <span>${name}</span>
-                </div>
-            `).join('');
         }
         
         // Borehole marker configuration (meters) - fallback values, use CONFIG if available
