@@ -27,6 +27,7 @@ import logging
 from flask import Flask, jsonify, request, render_template, send_from_directory
 from flask_cors import CORS
 
+from zone_coverage_viz.config import get_frontend_config
 from zone_coverage_viz.data_loader import DataLoader
 from zone_coverage_viz.geometry_service import CoverageService
 
@@ -65,6 +66,17 @@ logger = logging.getLogger(__name__)
 def index() -> str:
     """Serve the main map interface."""
     return render_template("index.html")
+
+
+@app.route("/api/config")
+def get_config() -> Dict[str, Any]:
+    """
+    Get frontend configuration settings.
+
+    Returns:
+        JSON object with all configurable settings for the frontend.
+    """
+    return jsonify(get_frontend_config())
 
 
 @app.route("/api/zones")

@@ -336,10 +336,16 @@
     
     <script>
         // ═══════════════════════════════════════════════════════════════════
+        // � CONFIGURATION (loaded from server)
+        // ═══════════════════════════════════════════════════════════════════
+        
+        let CONFIG = null;  // Loaded from /api/config at startup
+        
+        // ═══════════════════════════════════════════════════════════════════
         // 🗺️ MAP INITIALIZATION
         // ═══════════════════════════════════════════════════════════════════
         
-        // Initialize map (centered on UK)
+        // Initialize map (centered on UK) - will be re-centered after data loads
         const map = L.map('map').setView([51.5, -1.0], 14);
         
         // Add base layer (OpenStreetMap) with very reduced opacity
@@ -348,8 +354,8 @@
             opacity: 0.25
         }).addTo(map);
         
-        // Layer groups
-        const zonesLayer = L.geoJSON(null, {
+        // Layer groups - initialized with default styles, updated after config loads
+        let zonesLayer = L.geoJSON(null, {
             style: {
                 color: '#666666',
                 weight: 2,
@@ -411,7 +417,8 @@
         let addBoreholeMode = false;
         
         // Zone colors
-        const zoneColors = {
+        // Zone colors - loaded from config, fallback here
+        let zoneColors = {
             'Embankment': '#e74c3c',
             'Highways': '#3498db'
         };
@@ -419,6 +426,17 @@
         // ═══════════════════════════════════════════════════════════════════
         // 🔄 API FUNCTIONS
         // ═══════════════════════════════════════════════════════════════════
+        
+        async function fetchConfig() {
+            try {
+                const response = await fetch('/api/config');
+                const data = await response.json();
+                return data;
+            } catch (error) {
+                console.error('Failed to fetch config:', error);
+                return null;
+            }
+        }
         
         async function fetchZones() {
             try {
@@ -569,16 +587,28 @@
         // 🎨 RENDERING FUNCTIONS
         // ═══════════════════════════════════════════════════════════════════
         
+        function getCoverageStatsConfig() {
+            return (CONFIG && CONFIG.coverageStats) ? CONFIG.coverageStats : {
+                good_threshold: 90,
+                medium_threshold: 50,
+                good_color: '#27ae60',
+                medium_color: '#f39c12',
+                poor_color: '#e74c3c'
+            };
+        }
+        
         function getPctClass(pct) {
-            if (pct >= 80) return 'pct-good';
-            if (pct >= 50) return 'pct-medium';
+            const cfg = getCoverageStatsConfig();
+            if (pct >= cfg.good_threshold) return 'pct-good';
+            if (pct >= cfg.medium_threshold) return 'pct-medium';
             return 'pct-poor';
         }
         
         function getPctColor(pct) {
-            if (pct >= 80) return '#27ae60';
-            if (pct >= 50) return '#f39c12';
-            return '#e74c3c';
+            const cfg = getCoverageStatsConfig();
+            if (pct >= cfg.good_threshold) return cfg.good_color;
+            if (pct >= cfg.medium_threshold) return cfg.medium_color;
+            return cfg.poor_color;
         }
         
         async function refreshCoverageStats() {
@@ -646,13 +676,26 @@
             `).join('');
         }
         
-        // Borehole marker configuration (meters)
-        const BOREHOLE_VISIBLE_RADIUS_M = 8;  // Visible black dot radius
-        const BOREHOLE_GRAB_RADIUS_M = 24;    // Invisible grab area (3x visible)
+        // Borehole marker configuration (meters) - fallback values, use CONFIG if available
+        function getBoreholeVisibleRadius() {
+            return (CONFIG && CONFIG.boreholeMarker) ? CONFIG.boreholeMarker.visible_radius_m : 8;
+        }
+        
+        function getBoreholeGrabRadius() {
+            return (CONFIG && CONFIG.boreholeMarker) ? CONFIG.boreholeMarker.grab_radius_m : 24;
+        }
+        
+        function getBoreholeColor() {
+            return (CONFIG && CONFIG.boreholeMarker) ? CONFIG.boreholeMarker.color : '#000000';
+        }
         
         function renderBoreholes(geojson) {
             boreholesLayer.clearLayers();
             boreholeMarkers = [];
+            
+            const visibleRadius = getBoreholeVisibleRadius();
+            const grabRadius = getBoreholeGrabRadius();
+            const markerColor = getBoreholeColor();
             
             geojson.features.forEach((feature, index) => {
                 const coords = feature.geometry.coordinates;
@@ -663,7 +706,7 @@
                 
                 // Create invisible grab circle (larger, for easier dragging)
                 const grabCircle = L.circle(latlng, {
-                    radius: BOREHOLE_GRAB_RADIUS_M,
+                    radius: grabRadius,
                     color: 'transparent',
                     fillColor: 'transparent',
                     fillOpacity: 0,
@@ -674,9 +717,9 @@
                 
                 // Create visible dot circle (smaller, black)
                 const visibleCircle = L.circle(latlng, {
-                    radius: BOREHOLE_VISIBLE_RADIUS_M,
-                    color: '#000000',
-                    fillColor: '#000000',
+                    radius: visibleRadius,
+                    color: markerColor,
+                    fillColor: markerColor,
                     fillOpacity: 1,
                     weight: 0,
                     interactive: false  // Events handled by grab circle
@@ -851,10 +894,33 @@
         // 🚀 INITIALIZATION
         // ═══════════════════════════════════════════════════════════════════
         
+        function applyConfig() {
+            // Apply configuration to layer styles and variables
+            if (!CONFIG) return;
+            
+            // Update zone colors from config
+            if (CONFIG.zoneColors) {
+                zoneColors = CONFIG.zoneColors;
+            }
+            
+            // Update base layer opacity
+            if (CONFIG.map && CONFIG.map.base_layer_opacity !== undefined) {
+                baseLayer.setOpacity(CONFIG.map.base_layer_opacity);
+            }
+            
+            console.log('📋 Config applied:', CONFIG);
+        }
+        
         async function initialize() {
             const loadingOverlay = document.getElementById('loadingOverlay');
             
             try {
+                // Load config first
+                CONFIG = await fetchConfig();
+                if (CONFIG) {
+                    applyConfig();
+                }
+                
                 // Load zones
                 zonesData = await fetchZones();
                 renderZones(zonesData);
