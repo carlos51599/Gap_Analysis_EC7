@@ -666,6 +666,10 @@ def worker_process_filter_combination(
                         # Add third pass visualization data (cell clouds/intersections)
                         if third_pass_viz_data:
                             result["third_pass_data"] = third_pass_viz_data
+                        # Extract cluster stats for Second Pass Tier 2 tooltips
+                        czrc_cluster_stats = czrc_opt_stats.get("cluster_stats", {})
+                        if czrc_cluster_stats:
+                            result["czrc_cluster_stats"] = czrc_cluster_stats
                         # Store first pass boreholes for per-pass CSV export
                         if first_pass_bhs:
                             result["first_pass_boreholes"] = first_pass_bhs

@@ -80,6 +80,10 @@ def _sanitize_log_name(name: str, max_zones: int = 5) -> Tuple[str, Optional[str
     For clusters with more than max_zones zones, returns a simplified name
     like "8zones" and the full abbreviated name for logging in the file header.
 
+    NOTE: This function is DEPRECATED for log naming. Use simple cluster indices
+    (Cluster1, Cluster2, etc.) for log filenames instead. The composition is
+    written as a header inside the log file for reference.
+
     Args:
         name: Raw name (e.g., "Embankment_0+Embankment_1")
         max_zones: Maximum zones before using count-based name (default 5)
@@ -141,6 +145,24 @@ def _sanitize_log_name(name: str, max_zones: int = 5) -> Tuple[str, Optional[str
         return short_name, full_name
     
     return full_name if full_name else "unnamed", None
+
+
+def _get_cluster_log_header(cluster_key: str) -> str:
+    """
+    Generate the full composition header for a cluster log file.
+    
+    Uses _sanitize_log_name to abbreviate zone names while preserving
+    the full structure for reference in log headers.
+    
+    Args:
+        cluster_key: Original cluster_key (e.g., "Embankment_1_Embankment_2+...")
+        
+    Returns:
+        Abbreviated composition string (e.g., "em1_em2_em1_hi2_em2_hi2")
+    """
+    safe_name, full_name = _sanitize_log_name(cluster_key)
+    # Return the full abbreviated name if truncated, otherwise the safe name
+    return full_name if full_name else safe_name
 
 
 def _get_czrc_stall_detection_config(czrc_ilp_config: Dict[str, Any]) -> Dict[str, Any]:
@@ -1675,6 +1697,8 @@ def check_and_split_large_cluster(
         {
             "status": "success",
             "cluster_key": cluster_key,
+            "cluster_index": cluster_idx + 1,  # 1-based index for log/tooltip correlation
+            "pair_keys": cluster["pair_keys"],  # For Second Pass Grid Tier 2 tooltips
             "was_split": True,
             "original_area_m2": cluster_area,
             "area_ha": cluster_area_ha,  # Tier1 area in hectares for stats reporting
@@ -2133,26 +2157,26 @@ def run_cell_czrc_pass(
 
     for pair_idx, (cell_i, cell_j, czrc_region) in enumerate(adjacencies):
         # Generate HiGHS log file path for this cell-cell pair
+        # Uses simple Cluster{N}_Cell{A}_Cell{B} naming for easy correlation with HTML tooltips
+        # Full cluster composition is written as a header inside the log file
         highs_log_file = None
         cluster_header = None
         if highs_log_folder:
             os.makedirs(highs_log_folder, exist_ok=True)
-            # Use cluster_key for meaningful log filename if available
+            # Generate full composition header for the log file
             if cluster_key:
-                safe_cluster_name, full_name = _sanitize_log_name(cluster_key)
-                cluster_header = full_name  # Will be None if not truncated
-                highs_log_file = os.path.join(
-                    highs_log_folder,
-                    f"third_{safe_cluster_name}_c{cell_i}_c{cell_j}.log",
-                )
-            else:
-                # Fallback to numeric naming
-                highs_log_file = os.path.join(
-                    highs_log_folder,
-                    f"third_c{cluster_idx + 1:02d}_c{cell_i}_c{cell_j}.log",
-                )
+                cluster_header = _get_cluster_log_header(cluster_key)
+            # Cell indices are 1-based for user display
+            cell_i_display = cell_i + 1
+            cell_j_display = cell_j + 1
+            # cluster_idx is 0-based, convert to 1-based for display
+            cluster_num = cluster_idx + 1
+            highs_log_file = os.path.join(
+                highs_log_folder,
+                f"third_Cluster{cluster_num}_Cell{cell_i_display}_Cell{cell_j_display}.log",
+            )
         
-        # Write cluster composition header to log file if using simplified name
+        # Always write cluster composition header to log file
         if highs_log_file and cluster_header:
             with open(highs_log_file, 'w') as f:
                 f.write(f"# Cluster composition: {cluster_header}\n")
@@ -2430,35 +2454,37 @@ def solve_czrc_ilp_for_cluster(
     cluster_key = "+".join(sorted(pair_keys))
 
     # Generate HiGHS log file path if folder provided
+    # Uses simple Cluster{N} naming for easy correlation with HTML tooltips
+    # Full cluster composition is written as a header inside the log file
     highs_log_file: Optional[str] = None
     cluster_header: Optional[str] = None
     if highs_log_folder:
         import os
 
         os.makedirs(highs_log_folder, exist_ok=True)
-        # Use meaningful cluster_key for log filenames
-        safe_cluster_name, full_name = _sanitize_log_name(cluster_key)
-        cluster_header = full_name  # Will be None if not truncated
+        # Generate full composition header for the log file
+        cluster_header = _get_cluster_log_header(cluster_key)
         # cluster_idx < 1000: cell solve within split cluster
         # cluster_idx >= 1000: direct solve (non-split cluster)
         if cluster_idx >= 1000:
-            # Direct solve - use cluster name
+            # Direct solve - use simple Cluster{N} naming (N is 1-based for user display)
+            actual_cluster_num = (cluster_idx - 1000) + 1  # Convert to 1-based
             highs_log_file = os.path.join(
-                highs_log_folder, f"second_{safe_cluster_name}.log"
+                highs_log_folder, f"second_Cluster{actual_cluster_num}.log"
             )
         else:
-            # Cell solve within split cluster - include cell index
-            cell_idx = cluster_idx % 100
+            # Cell solve within split cluster - use Cluster{N}_Cell{M} naming
+            actual_cluster_num = (cluster_idx // 100) + 1  # Extract cluster number (1-based)
+            cell_num = (cluster_idx % 100) + 1  # Extract cell number (1-based)
             highs_log_file = os.path.join(
                 highs_log_folder,
-                f"second_{safe_cluster_name}_c{cell_idx + 1:02d}.log",
+                f"second_Cluster{actual_cluster_num}_Cell{cell_num}.log",
             )
         
-        # Write cluster composition header to log file if using simplified name
-        if cluster_header:
-            with open(highs_log_file, 'w') as f:
-                f.write(f"# Cluster composition: {cluster_header}\n")
-                f.write(f"# Original cluster_key: {cluster_key}\n\n")
+        # Always write cluster composition header to log file
+        with open(highs_log_file, 'w') as f:
+            f.write(f"# Cluster composition: {cluster_header}\n")
+            f.write(f"# Original cluster_key: {cluster_key}\n\n")
 
     if czrc_cache is not None:
         # Use cache: key is based on actual problem (unsatisfied test points)
@@ -2504,9 +2530,14 @@ def solve_czrc_ilp_for_cluster(
 
     cluster_key = "+".join(sorted(pair_keys))
     cluster_area_ha = unified_tier1.area / 10000.0  # m² to hectares
+    # Determine cluster display index (1-based for user display)
+    # cluster_idx >= 1000: direct solve (N = cluster_idx - 1000 + 1)
+    # cluster_idx < 1000: split solve (handled differently)
+    cluster_display_idx = (cluster_idx - 1000 + 1) if cluster_idx >= 1000 else (cluster_idx + 1)
     stats = {
         "status": "success",
         "cluster_key": cluster_key,
+        "cluster_index": cluster_display_idx,  # 1-based index for log/tooltip correlation
         "pair_keys": pair_keys,
         "is_unified_cluster": len(pair_keys) > 1,
         "overall_r_max": overall_r_max,
