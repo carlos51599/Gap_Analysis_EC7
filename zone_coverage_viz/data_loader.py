@@ -287,7 +287,10 @@ class DataLoader:
                 max_spacing = layer_config.get("max_spacing_m", 100.0)
                 gdf["max_spacing_m"] = max_spacing
                 gdf["layer_key"] = layer_key
-                gdf["zone_name"] = layer_config.get("display_name", layer_key)
+
+                # Enumerate zones like main.py does: "Embankment_0", "Embankment_1", etc.
+                display_name = layer_config.get("display_name", layer_key)
+                gdf["zone_name"] = [f"{display_name}_{i}" for i in range(len(gdf))]
 
                 zones_list.append(gdf)
                 logger.info(f"Loaded {len(gdf)} features from {layer_key}")

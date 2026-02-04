@@ -5,6 +5,9 @@ REM Run from Embankment_Grid directory or Gap_Analysis_EC7 directory
 echo Starting Zone Coverage Visualization Server...
 echo.
 
+REM Open browser after a short delay (start in background)
+start "" cmd /c "timeout /t 2 /nobreak >nul && start http://localhost:5051"
+
 REM Check if we're in the right directory
 if exist "zone_coverage_viz\server.py" (
     echo Found server in current directory

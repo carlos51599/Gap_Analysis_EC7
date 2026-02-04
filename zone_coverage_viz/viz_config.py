@@ -195,6 +195,8 @@ class UIConfig:
     add_btn_active_color: str = "#e74c3c"
     delete_hint_color: str = "#e74c3c"
     add_mode_indicator_color: str = "#27ae60"
+    coverage_panel_width_px: int = 320
+    coverage_progress_bar_width_px: int = 100
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "UIConfig":
@@ -206,6 +208,8 @@ class UIConfig:
             add_btn_active_color=d.get("add_btn_active_color", "#e74c3c"),
             delete_hint_color=d.get("delete_hint_color", "#e74c3c"),
             add_mode_indicator_color=d.get("add_mode_indicator_color", "#27ae60"),
+            coverage_panel_width_px=d.get("coverage_panel_width_px", 320),
+            coverage_progress_bar_width_px=d.get("coverage_progress_bar_width_px", 100),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -217,6 +221,8 @@ class UIConfig:
             "add_btn_active_color": self.add_btn_active_color,
             "delete_hint_color": self.delete_hint_color,
             "add_mode_indicator_color": self.add_mode_indicator_color,
+            "coverage_panel_width_px": self.coverage_panel_width_px,
+            "coverage_progress_bar_width_px": self.coverage_progress_bar_width_px,
         }
 
 
@@ -279,7 +285,7 @@ class VizConfig:
             ),
             default_zone_color=d.get("default_zone_color", "#3498db"),
             zone_polygon_style=PolygonStyleConfig.from_dict(
-                d.get("zone_polygon_style", {})
+                d.get("zone_polygon_style", {"weight": 3})
             ),
             proposed_coverage_style=PolygonStyleConfig.from_dict(
                 d.get(

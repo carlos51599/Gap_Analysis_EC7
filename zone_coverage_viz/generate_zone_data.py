@@ -124,7 +124,8 @@ def load_zones(workspace_root: Path) -> Tuple[gpd.GeoDataFrame, List[Dict]]:
 
         gdf["max_spacing_m"] = max_spacing
         gdf["layer_key"] = layer_key
-        gdf["zone_name"] = display_name
+        # Enumerate zones like main.py does: "Embankment_0", "Embankment_1", etc.
+        gdf["zone_name"] = [f"{display_name}_{i}" for i in range(len(gdf))]
 
         zones_list.append(gdf)
         logger.info(
