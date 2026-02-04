@@ -79,6 +79,20 @@ def get_config() -> Dict[str, Any]:
     return jsonify(get_frontend_config())
 
 
+@app.route("/api/data/info")
+def get_data_info() -> Dict[str, Any]:
+    """
+    Get information about loaded data including timestamps.
+
+    Returns:
+        JSON object with data_file_modified, data_loaded_at, zone_count, borehole_count.
+    """
+    if data_loader is None:
+        return jsonify({"error": "Server not initialized"}), 500
+
+    return jsonify(data_loader.get_data_info())
+
+
 @app.route("/api/zones")
 def get_zones() -> Dict[str, Any]:
     """

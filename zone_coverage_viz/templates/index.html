@@ -261,6 +261,14 @@
             margin-top: 8px;
             font-weight: bold;
         }
+        
+        .data-timestamp {
+            font-size: 10px;
+            color: #888;
+            margin-top: 8px;
+            padding-top: 6px;
+            border-top: 1px solid #eee;
+        }
     </style>
 </head>
 <body>
@@ -320,6 +328,7 @@
             <div id="coverageStatsContent">
                 <span style="color: #888; font-size: 11px;">Loading...</span>
             </div>
+            <div class="data-timestamp" id="dataTimestamp"></div>
         </div>
         <div class="zone-legend" id="zoneLegend"></div>
     </div>
@@ -434,6 +443,17 @@
                 return data;
             } catch (error) {
                 console.error('Failed to fetch config:', error);
+                return null;
+            }
+        }
+        
+        async function fetchDataInfo() {
+            try {
+                const response = await fetch('/api/data/info');
+                const data = await response.json();
+                return data;
+            } catch (error) {
+                console.error('Failed to fetch data info:', error);
                 return null;
             }
         }
@@ -648,6 +668,28 @@
             `;
             
             container.innerHTML = html;
+        }
+        
+        async function updateDataTimestamp() {
+            const dataInfo = await fetchDataInfo();
+            if (!dataInfo) return;
+            
+            const container = document.getElementById('dataTimestamp');
+            
+            if (dataInfo.data_file_modified) {
+                // Parse ISO date and format for display
+                const modifiedDate = new Date(dataInfo.data_file_modified);
+                const formattedDate = modifiedDate.toLocaleString('en-GB', {
+                    day: '2-digit',
+                    month: 'short',
+                    year: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                });
+                container.innerHTML = `📁 Data from: ${formattedDate}`;
+            } else {
+                container.innerHTML = '';
+            }
         }
         
         function renderZones(geojson) {
@@ -939,6 +981,9 @@
                 
                 // Load coverage stats
                 await refreshCoverageStats();
+                
+                // Load data timestamp
+                await updateDataTimestamp();
                 
                 // Fit map to zones bounds
                 if (zonesLayer.getBounds().isValid()) {

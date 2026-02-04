@@ -23,8 +23,10 @@ For Navigation: Use VS Code outline (Ctrl+Shift+O)
 
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from datetime import datetime
 import json
 import logging
+import os
 
 import geopandas as gpd
 import pandas as pd
@@ -72,6 +74,10 @@ class DataLoader:
         self._boreholes_gdf: Optional[gpd.GeoDataFrame] = None
         self._existing_coverage_gdf: Optional[gpd.GeoDataFrame] = None
 
+        # Data file timestamp
+        self._data_file_modified: Optional[datetime] = None
+        self._data_loaded_at: Optional[datetime] = None
+
         # Coordinate transformer
         self._wgs84_to_bng = Transformer.from_crs(CRS_WGS84, CRS_BNG, always_xy=True)
         self._bng_to_wgs84 = Transformer.from_crs(CRS_BNG, CRS_WGS84, always_xy=True)
@@ -98,6 +104,11 @@ class DataLoader:
             json_path: Path to the JSON file
         """
         logger.info(f"Loading data from: {json_path.name}")
+
+        # Capture file modification time
+        file_mtime = os.path.getmtime(json_path)
+        self._data_file_modified = datetime.fromtimestamp(file_mtime)
+        self._data_loaded_at = datetime.now()
 
         with open(json_path, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -516,3 +527,25 @@ class DataLoader:
         self._boreholes_data = boreholes_geojson
         self._boreholes_gdf = self._geojson_to_gdf(boreholes_geojson, CRS_BNG)
         logger.info(f"🔄 Restored state with {len(self._boreholes_gdf)} boreholes")
+
+    def get_data_info(self) -> Dict[str, Any]:
+        """
+        Get information about the loaded data including timestamps.
+
+        Returns:
+            Dict with data_file_modified, data_loaded_at, zone_count, borehole_count.
+        """
+        return {
+            "data_file_modified": (
+                self._data_file_modified.isoformat()
+                if self._data_file_modified
+                else None
+            ),
+            "data_loaded_at": (
+                self._data_loaded_at.isoformat() if self._data_loaded_at else None
+            ),
+            "zone_count": len(self._zones_gdf) if self._zones_gdf is not None else 0,
+            "borehole_count": (
+                len(self._boreholes_gdf) if self._boreholes_gdf is not None else 0
+            ),
+        }
