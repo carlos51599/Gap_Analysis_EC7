@@ -209,6 +209,67 @@
             margin-top: 8px;
             line-height: 1.4;
         }
+        
+        .coverage-stats {
+            margin-top: 10px;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 6px;
+        }
+        
+        .coverage-stats h4 {
+            margin: 0 0 8px 0;
+            font-size: 12px;
+            color: #333;
+        }
+        
+        .coverage-stats .stat-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 6px;
+            font-size: 12px;
+        }
+        
+        .coverage-stats .zone-name {
+            color: #666;
+            max-width: 120px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        
+        .coverage-stats .pct-value {
+            font-weight: bold;
+            min-width: 50px;
+            text-align: right;
+        }
+        
+        .coverage-stats .pct-good { color: #27ae60; }
+        .coverage-stats .pct-medium { color: #f39c12; }
+        .coverage-stats .pct-poor { color: #e74c3c; }
+        
+        .coverage-stats .progress-bar {
+            flex: 1;
+            height: 6px;
+            background: #e0e0e0;
+            border-radius: 3px;
+            margin: 0 8px;
+            overflow: hidden;
+        }
+        
+        .coverage-stats .progress-fill {
+            height: 100%;
+            border-radius: 3px;
+            transition: width 0.3s ease;
+        }
+        
+        .coverage-stats .total-row {
+            border-top: 1px solid #ddd;
+            padding-top: 8px;
+            margin-top: 8px;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
@@ -261,6 +322,12 @@
             <div class="stat">
                 <span class="stat-label">Radius:</span>
                 <span class="stat-value" id="selectedRadius">-</span>
+            </div>
+        </div>
+        <div class="coverage-stats" id="coverageStats">
+            <h4>📊 Coverage by Zone</h4>
+            <div id="coverageStatsContent">
+                <span style="color: #888; font-size: 11px;">Loading...</span>
             </div>
         </div>
         <div class="zone-legend" id="zoneLegend"></div>
@@ -406,6 +473,17 @@
             }
         }
         
+        async function fetchCoverageStats() {
+            try {
+                const response = await fetch('/api/coverage/stats');
+                const data = await response.json();
+                return data;
+            } catch (error) {
+                console.error('Failed to fetch coverage stats:', error);
+                return null;
+            }
+        }
+        
         async function updateBoreholePosition(index, lon, lat) {
             try {
                 const response = await fetch('/api/coverage/update', {
@@ -491,11 +569,65 @@
             
             updateUndoButton();
             console.log('↩️ Undo performed');
+            
+            // Refresh coverage stats
+            await refreshCoverageStats();
         }
         
         // ═══════════════════════════════════════════════════════════════════
         // 🎨 RENDERING FUNCTIONS
         // ═══════════════════════════════════════════════════════════════════
+        
+        function getPctClass(pct) {
+            if (pct >= 80) return 'pct-good';
+            if (pct >= 50) return 'pct-medium';
+            return 'pct-poor';
+        }
+        
+        function getPctColor(pct) {
+            if (pct >= 80) return '#27ae60';
+            if (pct >= 50) return '#f39c12';
+            return '#e74c3c';
+        }
+        
+        async function refreshCoverageStats() {
+            const stats = await fetchCoverageStats();
+            if (!stats) return;
+            
+            const container = document.getElementById('coverageStatsContent');
+            
+            // Build HTML for per-zone stats
+            let html = '';
+            
+            for (const zone of stats.per_zone) {
+                const pctClass = getPctClass(zone.coverage_pct);
+                const pctColor = getPctColor(zone.coverage_pct);
+                
+                html += `
+                    <div class="stat-row">
+                        <span class="zone-name" title="${zone.zone_name}">${zone.zone_name}</span>
+                        <div class="progress-bar">
+                            <div class="progress-fill" style="width: ${Math.min(zone.coverage_pct, 100)}%; background: ${pctColor};"></div>
+                        </div>
+                        <span class="pct-value ${pctClass}">${zone.coverage_pct}%</span>
+                    </div>
+                `;
+            }
+            
+            // Add total row
+            const totalPctClass = getPctClass(stats.total.coverage_pct);
+            html += `
+                <div class="stat-row total-row">
+                    <span class="zone-name">Total</span>
+                    <div class="progress-bar">
+                        <div class="progress-fill" style="width: ${Math.min(stats.total.coverage_pct, 100)}%; background: ${getPctColor(stats.total.coverage_pct)};"></div>
+                    </div>
+                    <span class="pct-value ${totalPctClass}">${stats.total.coverage_pct}%</span>
+                </div>
+            `;
+            
+            container.innerHTML = html;
+        }
         
         function renderZones(geojson) {
             zonesLayer.clearLayers();
@@ -577,6 +709,9 @@
                         
                         // Update info panel
                         showBoreholeInfo(marker, result.zone_info);
+                        
+                        // Refresh coverage stats
+                        await refreshCoverageStats();
                     }
                 });
                 
@@ -597,6 +732,9 @@
                             // Refresh all coverages
                             const coverages = await fetchAllCoverages();
                             renderCoverages(coverages);
+                            
+                            // Refresh coverage stats
+                            await refreshCoverageStats();
                             
                             console.log(`🗑️ Deleted borehole ${marker.boreholeId}`);
                         }
@@ -685,6 +823,9 @@
                 const coverages = await fetchAllCoverages();
                 renderCoverages(coverages);
                 
+                // Load coverage stats
+                await refreshCoverageStats();
+                
                 // Fit map to zones bounds
                 if (zonesLayer.getBounds().isValid()) {
                     map.fitBounds(zonesLayer.getBounds(), { padding: [20, 20] });
@@ -772,6 +913,9 @@
                     result.coverage.properties.borehole_index = result.index;
                     coverageLayer.addData(result.coverage);
                 }
+                
+                // Refresh coverage stats
+                await refreshCoverageStats();
                 
                 console.log(`➕ Added borehole at (${lon.toFixed(6)}, ${lat.toFixed(6)})`);
             }

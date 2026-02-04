@@ -279,6 +279,35 @@ def compute_all_coverages() -> Dict[str, Any]:
     return jsonify({"type": "FeatureCollection", "features": coverages})
 
 
+@app.route("/api/coverage/stats", methods=["GET"])
+def get_coverage_stats() -> Dict[str, Any]:
+    """
+    Get coverage statistics (% area covered) for all zones.
+
+    Returns:
+        {
+            "per_zone": [{zone_name, total_area_m2, covered_area_m2, coverage_pct}],
+            "total": {total_area_m2, covered_area_m2, coverage_pct}
+        }
+    """
+    if coverage_service is None or data_loader is None:
+        return jsonify({"error": "Server not initialized"}), 500
+
+    # Get current borehole positions
+    boreholes = data_loader.get_boreholes_geojson()
+    positions = []
+
+    for feature in boreholes.get("features", []):
+        coords = feature.get("geometry", {}).get("coordinates", [])
+        if len(coords) >= 2:
+            positions.append((coords[0], coords[1]))  # (lon, lat)
+
+    # Compute stats
+    stats = coverage_service.compute_coverage_stats(positions)
+
+    return jsonify(stats)
+
+
 @app.route("/api/existing-coverage", methods=["GET"])
 def get_existing_coverage() -> Dict[str, Any]:
     """

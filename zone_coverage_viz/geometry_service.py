@@ -253,3 +253,95 @@ class CoverageService:
             return self._bng_to_wgs84.transform(x, y)
 
         return transform(transform_coords, geom)
+
+    def compute_coverage_stats(
+        self,
+        borehole_positions: List[Tuple[float, float]],
+    ) -> Dict[str, Any]:
+        """
+        Compute coverage statistics for all zones given current borehole positions.
+
+        Args:
+            borehole_positions: List of (lon, lat) tuples in WGS84
+
+        Returns:
+            Dict with:
+            - per_zone: List of {zone_name, total_area_m2, covered_area_m2, coverage_pct}
+            - total: {total_area_m2, covered_area_m2, coverage_pct}
+        """
+        # Build all coverage circles in BNG
+        all_coverages: List[Any] = []
+
+        for lon, lat in borehole_positions:
+            x, y = self._wgs84_to_bng.transform(lon, lat)
+            point = Point(x, y)
+
+            # Collect fragments from each zone this borehole could cover
+            for idx, zone in self.zones_gdf.iterrows():
+                zone_geom = zone.geometry
+                if zone_geom is None or zone_geom.is_empty:
+                    continue
+
+                max_spacing_m = self._get_zone_spacing(zone)
+
+                # Check if point could cover any part of this zone
+                if point.distance(zone_geom) > max_spacing_m:
+                    continue
+
+                # Create buffer and clip to zone
+                buffer = point.buffer(max_spacing_m, resolution=BUFFER_RESOLUTION)
+                try:
+                    intersection = buffer.intersection(zone_geom)
+                    if not intersection.is_empty:
+                        all_coverages.append(intersection)
+                except Exception:
+                    continue
+
+        # Merge all coverage fragments
+        total_coverage = unary_union(all_coverages) if all_coverages else None
+
+        # Compute per-zone stats
+        per_zone_stats = []
+        total_zone_area = 0.0
+        total_covered_area = 0.0
+
+        for idx, zone in self.zones_gdf.iterrows():
+            zone_geom = zone.geometry
+            if zone_geom is None or zone_geom.is_empty:
+                continue
+
+            zone_name = self._get_zone_name(zone, idx)
+            zone_area = zone_geom.area  # In square meters (BNG)
+
+            if total_coverage is not None:
+                try:
+                    covered_in_zone = total_coverage.intersection(zone_geom)
+                    covered_area = covered_in_zone.area if not covered_in_zone.is_empty else 0.0
+                except Exception:
+                    covered_area = 0.0
+            else:
+                covered_area = 0.0
+
+            coverage_pct = (covered_area / zone_area * 100.0) if zone_area > 0 else 0.0
+
+            per_zone_stats.append({
+                "zone_name": zone_name,
+                "total_area_m2": round(zone_area, 1),
+                "covered_area_m2": round(covered_area, 1),
+                "coverage_pct": round(coverage_pct, 1),
+            })
+
+            total_zone_area += zone_area
+            total_covered_area += covered_area
+
+        # Compute overall stats
+        overall_pct = (total_covered_area / total_zone_area * 100.0) if total_zone_area > 0 else 0.0
+
+        return {
+            "per_zone": per_zone_stats,
+            "total": {
+                "total_area_m2": round(total_zone_area, 1),
+                "covered_area_m2": round(total_covered_area, 1),
+                "coverage_pct": round(overall_pct, 1),
+            },
+        }
