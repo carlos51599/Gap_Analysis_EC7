@@ -357,7 +357,7 @@
     
     <!-- Left Panel Toggle Button -->
     <button class="panel-toggle-btn panel-open" id="leftPanelToggle" title="Toggle Coverage Panel">
-        <span class="arrow">◀</span>
+        <span class="arrow">▶</span>
     </button>
     
     <!-- Left Panel - Coverage by Zone -->
@@ -365,7 +365,7 @@
         <div class="left-panel-header">
             <h4>📊 Coverage by Zone</h4>
         </div>
-        <div class="left-panel-content">
+        <div class="left-panel-content coverage-stats">
             <div id="coverageStatsContent">
                 <span style="color: #888; font-size: 11px;">Loading...</span>
             </div>
@@ -447,7 +447,7 @@
         // ═══════════════════════════════════════════════════════════════════
         
         // Initialize map (centered on UK) - will be re-centered after data loads
-        const map = L.map('map').setView([51.5, -1.0], 14);
+        const map = L.map('map', { zoomControl: false }).setView([51.5, -1.0], 14);
         
         // Add base layer (OpenStreetMap) with very reduced opacity
         const baseLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
