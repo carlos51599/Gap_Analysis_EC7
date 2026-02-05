@@ -896,6 +896,30 @@
             }
         }
         
+        /**
+         * Fetch existing coverage clipped to visible zones (SSOT compliant).
+         * Server clips the coverage polygon to exclude hidden zones.
+         * @param {string[]} excludeZones - Zone names to exclude
+         * @returns {Object} GeoJSON FeatureCollection of clipped existing coverage
+         */
+        async function fetchFilteredExistingCoverage(excludeZones) {
+            const t_start = performance.now();
+            try {
+                const response = await fetch('/api/existing-coverage/filtered', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ excludeZones })
+                });
+                const data = await response.json();
+                const t_end = performance.now();
+                console.log(`🔄 Filtered existing coverage fetched in ${(t_end - t_start).toFixed(1)}ms (excluding ${excludeZones.length} zones)`);
+                return data;
+            } catch (error) {
+                console.error('Failed to fetch filtered existing coverage:', error);
+                return { type: 'FeatureCollection', features: [] };
+            }
+        }
+        
         async function fetchCoverageStats() {
             try {
                 const response = await fetch('/api/coverage/stats');
@@ -1334,7 +1358,7 @@
                 }
             });
             
-            // 4. Fetch coverages from server (SSOT - server handles all filtering)
+            // 4. Fetch PROPOSED coverages from server (SSOT - server handles all filtering)
             const hiddenZones = getHiddenZoneNames();
             
             if (hiddenZones.length === 0) {
@@ -1347,10 +1371,21 @@
                 renderCoverages(filteredCoverages);
             }
             
-            // 5. Re-sync coverage zones to markers after re-rendering
+            // 5. Fetch EXISTING coverages from server (SSOT - server clips to visible zones)
+            if (hiddenZones.length === 0) {
+                // All zones visible - fetch full existing coverage
+                const existingCoverage = await fetchExistingCoverage();
+                renderExistingCoverage(existingCoverage);
+            } else {
+                // Some zones hidden - server clips existing coverage to visible zones
+                const filteredExisting = await fetchFilteredExistingCoverage(hiddenZones);
+                renderExistingCoverage(filteredExisting);
+            }
+            
+            // 6. Re-sync coverage zones to markers after re-rendering
             syncCoverageZonesToMarkers();
             
-            // 6. Update count display
+            // 7. Update count display
             updateBoreholeCountDisplay();
             
             const t_end = performance.now();

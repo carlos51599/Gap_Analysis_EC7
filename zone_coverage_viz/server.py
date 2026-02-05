@@ -704,6 +704,47 @@ def get_existing_coverage() -> Dict[str, Any]:
     return jsonify(existing)
 
 
+@app.route("/api/existing-coverage/filtered", methods=["POST"])
+def get_existing_coverage_filtered() -> Dict[str, Any]:
+    """
+    Get existing coverage clipped to visible zones (SSOT compliant).
+
+    Server clips existing coverage polygon to exclude hidden zones.
+    Same pattern as /api/coverage/filtered for proposed coverage.
+
+    Request Body:
+        {
+            "excludeZones": ["ZoneName1", "ZoneName2", ...]
+        }
+
+    Returns:
+        GeoJSON FeatureCollection with clipped existing coverage polygons.
+    """
+    if data_loader is None or coverage_service is None:
+        return jsonify({"error": "Server not initialized"}), 500
+
+    data = request.get_json()
+    exclude_zones = data.get("excludeZones", []) if data else []
+
+    existing = data_loader.get_existing_coverage_geojson()
+
+    if existing is None or not existing.get("features"):
+        return jsonify({"type": "FeatureCollection", "features": []})
+
+    # If no zones excluded, return full existing coverage
+    if not exclude_zones:
+        return jsonify(existing)
+
+    # Clip existing coverage to visible zones
+    clipped = coverage_service.clip_coverage_to_visible_zones(existing, exclude_zones)
+    logger.info(
+        f"📊 Existing coverage filtered: excluded {exclude_zones}, "
+        f"features: {len(clipped.get('features', []))}"
+    )
+
+    return jsonify(clipped)
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 🚀 SERVER INITIALIZATION
 # ═══════════════════════════════════════════════════════════════════════════

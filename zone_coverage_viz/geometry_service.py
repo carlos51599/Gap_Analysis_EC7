@@ -836,3 +836,88 @@ class CoverageService:
                 "coverage_pct": round(overall_pct, 1),
             },
         }
+
+    def clip_coverage_to_visible_zones(
+        self,
+        coverage_geojson: Dict[str, Any],
+        exclude_zones: List[str],
+    ) -> Dict[str, Any]:
+        """
+        Clip coverage GeoJSON to visible zones (excluding specified zones).
+
+        Used for both proposed and existing coverage when zones are hidden.
+        SSOT compliant - server decides what geometry to return.
+
+        Args:
+            coverage_geojson: GeoJSON FeatureCollection with coverage polygons
+            exclude_zones: List of zone names to exclude from visibility
+
+        Returns:
+            GeoJSON FeatureCollection with clipped coverage polygons.
+        """
+        from shapely.geometry import shape, mapping, Polygon
+        from shapely.ops import unary_union
+
+        if not coverage_geojson or not coverage_geojson.get("features"):
+            return {"type": "FeatureCollection", "features": []}
+
+        excluded_set = set(exclude_zones)
+
+        # Build union of visible zones in WGS84
+        visible_zone_geoms = []
+        for idx, zone in self.zones_gdf.iterrows():
+            zone_name = self._get_zone_name(zone, idx)
+            if zone_name not in excluded_set:
+                # Convert zone geometry from BNG to WGS84 for clipping
+                zone_geom = zone.geometry
+                if zone_geom and not zone_geom.is_empty:
+                    # Transform to WGS84
+                    wgs84_coords = []
+                    if zone_geom.geom_type == "Polygon":
+                        for x, y in zone_geom.exterior.coords:
+                            lon, lat = self._bng_to_wgs84.transform(x, y)
+                            wgs84_coords.append((lon, lat))
+                        visible_zone_geoms.append(Polygon(wgs84_coords))
+                    elif zone_geom.geom_type == "MultiPolygon":
+                        for poly in zone_geom.geoms:
+                            poly_coords = []
+                            for x, y in poly.exterior.coords:
+                                lon, lat = self._bng_to_wgs84.transform(x, y)
+                                poly_coords.append((lon, lat))
+                            visible_zone_geoms.append(Polygon(poly_coords))
+
+        if not visible_zone_geoms:
+            # No visible zones - return empty
+            return {"type": "FeatureCollection", "features": []}
+
+        visible_union = unary_union(visible_zone_geoms)
+
+        # Clip each coverage feature to visible zones
+        clipped_features = []
+        for feature in coverage_geojson.get("features", []):
+            geom = feature.get("geometry")
+            if not geom:
+                continue
+
+            try:
+                coverage_shape = shape(geom)
+                clipped = coverage_shape.intersection(visible_union)
+
+                if not clipped.is_empty:
+                    clipped_features.append(
+                        {
+                            "type": "Feature",
+                            "properties": feature.get("properties", {}),
+                            "geometry": mapping(clipped),
+                        }
+                    )
+            except Exception as e:
+                logger.warning(f"Failed to clip coverage feature: {e}")
+                continue
+
+        logger.info(
+            f"Clipped {len(coverage_geojson.get('features', []))} features to "
+            f"{len(clipped_features)} (excluded zones: {exclude_zones})"
+        )
+
+        return {"type": "FeatureCollection", "features": clipped_features}
