@@ -321,14 +321,15 @@ class CoverageService:
         for col in ["display_name", "original_name"]:
             if col in zone.index and zone[col] is not None:
                 return str(zone[col])
-        
+
         # Fallback: derive from zone_name by removing trailing _N index
         zone_name = self._get_zone_name(zone, idx)
         import re
-        match = re.match(r'^(.+?)_\d+$', zone_name)
+
+        match = re.match(r"^(.+?)_\d+$", zone_name)
         if match:
             return match.group(1)
-        
+
         # Last resort: derive from layer_key
         layer_key = self._get_zone_layer_key(zone)
         return layer_key.replace("_zones", "").replace("_", " ").title()

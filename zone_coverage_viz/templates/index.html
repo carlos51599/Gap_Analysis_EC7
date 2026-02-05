@@ -636,9 +636,9 @@
         // Zone visibility state: { "zone_name": true/false }
         let zoneVisibility = {};
         
-        // Boreholes hidden with each zone: { "zone_name": Set of borehole indices }
-        // Only boreholes inside a zone WHEN it was hidden are tracked here
-        let hiddenBoreholesPerZone = {};
+        // NOTE: We no longer use hiddenBoreholesPerZone - zone associations are
+        // pre-computed by server as zone_ids in each borehole's properties.
+        // This is the single source of truth for zone-borehole relationships.
         
         // Undo history stack
         let undoHistory = [];
@@ -671,7 +671,8 @@
         //    - Moving markers off-screen
         //    - Separate tracking without layer removal
         //
-        // See updateBoreholeVisibilityForZones() for reference implementation.
+        // Zone visibility uses pre-computed zone_ids from server (single source of truth).
+        // See toggleZoneVisibility() for reference implementation.
         // ═══════════════════════════════════════════════════════════════════
         
         /**
@@ -702,6 +703,23 @@
                 }
             });
             return hiddenIndices;
+        }
+        
+        /**
+         * Check if a borehole should be visible based on zone visibility state.
+         * Uses pre-computed zone_ids from server (single source of truth).
+         * 
+         * Rule: Borehole is hidden if ANY of its containing zones is hidden.
+         * 
+         * @param {Array<string>} zoneIds - Array of zone names containing this borehole
+         * @returns {boolean} - True if borehole should be visible
+         */
+        function isBoreholeVisibleByZones(zoneIds) {
+            if (!zoneIds || zoneIds.length === 0) {
+                return true; // Borehole not in any zone = always visible
+            }
+            // Hidden if ANY zone is hidden
+            return !zoneIds.some(zid => zoneVisibility[zid] === false);
         }
         
         /**
@@ -1147,36 +1165,15 @@
             }
         }
         
-        // Toggle zone visibility (zone polygon and boreholes inside it)
+        // Toggle zone visibility - INSTANT using pre-computed zone_ids
+        // No server calls, no geometry tests - uses zone_ids from borehole data
         function toggleZoneVisibility(zoneName, visible) {
+            console.log(`🔄 Toggle zone ${zoneName}: ${visible}`);
+            
+            // 1. Update state
             zoneVisibility[zoneName] = visible;
             
-            // When hiding a zone, capture which boreholes are currently inside it
-            if (!visible) {
-                // Find the zone geometry
-                const zoneFeature = zonesData.features.find(f => {
-                    const props = f.properties;
-                    return props?.zone_name === zoneName || props?.display_name === zoneName;
-                });
-                
-                if (zoneFeature) {
-                    // Track boreholes currently inside this zone
-                    const boreholesInZone = new Set();
-                    boreholeMarkers.forEach((grabCircle) => {
-                        const latlng = grabCircle.getLatLng();
-                        const point = [latlng.lng, latlng.lat];
-                        if (isPointInPolygon(point, zoneFeature.geometry)) {
-                            boreholesInZone.add(grabCircle.boreholeIndex);
-                        }
-                    });
-                    hiddenBoreholesPerZone[zoneName] = boreholesInZone;
-                }
-            } else {
-                // When showing a zone, clear its hidden boreholes list
-                delete hiddenBoreholesPerZone[zoneName];
-            }
-            
-            // Update zone layer visibility
+            // 2. Update zone polygon opacity (instant)
             zonesLayer.eachLayer((layer) => {
                 const props = layer.feature?.properties;
                 if (props && (props.zone_name === zoneName || props.display_name === zoneName)) {
@@ -1188,88 +1185,54 @@
                 }
             });
             
-            // Update borehole and coverage visibility based on zone containment
-            updateBoreholeVisibilityForZones();
-        }
-        
-        // Update coverage visibility based on zone visibility settings
-        // Boreholes that were in a zone WHEN it was hidden stay hidden
-        // Boreholes moved/added after hiding are visible but coverage is clipped
-        async function updateBoreholeVisibilityForZones() {
-            if (!zonesData || !boreholesData) return;
-            
-            // Get list of hidden zone names
-            const hiddenZones = [];
-            for (const [zoneName, visible] of Object.entries(zoneVisibility)) {
-                if (visible === false) {
-                    hiddenZones.push(zoneName);
-                }
-            }
-            
-            // Collect all boreholes that were hidden with their zones
-            const boreholesToHide = new Set();
-            for (const [zoneName, boreholeIndices] of Object.entries(hiddenBoreholesPerZone)) {
-                if (zoneVisibility[zoneName] === false) {
-                    boreholeIndices.forEach(idx => boreholesToHide.add(idx));
-                }
-            }
-            
-            // Show/hide borehole markers based on whether they were in a zone when it was hidden
+            // 3. Update borehole visibility using zone_ids (instant - no geometry tests)
             boreholeMarkers.forEach((grabCircle) => {
                 const markerGroup = grabCircle.markerGroup;
-                const idx = grabCircle.boreholeIndex;
+                const zoneIds = grabCircle.zoneIds || [];  // Pre-computed from server
+                const shouldBeVisible = isBoreholeVisibleByZones(zoneIds);
                 
-                if (boreholesToHide.has(idx)) {
-                    // This borehole was inside a zone when it was hidden - hide it
-                    markerGroup.remove();
-                } else {
-                    // This borehole was not in a hidden zone when it was hidden - show it
+                if (shouldBeVisible) {
                     if (!map.hasLayer(markerGroup)) {
                         boreholesLayer.addLayer(markerGroup);
+                    }
+                } else {
+                    if (map.hasLayer(markerGroup)) {
+                        markerGroup.remove();
                     }
                 }
             });
             
-            // Fetch re-clipped coverage from server (excludes hidden zones from coverage computation)
-            if (hiddenZones.length > 0) {
-                try {
-                    const response = await fetch('/api/coverage/filtered', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ excludeZones: hiddenZones })
-                    });
-                    const filteredCoverage = await response.json();
-                    
-                    // Replace coverage layer with filtered coverage (clipped to visible zones only)
-                    coverageLayer.clearLayers();
-                    coverageLayer.addData(filteredCoverage);
-                    
-                    // Also hide coverage for boreholes that were hidden with their zones
-                    coverageLayer.eachLayer((layer) => {
-                        const props = layer.feature?.properties;
-                        if (props && props.borehole_index !== undefined) {
-                            if (boreholesToHide.has(props.borehole_index)) {
-                                layer.setStyle({ opacity: 0, fillOpacity: 0 });
-                            }
-                        }
-                    });
-                } catch (error) {
-                    console.error('Failed to fetch filtered coverage:', error);
+            // 4. Update coverage visibility (derives from parent borehole)
+            coverageLayer.eachLayer((layer) => {
+                const props = layer.feature?.properties;
+                if (props && props.borehole_index !== undefined) {
+                    const parentMarker = boreholeMarkers.find(m => m.boreholeIndex === props.borehole_index);
+                    if (parentMarker) {
+                        const zoneIds = parentMarker.zoneIds || [];
+                        const shouldBeVisible = isBoreholeVisibleByZones(zoneIds);
+                        layer.setStyle({
+                            opacity: shouldBeVisible ? 0.8 : 0,
+                            fillOpacity: shouldBeVisible ? 0.25 : 0
+                        });
+                    }
                 }
-            } else {
-                // All zones visible - restore original coverage
-                try {
-                    const response = await fetch('/api/coverage/all');
-                    const allCoverage = await response.json();
-                    coverageLayer.clearLayers();
-                    coverageLayer.addData(allCoverage);
-                } catch (error) {
-                    console.error('Failed to restore coverage:', error);
-                }
-            }
+            });
             
-            // Update borehole count using the generic helper (works with any filter)
+            // 5. Update count display
             updateBoreholeCountDisplay();
+        }
+        
+        // DEPRECATED: This function was part of the old visibility system that used
+        // runtime point-in-polygon tests. It's no longer needed because:
+        // 1. Boreholes now have zone_ids pre-computed by the server
+        // 2. toggleZoneVisibility() uses zone_ids for instant visibility
+        // 3. Coverage visibility derives from parent borehole visibility
+        //
+        // Kept as no-op for backward compatibility with any existing calls
+        async function updateBoreholeVisibilityForZones() {
+            console.warn('⚠️ updateBoreholeVisibilityForZones() is deprecated. ' +
+                         'Use toggleZoneVisibility() which uses zone_ids for instant updates.');
+            // No-op - all visibility logic is now in toggleZoneVisibility()
         }
         
         // Simple point-in-polygon test for GeoJSON geometry
@@ -1460,24 +1423,15 @@
                 
                 const boreholeId = feature.properties.location_id || `PROP_${index}`;
                 
+                // Get zone_ids from server (single source of truth)
+                const zoneIds = feature.properties.zone_ids || [];
+                
                 // Check if this borehole should be hidden based on zone visibility
-                const boreholePoint = [lon, lat]; // [lon, lat] for GeoJSON
-                let shouldHide = false;
-                if (zonesData) {
-                    for (const zoneFeature of zonesData.features) {
-                        const zoneName = zoneFeature.properties?.zone_name || zoneFeature.properties?.display_name;
-                        if (zoneVisibility[zoneName] === false) {
-                            // Check if point is inside this hidden zone
-                            if (isPointInPolygon(boreholePoint, zoneFeature.geometry)) {
-                                shouldHide = true;
-                                break;
-                            }
-                        }
-                    }
-                }
+                // Uses pre-computed zone_ids - instant, no geometry tests
+                const shouldHide = !isBoreholeVisibleByZones(zoneIds);
                 
                 // Check zone membership for marker styling
-                const isInsideZone = isPointInAnyZone(lon, lat);
+                const isInsideZone = zoneIds.length > 0;
                 
                 // Create invisible grab circle (larger, for easier dragging)
                 const grabCircle = L.circle(latlng, {
@@ -1501,6 +1455,7 @@
                 // Store metadata on grab circle (which handles events)
                 grabCircle.boreholeIndex = index;
                 grabCircle.boreholeId = boreholeId;
+                grabCircle.zoneIds = zoneIds;  // Pre-computed zone associations from server
                 grabCircle.visibleCircle = visibleCircle;
                 grabCircle.markerGroup = markerGroup;
                 grabCircle.isInsideZone = isInsideZone;  // Track zone membership for transitions
@@ -1586,17 +1541,37 @@
                             // Update local data
                             boreholesData.features[grabCircle.boreholeIndex].geometry.coordinates = [newLatLng.lng, newLatLng.lat];
                             
+                            // Update zone_ids from server (single source of truth)
+                            if (result.zone_ids) {
+                                grabCircle.zoneIds = result.zone_ids;
+                                boreholesData.features[grabCircle.boreholeIndex].properties.zone_ids = result.zone_ids;
+                                
+                                // Re-evaluate visibility based on new zone associations
+                                const shouldBeVisible = isBoreholeVisibleByZones(result.zone_ids);
+                                if (!shouldBeVisible) {
+                                    // Borehole moved into hidden zone - hide it
+                                    grabCircle.markerGroup.remove();
+                                    // Also hide its coverage
+                                    coverageLayer.eachLayer((layer) => {
+                                        if (layer.feature?.properties?.borehole_index === grabCircle.boreholeIndex) {
+                                            layer.setStyle({ opacity: 0, fillOpacity: 0 });
+                                        }
+                                    });
+                                    console.log(`📍 Borehole ${grabCircle.boreholeId} moved into hidden zone, now hidden`);
+                                }
+                            }
+                            
                             // Update marker type if zone membership changed (L.circle <-> L.circleMarker)
                             updateMarkerForZoneChange(grabCircle, newLatLng.lng, newLatLng.lat);
                             
                             // Update single coverage polygon (handles null coverage for points outside zones)
                             updateSingleCoverage(grabCircle.boreholeIndex, result.coverage);
                             
-                            // Re-apply zone visibility filtering (clips coverage to visible zones)
-                            await updateBoreholeVisibilityForZones();
-                            
                             // Update info panel
                             showBoreholeInfo(grabCircle, result.zone_info);
+                            
+                            // Update count display
+                            updateBoreholeCountDisplay();
                             
                             // Lazy stats update - fetch after short delay for perceived instant response
                             if (result.stats_pending) {
