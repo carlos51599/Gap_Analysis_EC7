@@ -749,14 +749,23 @@
             // Sync restored state to server
             await restoreBoreholes(boreholesData);
             
-            // BATCHED: Re-render without z-order flash
-            await batchedRerender(boreholesData, true);
+            // Re-render boreholes
+            renderBoreholes(boreholesData);
+            
+            // Re-compute coverages (now server has correct state) - includes stats
+            const coveragesResponse = await fetchAllCoverages();
+            renderCoverages(coveragesResponse);
+            
+            // Re-apply zone visibility after re-rendering
+            updateBoreholeVisibilityForZones();
             
             updateUndoButton();
             console.log('↩️ Undo performed');
             
-            // Refresh coverage stats
-            await refreshCoverageStats();
+            // Render coverage stats from response (avoids extra API call)
+            if (coveragesResponse.stats) {
+                renderCoverageStats(coveragesResponse.stats);
+            }
         }
         
         async function performReset() {
@@ -768,16 +777,25 @@
             // Sync restored state to server
             await restoreBoreholes(boreholesData);
             
-            // BATCHED: Re-render without z-order flash
-            await batchedRerender(boreholesData, true);
+            // Re-render boreholes
+            renderBoreholes(boreholesData);
+            
+            // Re-compute coverages - includes stats
+            const coveragesResponse = await fetchAllCoverages();
+            renderCoverages(coveragesResponse);
+            
+            // Re-apply zone visibility after re-rendering
+            updateBoreholeVisibilityForZones();
             
             // Clear undo history
             undoHistory = [];
             updateUndoButton();
             console.log('🔄 Reset to original state');
             
-            // Refresh coverage stats
-            await refreshCoverageStats();
+            // Render coverage stats from response (avoids extra API call)
+            if (coveragesResponse.stats) {
+                renderCoverageStats(coveragesResponse.stats);
+            }
         }
         
         // ═══════════════════════════════════════════════════════════════════
@@ -808,34 +826,14 @@
             return cfg.poor_color;
         }
         
-        // DEBOUNCE: Prevents rapid API calls during quick edits
-        let refreshStatsTimeout = null;
-        let refreshStatsResolvers = [];  // Collect pending promises
-        
         async function refreshCoverageStats() {
-            // Return a promise that resolves when stats are actually refreshed
-            return new Promise((resolve) => {
-                refreshStatsResolvers.push(resolve);
-                
-                // Clear any pending refresh
-                if (refreshStatsTimeout) {
-                    clearTimeout(refreshStatsTimeout);
-                }
-                
-                // Schedule refresh with 150ms debounce
-                refreshStatsTimeout = setTimeout(async () => {
-                    await _doRefreshCoverageStats();
-                    
-                    // Resolve all pending promises
-                    const resolvers = refreshStatsResolvers;
-                    refreshStatsResolvers = [];
-                    resolvers.forEach(r => r());
-                }, 150);
-            });
+            const stats = await fetchCoverageStats();
+            if (!stats) return;
+            renderCoverageStats(stats);
         }
         
-        async function _doRefreshCoverageStats() {
-            const stats = await fetchCoverageStats();
+        // Render coverage stats directly (avoids extra API call when stats provided in response)
+        function renderCoverageStats(stats) {
             if (!stats) return;
             
             const container = document.getElementById('coverageStatsContent');
@@ -1049,7 +1047,6 @@
             document.getElementById('zoneCount').textContent = geojson.features.length;
         }
         
-        // Borehole marker configuration (meters) - fallback values, use CONFIG if available
         function getBoreholeVisibleRadius() {
             return (CONFIG && CONFIG.boreholeMarker) ? CONFIG.boreholeMarker.visible_radius_m : 8;
         }
@@ -1062,13 +1059,86 @@
             return (CONFIG && CONFIG.boreholeMarker) ? CONFIG.boreholeMarker.color : '#000000';
         }
         
+        function getOutsideZoneColor() {
+            return (CONFIG && CONFIG.boreholeMarker) ? CONFIG.boreholeMarker.outside_zone_color : '#FF8C00';
+        }
+        
+        function getOutsideZoneRadiusPx() {
+            return (CONFIG && CONFIG.boreholeMarker) ? CONFIG.boreholeMarker.outside_zone_radius_px : 6;
+        }
+        
+        // Check if a point is inside any zone
+        function isPointInAnyZone(lon, lat) {
+            if (!zonesData || !zonesData.features) return false;
+            
+            const point = [lon, lat]; // [lon, lat] for GeoJSON
+            for (const feature of zonesData.features) {
+                if (isPointInPolygon(point, feature.geometry)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        
+        // Create visible marker based on zone membership
+        // Inside zone: L.circle (meters, scales with zoom)
+        // Outside zone: L.circleMarker (pixels, fixed screen size)
+        function createVisibleMarker(latlng, isInsideZone) {
+            if (isInsideZone) {
+                const visibleRadius = getBoreholeVisibleRadius();
+                const markerColor = getBoreholeColor();
+                return L.circle(latlng, {
+                    radius: visibleRadius,
+                    color: markerColor,
+                    fillColor: markerColor,
+                    fillOpacity: 1,
+                    weight: 0,
+                    interactive: false
+                });
+            } else {
+                const outsideColor = getOutsideZoneColor();
+                const outsideRadiusPx = getOutsideZoneRadiusPx();
+                return L.circleMarker(latlng, {
+                    radius: outsideRadiusPx,  // pixels
+                    color: outsideColor,
+                    fillColor: outsideColor,
+                    fillOpacity: 1,
+                    weight: 0,
+                    interactive: false
+                });
+            }
+        }
+        
+        // Update marker when moving between zones
+        // Need to recreate marker if type changes (L.circle <-> L.circleMarker)
+        function updateMarkerForZoneChange(grabCircle, lon, lat) {
+            const isInsideZone = isPointInAnyZone(lon, lat);
+            const wasInsideZone = grabCircle.isInsideZone;
+            const latlng = [lat, lon];
+            
+            // If zone membership changed, recreate the visible marker
+            if (isInsideZone !== wasInsideZone) {
+                const markerGroup = grabCircle.markerGroup;
+                const oldVisibleCircle = grabCircle.visibleCircle;
+                
+                // Remove old visible marker
+                markerGroup.removeLayer(oldVisibleCircle);
+                
+                // Create new visible marker of correct type
+                const newVisibleCircle = createVisibleMarker(latlng, isInsideZone);
+                markerGroup.addLayer(newVisibleCircle);
+                
+                // Update references
+                grabCircle.visibleCircle = newVisibleCircle;
+                grabCircle.isInsideZone = isInsideZone;
+            }
+        }
+        
         function renderBoreholes(geojson) {
             boreholesLayer.clearLayers();
             boreholeMarkers = [];
             
-            const visibleRadius = getBoreholeVisibleRadius();
             const grabRadius = getBoreholeGrabRadius();
-            const markerColor = getBoreholeColor();
             
             geojson.features.forEach((feature, index) => {
                 const coords = feature.geometry.coordinates;
@@ -1093,6 +1163,9 @@
                     }
                 }
                 
+                // Check zone membership for marker styling
+                const isInsideZone = isPointInAnyZone(lon, lat);
+                
                 // Create invisible grab circle (larger, for easier dragging)
                 const grabCircle = L.circle(latlng, {
                     radius: grabRadius,
@@ -1104,15 +1177,10 @@
                     bubblingMouseEvents: false
                 });
                 
-                // Create visible dot circle (smaller, black)
-                const visibleCircle = L.circle(latlng, {
-                    radius: visibleRadius,
-                    color: markerColor,
-                    fillColor: markerColor,
-                    fillOpacity: 1,
-                    weight: 0,
-                    interactive: false  // Events handled by grab circle
-                });
+                // Create visible marker based on zone membership
+                // Inside zone: L.circle (meters, scales with zoom) - black
+                // Outside zone: L.circleMarker (pixels, fixed screen size) - orange
+                const visibleCircle = createVisibleMarker(latlng, isInsideZone);
                 
                 // Group them together
                 const markerGroup = L.layerGroup([grabCircle, visibleCircle]);
@@ -1122,21 +1190,29 @@
                 grabCircle.boreholeId = boreholeId;
                 grabCircle.visibleCircle = visibleCircle;
                 grabCircle.markerGroup = markerGroup;
+                grabCircle.isInsideZone = isInsideZone;  // Track zone membership for transitions
                 
                 // Hover effects for better visual feedback
-                const hoverScale = CONFIG?.borehole_marker?.hover_scale || 2.0;  // From config or default
+                const hoverScale = CONFIG?.boreholeMarker?.hover_scale || 2.0;  // From config or default
                 let isDragging = false;  // Track drag state for hover effects
                 
                 grabCircle.on('mouseover', () => {
                     if (!isDragging) {
-                        visibleCircle.setRadius(visibleRadius * hoverScale);
+                        // Get current radius and scale it for hover
+                        const currentRadius = grabCircle.visibleCircle.getRadius();
+                        grabCircle.visibleCircle.setRadius(currentRadius * hoverScale);
                         map.getContainer().style.cursor = 'grab';
                     }
                 });
                 
                 grabCircle.on('mouseout', () => {
                     if (!isDragging) {
-                        visibleCircle.setRadius(visibleRadius);
+                        // Restore normal radius based on marker type
+                        if (grabCircle.isInsideZone) {
+                            grabCircle.visibleCircle.setRadius(getBoreholeVisibleRadius());
+                        } else {
+                            grabCircle.visibleCircle.setRadius(getOutsideZoneRadiusPx());
+                        }
                         map.getContainer().style.cursor = '';
                     }
                 });
@@ -1197,14 +1273,21 @@
                             // Update local data
                             boreholesData.features[grabCircle.boreholeIndex].geometry.coordinates = [newLatLng.lng, newLatLng.lat];
                             
+                            // Update marker type if zone membership changed (L.circle <-> L.circleMarker)
+                            updateMarkerForZoneChange(grabCircle, newLatLng.lng, newLatLng.lat);
+                            
                             // Update single coverage polygon (handles null coverage for points outside zones)
                             updateSingleCoverage(grabCircle.boreholeIndex, result.coverage);
                             
                             // Update info panel
                             showBoreholeInfo(grabCircle, result.zone_info);
                             
-                            // Refresh coverage stats
-                            await refreshCoverageStats();
+                            // Lazy stats update - fetch after short delay for perceived instant response
+                            if (result.stats_pending) {
+                                setTimeout(() => refreshCoverageStats(), 50);
+                            } else if (result.stats) {
+                                renderCoverageStats(result.stats);
+                            }
                         }
                     }
                 }
@@ -1215,16 +1298,30 @@
                         // Save state for undo before deleting
                         saveStateForUndo();
                         
-                        const result = await deleteBorehole(grabCircle.boreholeIndex);
+                        const deletedIndex = grabCircle.boreholeIndex;
+                        const result = await deleteBorehole(deletedIndex);
                         if (result && result.success) {
                             // Update local data
                             boreholesData = result.boreholes;
                             
-                            // BATCHED: Re-render without z-order flash
-                            await batchedRerender(boreholesData, true);
+                            // Re-render boreholes with new indices
+                            renderBoreholes(boreholesData);
                             
-                            // Refresh coverage stats
-                            await refreshCoverageStats();
+                            // Remove deleted coverage and update indices (efficient - no API call)
+                            removeCoverageByIndex(deletedIndex);
+                            
+                            // Re-apply zone visibility after re-rendering
+                            updateBoreholeVisibilityForZones();
+                            
+                            // Lazy stats update - fetch after a short delay for snappy UI
+                            if (result.stats_pending) {
+                                // Defer stats computation - UI feels instant, stats update shortly after
+                                setTimeout(async () => {
+                                    await refreshCoverageStats();
+                                }, 50);  // 50ms delay - UI updates first, then stats
+                            } else if (result.stats) {
+                                renderCoverageStats(result.stats);
+                            }
                             
                             console.log(`🗑️ Deleted borehole ${grabCircle.boreholeId}`);
                         }
@@ -1247,27 +1344,6 @@
         function renderCoverages(geojson) {
             coverageLayer.clearLayers();
             coverageLayer.addData(geojson);
-        }
-        
-        // BATCHED RENDER: Re-render boreholes and coverages, fixing z-order at the end
-        // Instead of removing layers during network calls, we just ensure correct z-order after
-        async function batchedRerender(boreholesGeojson, fetchCoveragesFromServer = true) {
-            // Update boreholes data (renderBoreholes handles its own batching)
-            renderBoreholes(boreholesGeojson);
-            
-            // Fetch and update coverages if needed
-            if (fetchCoveragesFromServer) {
-                const coverages = await fetchAllCoverages();
-                renderCoverages(coverages);
-            }
-            
-            // Re-apply zone visibility
-            updateBoreholeVisibilityForZones();
-            
-            // FIX Z-ORDER: Bring boreholes layer to front (ensures it's above coverages)
-            if (map.hasLayer(boreholesLayer)) {
-                boreholesLayer.bringToFront();
-            }
         }
         
         function renderExistingCoverage(geojson) {
@@ -1309,6 +1385,34 @@
                 coverage.properties.borehole_index = boreholeIndex;
                 coverageLayer.addData(coverage);
             }
+        }
+        
+        // Remove coverage by borehole index and reindex remaining coverages
+        // Used for delete operation (avoids re-fetching all coverages from server)
+        function removeCoverageByIndex(deletedIndex) {
+            const toRemove = [];
+            const toUpdate = [];
+            
+            // Find coverage to remove and coverages that need index update
+            coverageLayer.eachLayer(layer => {
+                const props = layer.feature?.properties;
+                if (props && typeof props.borehole_index === 'number') {
+                    if (props.borehole_index === deletedIndex) {
+                        toRemove.push(layer);
+                    } else if (props.borehole_index > deletedIndex) {
+                        // This borehole's index will shift down by 1
+                        toUpdate.push(layer);
+                    }
+                }
+            });
+            
+            // Remove deleted borehole's coverage
+            toRemove.forEach(layer => coverageLayer.removeLayer(layer));
+            
+            // Update indices for remaining boreholes (shift down)
+            toUpdate.forEach(layer => {
+                layer.feature.properties.borehole_index -= 1;
+            });
         }
         
         function showBoreholeInfo(marker, zoneInfo) {
@@ -1395,48 +1499,39 @@
             const loadingOverlay = document.getElementById('loadingOverlay');
             
             try {
-                // Load config first (other operations may depend on it)
+                // Load config first
                 CONFIG = await fetchConfig();
                 if (CONFIG) {
                     applyConfig();
                 }
                 
-                // BATCHED: Load all data in parallel with Promise.all
-                const [zones, existingCoverage, boreholes, coverages, dataInfo] = await Promise.all([
-                    fetchZones(),
-                    fetchExistingCoverage(),
-                    fetchBoreholes(),
-                    fetchAllCoverages(),
-                    fetchDataInfo()
-                ]);
-                
-                // Store zone data globally
-                zonesData = zones;
-                
-                // Store borehole data globally
-                boreholesData = boreholes;
-                originalBoreholesData = JSON.parse(JSON.stringify(boreholesData));
-                
-                // BATCHED RENDERING: Render all layers in optimal z-order
-                // Order matters: zones (bottom) -> existing coverage -> proposed coverage -> boreholes (top)
+                // Load zones
+                zonesData = await fetchZones();
                 renderZones(zonesData);
+                
+                // Load existing coverage (green, from main.py output)
+                const existingCoverage = await fetchExistingCoverage();
                 renderExistingCoverage(existingCoverage);
-                renderCoverages(coverages);
+                
+                // Load boreholes
+                boreholesData = await fetchBoreholes();
+                originalBoreholesData = JSON.parse(JSON.stringify(boreholesData));  // Save initial state for reset
                 renderBoreholes(boreholesData);
                 
-                // Load coverage stats (uses already-fetched data on server)
-                await refreshCoverageStats();
+                // Load initial coverages (blue, proposed) - includes stats for efficiency
+                const coveragesResponse = await fetchAllCoverages();
+                renderCoverages(coveragesResponse);
                 
-                // Update data timestamp from pre-fetched info
-                if (dataInfo && dataInfo.data_file_modified) {
-                    const container = document.getElementById('dataTimestamp');
-                    const modifiedDate = new Date(dataInfo.data_file_modified);
-                    const formattedDate = modifiedDate.toLocaleString('en-GB', {
-                        day: '2-digit', month: 'short', year: 'numeric',
-                        hour: '2-digit', minute: '2-digit'
-                    });
-                    container.innerHTML = `📁 Data from: ${formattedDate}`;
+                // Render coverage stats from the same response (avoids extra API call)
+                if (coveragesResponse.stats) {
+                    renderCoverageStats(coveragesResponse.stats);
+                } else {
+                    // Fallback for backward compatibility
+                    await refreshCoverageStats();
                 }
+                
+                // Load data timestamp
+                await updateDataTimestamp();
                 
                 // Fit map to zones bounds
                 if (zonesLayer.getBounds().isValid()) {
@@ -1543,16 +1638,13 @@
                     coverageLayer.addData(result.coverage);
                 }
                 
-                // Re-apply zone visibility
+                // Re-apply zone visibility after re-rendering
                 updateBoreholeVisibilityForZones();
                 
-                // FIX Z-ORDER: Bring boreholes layer to front
-                if (map.hasLayer(boreholesLayer)) {
-                    boreholesLayer.bringToFront();
+                // Render coverage stats from response (fast - avoids extra API call)
+                if (result.stats) {
+                    renderCoverageStats(result.stats);
                 }
-                
-                // Refresh coverage stats
-                await refreshCoverageStats();
                 
                 console.log(`➕ Added borehole at (${lon.toFixed(6)}, ${lat.toFixed(6)})`);
             }
