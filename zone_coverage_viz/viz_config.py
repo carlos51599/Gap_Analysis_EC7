@@ -112,4 +112,13 @@ VIZ_CONFIG_DATA: Dict[str, Any] = {
         "buffer_resolution": 32,
         "default_max_spacing_m": 100.0,
     },
+    # ═══════════════════════════════════════════════════════════════════════
+    # 👁️ ZONE VISIBILITY SETTINGS
+    # ═══════════════════════════════════════════════════════════════════════
+    "zone_visibility": {
+        # Mode options:
+        # - "clip_coverage": Only hide coverage portion over hidden zone (default)
+        # - "hide_zone_boreholes": Hide ALL boreholes inside hidden zone AND their entire coverage
+        "mode": "hide_zone_boreholes",
+    },
 }

@@ -773,6 +773,33 @@
                 .filter(([_, visible]) => visible === false)
                 .map(([zoneName, _]) => zoneName);
         }
+        
+        /**
+         * Get the zone visibility mode from config.
+         * @returns {string} "clip_coverage" or "hide_zone_boreholes"
+         */
+        function getZoneVisibilityMode() {
+            return CONFIG?.zoneVisibility?.mode || 'clip_coverage';
+        }
+        
+        /**
+         * Check if a borehole should be visible based on its LOCATION zone.
+         * Used by "hide_zone_boreholes" mode - stricter than coverageZoneIds check.
+         * 
+         * Rule: Borehole is VISIBLE only if ALL its location zones are visible.
+         * If a borehole is inside a hidden zone, it's hidden (even if coverage
+         * extends to visible zones).
+         * 
+         * @param {Array<string>} locationZoneIds - Array of zone names the borehole is inside
+         * @returns {boolean} - True if borehole should be visible
+         */
+        function isBoreholeVisibleByLocationZone(locationZoneIds) {
+            if (!locationZoneIds || locationZoneIds.length === 0) {
+                return true; // Borehole not inside any zone = always visible
+            }
+            // Hidden if ANY location zone is hidden
+            return !locationZoneIds.some(zid => zoneVisibility[zid] === false);
+        }
 
         // ═══════════════════════════════════════════════════════════════════
         // 🔄 API FUNCTIONS
@@ -835,21 +862,22 @@
         
         /**
          * Fetch coverages clipped to exclude specified zones.
-         * Server computes intersection of coverage buffers with visible zone areas.
-         * @param {string[]} excludeZones - Zone names to exclude from coverage clipping
-         * @returns {Object} GeoJSON FeatureCollection of clipped coverage polygons
+         * Server computes coverage based on mode (SSOT - server makes visibility decisions).
+         * @param {string[]} excludeZones - Zone names to exclude
+         * @param {string} mode - "clip_coverage" or "hide_zone_boreholes"
+         * @returns {Object} GeoJSON FeatureCollection of coverage polygons
          */
-        async function fetchFilteredCoverages(excludeZones) {
+        async function fetchFilteredCoverages(excludeZones, mode = 'clip_coverage') {
             const t_start = performance.now();
             try {
                 const response = await fetch('/api/coverage/filtered', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ excludeZones })
+                    body: JSON.stringify({ excludeZones, mode })
                 });
                 const data = await response.json();
                 const t_end = performance.now();
-                console.log(`🔄 Filtered coverages fetched in ${(t_end - t_start).toFixed(1)}ms (excluding ${excludeZones.length} zones)`);
+                console.log(`🔄 Filtered coverages fetched in ${(t_end - t_start).toFixed(1)}ms (mode: ${mode}, excluding ${excludeZones.length} zones)`);
                 return data;
             } catch (error) {
                 console.error('Failed to fetch filtered coverages:', error);
@@ -1257,11 +1285,13 @@
             }
         }
         
-        // Toggle zone visibility - Server-clipped coverages (Option A)
-        // Zone polygons and boreholes update instantly, coverages fetch from server
+        // Toggle zone visibility - Supports two modes via config:
+        // - "clip_coverage": Coverage polygons clipped to visible zones, boreholes visible if coverage touches visible zone
+        // - "hide_zone_boreholes": Boreholes hidden if inside hidden zone, their entire coverage hidden too
         async function toggleZoneVisibility(zoneName, visible) {
             console.log(`🔄 Toggle zone ${zoneName}: ${visible}`);
             const t_start = performance.now();
+            const mode = getZoneVisibilityMode();
             
             // 1. Update state
             zoneVisibility[zoneName] = visible;
@@ -1278,11 +1308,20 @@
                 }
             });
             
-            // 3. Update borehole visibility using coverage_zone_ids (R1: visible if coverage touches any visible zone)
+            // 3. Update borehole visibility based on mode (uses pre-computed zone_ids from server)
             boreholeMarkers.forEach((grabCircle) => {
                 const markerGroup = grabCircle.markerGroup;
-                const coverageZoneIds = grabCircle.coverageZoneIds || [];  // Zones the coverage buffer touches
-                const shouldBeVisible = isBoreholeVisibleByZones(coverageZoneIds);
+                let shouldBeVisible;
+                
+                if (mode === 'hide_zone_boreholes') {
+                    // Mode: Hide borehole if it's INSIDE a hidden zone
+                    const locationZoneIds = grabCircle.zoneIds || [];
+                    shouldBeVisible = isBoreholeVisibleByLocationZone(locationZoneIds);
+                } else {
+                    // Mode: clip_coverage (default) - Show borehole if coverage TOUCHES any visible zone
+                    const coverageZoneIds = grabCircle.coverageZoneIds || [];
+                    shouldBeVisible = isBoreholeVisibleByZones(coverageZoneIds);
+                }
                 
                 if (shouldBeVisible) {
                     if (!map.hasLayer(markerGroup)) {
@@ -1295,17 +1334,17 @@
                 }
             });
             
-            // 4. Fetch server-clipped coverages (excludes hidden zones)
-            //    This clips coverage polygons to only show area over visible zones
+            // 4. Fetch coverages from server (SSOT - server handles all filtering)
             const hiddenZones = getHiddenZoneNames();
+            
             if (hiddenZones.length === 0) {
                 // All zones visible - fetch full coverages
                 const coverages = await fetchAllCoverages();
                 renderCoverages(coverages);
             } else {
-                // Some zones hidden - fetch clipped coverages
-                const clippedCoverages = await fetchFilteredCoverages(hiddenZones);
-                renderCoverages(clippedCoverages);
+                // Some zones hidden - server filters based on mode
+                const filteredCoverages = await fetchFilteredCoverages(hiddenZones, mode);
+                renderCoverages(filteredCoverages);
             }
             
             // 5. Re-sync coverage zones to markers after re-rendering
@@ -1315,7 +1354,7 @@
             updateBoreholeCountDisplay();
             
             const t_end = performance.now();
-            console.log(`✅ Zone toggle complete in ${(t_end - t_start).toFixed(1)}ms`);
+            console.log(`✅ Zone toggle complete in ${(t_end - t_start).toFixed(1)}ms (mode: ${mode})`);
         }
         
         // DEPRECATED: This function was part of the old visibility system that used

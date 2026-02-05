@@ -271,7 +271,36 @@ class GeometryConfig:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 📦 MAIN VIZ CONFIGURATION CLASS
+# �️ ZONE VISIBILITY CONFIGURATION
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@dataclass(frozen=True)
+class ZoneVisibilityConfig:
+    """Configuration for zone visibility behavior.
+    
+    Mode options:
+        - "clip_coverage": Only hide coverage portion over hidden zone (default)
+        - "hide_zone_boreholes": Hide ALL boreholes inside hidden zone AND their 
+          entire coverage (even if coverage extends to visible zones)
+    """
+
+    mode: str = "clip_coverage"
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "ZoneVisibilityConfig":
+        """Create from dictionary."""
+        return cls(
+            mode=d.get("mode", "clip_coverage"),
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for frontend."""
+        return {"mode": self.mode}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# �📦 MAIN VIZ CONFIGURATION CLASS
 # ═══════════════════════════════════════════════════════════════════════════
 
 
@@ -294,6 +323,7 @@ class VizConfig:
     coverage_stats: CoverageStatsConfig
     ui: UIConfig
     geometry: GeometryConfig
+    zone_visibility: ZoneVisibilityConfig
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "VizConfig":
@@ -335,6 +365,7 @@ class VizConfig:
             coverage_stats=CoverageStatsConfig.from_dict(d.get("coverage_stats", {})),
             ui=UIConfig.from_dict(d.get("ui", {})),
             geometry=GeometryConfig.from_dict(d.get("geometry", {})),
+            zone_visibility=ZoneVisibilityConfig.from_dict(d.get("zone_visibility", {})),
         )
 
     @classmethod
@@ -354,6 +385,7 @@ class VizConfig:
             "existingCoverageStyle": self.existing_coverage_style.to_dict(),
             "coverageStats": self.coverage_stats.to_dict(),
             "ui": self.ui.to_dict(),
+            "zoneVisibility": self.zone_visibility.to_dict(),
         }
 
 

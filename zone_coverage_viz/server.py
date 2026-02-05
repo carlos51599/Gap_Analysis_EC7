@@ -579,14 +579,16 @@ def compute_all_coverages() -> Dict[str, Any]:
 @app.route("/api/coverage/filtered", methods=["POST"])
 def compute_filtered_coverages() -> Dict[str, Any]:
     """
-    Compute coverage polygons excluding specified zones (for zone visibility filtering).
+    Compute coverage polygons with zone visibility filtering.
 
-    Used when user hides zones via checkboxes - coverage circles are clipped
-    to only show coverage over visible zones.
+    Supports two modes (SSOT - server decides what to return):
+    - "clip_coverage": Clips coverage polygons to visible zones only
+    - "hide_zone_boreholes": Excludes entire coverage for boreholes inside hidden zones
 
     Request Body:
         {
-            "excludeZones": ["ZoneName1", "ZoneName2", ...]
+            "excludeZones": ["ZoneName1", "ZoneName2", ...],
+            "mode": "clip_coverage" | "hide_zone_boreholes"  # Optional, default: "clip_coverage"
         }
 
     Returns:
@@ -600,13 +602,51 @@ def compute_filtered_coverages() -> Dict[str, Any]:
 
     data = request.get_json()
     exclude_zones = data.get("excludeZones", []) if data else []
+    mode = data.get("mode", "clip_coverage") if data else "clip_coverage"
 
     boreholes = data_loader.get_boreholes_geojson()
 
-    # Compute coverages excluding specified zones (no caching - depends on visibility)
-    coverages_geojson = coverage_service.compute_all_coverages_filtered(
-        boreholes, exclude_zones
+    logger.info(f"[COVERAGE FILTER] mode={mode}, exclude_zones={exclude_zones}")
+    logger.info(
+        f"[COVERAGE FILTER] Total boreholes: {len(boreholes.get('features', []))}"
     )
+
+    if mode == "hide_zone_boreholes":
+        # Mode: Exclude entire coverage for boreholes INSIDE hidden zones
+        # Filter boreholes to only those NOT inside any hidden zone
+        excluded_set = set(exclude_zones)
+
+        # Debug: Log first few boreholes to see their zone_ids
+        for i, f in enumerate(boreholes.get("features", [])[:3]):
+            zids = f.get("properties", {}).get("zone_ids", [])
+            logger.info(f"[COVERAGE FILTER] Borehole {i} zone_ids: {zids}")
+
+        filtered_boreholes = {
+            "type": "FeatureCollection",
+            "features": [
+                f
+                for f in boreholes.get("features", [])
+                if not any(
+                    zid in excluded_set
+                    for zid in f.get("properties", {}).get("zone_ids", [])
+                )
+            ],
+        }
+
+        logger.info(
+            f"[COVERAGE FILTER] After filtering: {len(filtered_boreholes.get('features', []))} boreholes"
+        )
+
+        # Compute full coverages (no clipping) for visible boreholes only
+        # Use compute_all_coverages_and_cache which returns full coverage polygons
+        coverages_geojson = coverage_service.compute_all_coverages_and_cache(
+            filtered_boreholes
+        )
+    else:
+        # Mode: clip_coverage (default) - Clip coverage polygons to exclude hidden zones
+        coverages_geojson = coverage_service.compute_all_coverages_filtered(
+            boreholes, exclude_zones
+        )
 
     return jsonify(coverages_geojson)
 
