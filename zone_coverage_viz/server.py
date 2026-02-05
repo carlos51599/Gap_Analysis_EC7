@@ -612,8 +612,9 @@ def compute_filtered_coverages() -> Dict[str, Any]:
     )
 
     if mode == "hide_zone_boreholes":
-        # Mode: Exclude entire coverage for boreholes INSIDE hidden zones
-        # Filter boreholes to only those NOT inside any hidden zone
+        # Mode: Hide boreholes INSIDE hidden zones + clip coverage from remaining boreholes
+        # 1. Filter boreholes to only those NOT inside any hidden zone
+        # 2. For remaining boreholes, clip their coverage to exclude hidden zone areas
         excluded_set = set(exclude_zones)
 
         # Debug: Log first few boreholes to see their zone_ids
@@ -637,10 +638,10 @@ def compute_filtered_coverages() -> Dict[str, Any]:
             f"[COVERAGE FILTER] After filtering: {len(filtered_boreholes.get('features', []))} boreholes"
         )
 
-        # Compute full coverages (no clipping) for visible boreholes only
-        # Use compute_all_coverages_and_cache which returns full coverage polygons
-        coverages_geojson = coverage_service.compute_all_coverages_and_cache(
-            filtered_boreholes
+        # Compute CLIPPED coverages for visible boreholes (excludes hidden zone areas)
+        # This ensures coverage from outside-zone boreholes doesn't show in hidden zones
+        coverages_geojson = coverage_service.compute_all_coverages_filtered(
+            filtered_boreholes, exclude_zones
         )
     else:
         # Mode: clip_coverage (default) - Clip coverage polygons to exclude hidden zones
