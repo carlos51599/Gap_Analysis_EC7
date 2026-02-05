@@ -270,16 +270,30 @@ isBoreholeVisibleByZones() re-evaluated if zones hidden
 | `isBoreholeVisibleByZones()`   | `index.html`     | Visibility check (read-only) |
 | `toggleZoneVisibility()`       | `index.html`     | Instant toggle (no server)   |
 
-### Visibility Rule
+### Visibility Rule (Updated February 2026)
 
-A borehole is **hidden** if **ANY** of its containing zones is hidden:
+**New Requirements:**
+1. **R1 (Coverage-Based Visibility):** If a borehole's COVERAGE touches ANY visible zone, the borehole stays visible (even if its point is in a hidden zone)
+2. **R2 (Hidden Zone Ignorance):** New/moved boreholes should ignore hidden zones for zone assignment
 
+**Key Insight - Two Zone Concepts:**
+| Concept             | Source                    | Used For                                |
+| ------------------- | ------------------------- | --------------------------------------- |
+| `zone_ids`          | Point containment test    | Zone transitions, outside-zone coloring |
+| `coverage_zone_ids` | Buffer-intersection zones | Visibility filtering                    |
+
+**Implementation (Hybrid A+B):**
 ```javascript
-function isBoreholeVisibleByZones(zoneIds) {
-    if (!zoneIds || zoneIds.length === 0) return true;  // Outside all zones = visible
-    return !zoneIds.some(zid => zoneVisibility[zid] === false);
+function isBoreholeVisibleByZones(coverageZoneIds) {
+    // R1: Visible if coverage touches ANY visible zone
+    if (!coverageZoneIds || coverageZoneIds.length === 0) return true;
+    return coverageZoneIds.some(zid => zoneVisibility[zid] !== false);
 }
 ```
+
+**Server Support for R2:**
+- `_compute_borehole_zone_ids(exclude_zones)` - excludes hidden zones from assignment
+- When moving/adding with hidden zones, server treats those zones as non-existent
 
 ### Benefits
 

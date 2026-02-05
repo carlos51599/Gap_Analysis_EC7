@@ -481,6 +481,7 @@ class DataLoader:
         lon: float,
         lat: float,
         bng_coords: Optional[Tuple[float, float]] = None,
+        exclude_zones: Optional[List[str]] = None,
     ) -> List[str]:
         """
         Update a borehole's position and recompute its zone associations.
@@ -490,6 +491,7 @@ class DataLoader:
             lon: New longitude in WGS84
             lat: New latitude in WGS84
             bng_coords: Pre-computed (x, y) in BNG to avoid duplicate transform
+            exclude_zones: Zone names to exclude from zone_ids (R2: hidden zones)
 
         Returns:
             Updated list of zone_ids for the borehole.
@@ -508,7 +510,8 @@ class DataLoader:
         new_point = Point(x, y)
         self._boreholes_gdf.at[index, "geometry"] = new_point
 
-        # Recompute zone_ids for this borehole
+        # Recompute zone_ids for this borehole (excluding hidden zones per R2)
+        exclude_set = set(exclude_zones) if exclude_zones else set()
         containing_zones = []
         if self._zones_gdf is not None and not self._zones_gdf.empty:
             for zone_idx, zone_row in self._zones_gdf.iterrows():
@@ -516,7 +519,9 @@ class DataLoader:
                 if zone_geom is not None and not zone_geom.is_empty:
                     if zone_geom.intersects(new_point):
                         zone_name = zone_row.get("zone_name", f"Zone_{zone_idx}")
-                        containing_zones.append(zone_name)
+                        # R2: Skip excluded (hidden) zones
+                        if zone_name not in exclude_set:
+                            containing_zones.append(zone_name)
 
         # Update zone_ids in GeoDataFrame
         self._boreholes_gdf.at[index, "zone_ids"] = containing_zones
@@ -610,6 +615,7 @@ class DataLoader:
         lon: float,
         lat: float,
         location_id: Optional[str] = None,
+        exclude_zones: Optional[List[str]] = None,
     ) -> int:
         """
         Add a new borehole at the specified location.
@@ -618,22 +624,43 @@ class DataLoader:
             lon: Longitude in WGS84
             lat: Latitude in WGS84
             location_id: Optional location ID (auto-generated if not provided)
+            exclude_zones: Zone names to exclude from zone_ids (R2: hidden zones)
 
         Returns:
             Index of the newly added borehole.
         """
         # Convert WGS84 to BNG
         x, y = self._wgs84_to_bng.transform(lon, lat)
+        new_point = Point(x, y)
 
         # Generate location ID if not provided
         new_index = len(self._boreholes_gdf) if self._boreholes_gdf is not None else 0
         if location_id is None:
             location_id = f"NEW_{new_index:03d}"
 
+        # Compute zone_ids for the new borehole (excluding hidden zones per R2)
+        exclude_set = set(exclude_zones) if exclude_zones else set()
+        containing_zones = []
+        if self._zones_gdf is not None and not self._zones_gdf.empty:
+            for zone_idx, zone_row in self._zones_gdf.iterrows():
+                zone_geom = zone_row.geometry
+                if zone_geom is not None and not zone_geom.is_empty:
+                    if zone_geom.intersects(new_point):
+                        zone_name = zone_row.get("zone_name", f"Zone_{zone_idx}")
+                        # R2: Skip excluded (hidden) zones
+                        if zone_name not in exclude_set:
+                            containing_zones.append(zone_name)
+
         # Create new row
         new_row = gpd.GeoDataFrame(
-            [{"Location_ID": location_id, "index": new_index}],
-            geometry=[Point(x, y)],
+            [
+                {
+                    "Location_ID": location_id,
+                    "index": new_index,
+                    "zone_ids": containing_zones,
+                }
+            ],
+            geometry=[new_point],
             crs=CRS_BNG,
         )
 
@@ -650,7 +677,11 @@ class DataLoader:
             new_feature = {
                 "type": "Feature",
                 "geometry": {"type": "Point", "coordinates": [lon, lat]},
-                "properties": {"index": new_index, "location_id": location_id},
+                "properties": {
+                    "index": new_index,
+                    "location_id": location_id,
+                    "zone_ids": containing_zones,
+                },
             }
             self._boreholes_data.setdefault("features", []).append(new_feature)
 

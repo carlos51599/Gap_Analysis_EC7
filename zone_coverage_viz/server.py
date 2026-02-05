@@ -64,15 +64,18 @@ data_loader: Optional[DataLoader] = None
 coverage_service: Optional[CoverageService] = None
 
 # Logging setup
-logging.basicConfig(level=logging.INFO, format='%(levelname)s:%(name)s:%(message)s')
+logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
 logger = logging.getLogger(__name__)
 
 # Debug logging helper - writes to stderr which is unbuffered
 import sys
+
+
 def debug_log(msg: str) -> None:
     """Write debug message to stderr (unbuffered) for guaranteed visibility."""
     sys.stderr.write(msg + "\n")
     sys.stderr.flush()
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 🛣️ API ROUTES
@@ -189,7 +192,7 @@ def update_borehole_coverage() -> Dict[str, Any]:
         }
     """
     import time
-    
+
     # Force immediate output to terminal using stderr
     debug_log("=" * 60)
     debug_log("[MOVE] Request received")
@@ -217,8 +220,13 @@ def update_borehole_coverage() -> Dict[str, Any]:
     index = int(data["index"])
     lon = float(data["lon"])
     lat = float(data["lat"])
+    exclude_zones = data.get(
+        "excludeZones", []
+    )  # R2: Hidden zones to exclude from zone_ids
     t2 = time.perf_counter()
-    debug_log(f"    [2] Parse params: {(t2-t1)*1000:.3f}ms | index={index}")
+    debug_log(
+        f"    [2] Parse params: {(t2-t1)*1000:.3f}ms | index={index}, exclude_zones={exclude_zones}"
+    )
 
     # Get borehole ID for cache
     t1 = time.perf_counter()
@@ -249,16 +257,20 @@ def update_borehole_coverage() -> Dict[str, Any]:
     # Returns updated zone_ids for the borehole
     t1 = time.perf_counter()
     old_zone_ids = data_loader.get_borehole_zone_ids(index)  # Get BEFORE update
-    zone_ids = data_loader.update_borehole_position(index, lon, lat, bng_coords)
+    zone_ids = data_loader.update_borehole_position(
+        index, lon, lat, bng_coords, exclude_zones
+    )
     t2 = time.perf_counter()
     debug_log(f"    [7] update_borehole_position: {(t2-t1)*1000:.1f}ms")
-    
+
     # Detect zone change: inside zone (black) <-> outside zone (orange)
     was_in_zone = len(old_zone_ids) > 0
     is_in_zone = len(zone_ids) > 0
     if was_in_zone != is_in_zone:
         color_change = "BLACK->ORANGE" if was_in_zone else "ORANGE->BLACK"
-        debug_log(f"    [ZONE CHANGE] {color_change} | old_zones={old_zone_ids} -> new_zones={zone_ids}")
+        debug_log(
+            f"    [ZONE CHANGE] {color_change} | old_zones={old_zone_ids} -> new_zones={zone_ids}"
+        )
     else:
         debug_log(f"    [NO ZONE CHANGE] zones={zone_ids}")
 
@@ -272,9 +284,13 @@ def update_borehole_coverage() -> Dict[str, Any]:
     }
     t2 = time.perf_counter()
     debug_log(f"    [8] Build result dict: {(t2-t1)*1000:.3f}ms")
-    
+
     # Log coverage result
-    coverage_type = "null" if coverage is None else ("polygon" if coverage.get("geometry") else "empty")
+    coverage_type = (
+        "null"
+        if coverage is None
+        else ("polygon" if coverage.get("geometry") else "empty")
+    )
     debug_log(f"    [COVERAGE] type={coverage_type}, zone_info={zone_info}")
 
     t1 = time.perf_counter()
@@ -311,7 +327,7 @@ def delete_borehole() -> Dict[str, Any]:
 
     debug_log("=" * 60)
     debug_log("[DELETE] Request received")
-    
+
     t_start = time.perf_counter()
 
     if data_loader is None or coverage_service is None:
@@ -332,7 +348,9 @@ def delete_borehole() -> Dict[str, Any]:
     t1 = time.perf_counter()
     deleted_id = data_loader.delete_borehole(index)
     t2 = time.perf_counter()
-    debug_log(f"    [3] delete_borehole(): {(t2-t1)*1000:.3f}ms -> deleted_id={deleted_id}")
+    debug_log(
+        f"    [3] delete_borehole(): {(t2-t1)*1000:.3f}ms -> deleted_id={deleted_id}"
+    )
 
     if deleted_id:
         # Invalidate cache for deleted borehole (marks stats as dirty)
@@ -403,9 +421,12 @@ def add_borehole() -> Dict[str, Any]:
     lon = float(data["lon"])
     lat = float(data["lat"])
     location_id = data.get("location_id")
+    exclude_zones = data.get(
+        "excludeZones", []
+    )  # R2: Hidden zones to exclude from zone_ids
 
-    # Add the borehole
-    new_index = data_loader.add_borehole(lon, lat, location_id)
+    # Add the borehole (with exclude_zones for R2)
+    new_index = data_loader.add_borehole(lon, lat, location_id, exclude_zones)
 
     # Get the borehole ID for caching
     borehole_id = data_loader.get_borehole_id(new_index)
@@ -697,7 +718,7 @@ def main() -> None:
     # Start server
     logger.info(f"🌐 Starting server at http://{SERVER_HOST}:{SERVER_PORT}")
     logger.info(f"   Open browser to: http://{SERVER_HOST}:{SERVER_PORT}")
-    
+
     # Very visible startup message
     logger.info("=" * 70)
     logger.info("    ZONE COVERAGE VIZ SERVER STARTED - DEBUG LOGGING ACTIVE")
