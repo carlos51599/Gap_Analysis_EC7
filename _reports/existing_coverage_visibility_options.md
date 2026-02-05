@@ -184,12 +184,12 @@ def split_existing_coverage_by_zone(existing_gdf, zones_gdf):
 
 ## Recommendation Matrix
 
-| Option | SSOT | Performance | Complexity | Recommendation |
-|--------|------|-------------|------------|----------------|
-| A (Client Hide) | Partial | Instant | Trivial | Quick fix only |
-| B (Server Clip) | Full | ~200ms | Medium | **Recommended** |
-| C (Pre-Split) | Partial | Fast | Medium | Not recommended |
-| D (Hybrid) | Full | Fast | Medium | Best long-term |
+| Option          | SSOT    | Performance | Complexity | Recommendation  |
+| --------------- | ------- | ----------- | ---------- | --------------- |
+| A (Client Hide) | Partial | Instant     | Trivial    | Quick fix only  |
+| B (Server Clip) | Full    | ~200ms      | Medium     | **Recommended** |
+| C (Pre-Split)   | Partial | Fast        | Medium     | Not recommended |
+| D (Hybrid)      | Full    | Fast        | Medium     | Best long-term  |
 
 ## Recommended Approach: Option B (Server Clipping)
 

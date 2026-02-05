@@ -519,6 +519,7 @@ class CoverageService:
 
         if coverage_bng is None:
             import sys
+
             sys.stderr.write(f"    [GEO] COVERAGE: None (outside all zones)\n")
             sys.stderr.flush()
             return None
@@ -535,15 +536,25 @@ class CoverageService:
         t0 = time.perf_counter()
         simplified_bng = coverage_bng.simplify(tolerance=1.0, preserve_topology=True)
         t1 = time.perf_counter()
-        orig_pts = len(coverage_bng.exterior.coords) if hasattr(coverage_bng, 'exterior') else '?'
-        simp_pts = len(simplified_bng.exterior.coords) if hasattr(simplified_bng, 'exterior') else '?'
+        orig_pts = (
+            len(coverage_bng.exterior.coords)
+            if hasattr(coverage_bng, "exterior")
+            else "?"
+        )
+        simp_pts = (
+            len(simplified_bng.exterior.coords)
+            if hasattr(simplified_bng, "exterior")
+            else "?"
+        )
         _debug(
             f"    [GEO] Simplify ({orig_pts} -> {simp_pts} pts): {(t1-t0)*1000:.1f}ms"
         )
 
         coverage_wgs84 = self._transform_to_wgs84(simplified_bng)
         t2 = time.perf_counter()
-        _debug(f"    [GEO] BNG->WGS84 transform: {(t2-t1)*1000:.1f}ms | zones={zone_names}")
+        _debug(
+            f"    [GEO] BNG->WGS84 transform: {(t2-t1)*1000:.1f}ms | zones={zone_names}"
+        )
 
         return {
             "type": "Feature",

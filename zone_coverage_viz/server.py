@@ -25,6 +25,7 @@ import json
 import logging
 import io
 import csv
+import sys
 
 from flask import (
     Flask,
@@ -45,8 +46,19 @@ from zone_coverage_viz.geometry_service import CoverageService
 # 🔧 CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════════
 
-# Default data directory - can be overridden via environment variable
-DEFAULT_DATA_DIR = Path(__file__).parent.parent / "Output"
+
+# Determine data directory - handle frozen exe vs regular script
+def get_data_dir() -> Path:
+    """Get the data directory, handling PyInstaller frozen exe case."""
+    if getattr(sys, "frozen", False):
+        # Running as frozen exe - look relative to exe location
+        return Path(sys.executable).parent / "Output"
+    else:
+        # Running as script - look relative to this file's parent
+        return Path(__file__).parent.parent / "Output"
+
+
+DEFAULT_DATA_DIR = get_data_dir()
 
 # Server configuration
 SERVER_HOST = "127.0.0.1"
@@ -807,7 +819,9 @@ def main() -> None:
     logger.info("    All move/delete operations will be logged here")
     logger.info("=" * 70)
 
-    app.run(host=SERVER_HOST, port=SERVER_PORT, debug=True)
+    # Disable debug mode for frozen exe (reloader doesn't work with PyInstaller)
+    is_frozen = getattr(sys, "frozen", False)
+    app.run(host=SERVER_HOST, port=SERVER_PORT, debug=not is_frozen)
 
 
 if __name__ == "__main__":

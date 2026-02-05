@@ -295,6 +295,54 @@ function isBoreholeVisibleByZones(coverageZoneIds) {
 - `_compute_borehole_zone_ids(exclude_zones)` - excludes hidden zones from assignment
 - When moving/adding with hidden zones, server treats those zones as non-existent
 
+### Zone Visibility Modes (February 2026)
+
+Two visibility modes are available, configurable via `viz_config.py`:
+
+```python
+"zone_visibility": {
+    "mode": "clip_coverage",  # or "hide_zone_boreholes"
+}
+```
+
+| Mode                  | Borehole Visibility                       | Coverage Behavior                 |
+| --------------------- | ----------------------------------------- | --------------------------------- |
+| `clip_coverage`       | Show if coverage TOUCHES any visible zone | Clip to visible zones only        |
+| `hide_zone_boreholes` | Hide if borehole is INSIDE hidden zone    | Hide + clip to visible zones only |
+
+**Mode: `clip_coverage` (default)**
+- Boreholes stay visible if their coverage buffer touches ANY visible zone
+- Coverage polygons are clipped to only show area over visible zones
+- A borehole inside hidden Zone A but with coverage extending to visible Zone B stays visible (but only Zone B coverage shows)
+
+**Mode: `hide_zone_boreholes`**
+- Boreholes are hidden if they're physically INSIDE any hidden zone
+- Their entire coverage is hidden (even if it extended to visible zones)
+- Additionally, coverage from visible boreholes is clipped to exclude hidden zone areas
+
+**Data Flow (SSOT-compliant):**
+```
+Frontend                          Server
+--------                          ------
+toggleZoneVisibility() 
+    │
+    │  POST /api/coverage/filtered
+    │  { excludeZones: ["Zone_A"], mode: "clip_coverage" }
+    │
+    └──────────────────────────────► 
+                                   │
+                                   ├─ mode == "clip_coverage":
+                                   │     Clip all coverages to exclude hidden zones
+                                   │
+                                   ├─ mode == "hide_zone_boreholes":
+                                   │     1. Filter out boreholes INSIDE hidden zones
+                                   │     2. Clip remaining coverages to exclude hidden zones
+                                   │
+    ◄──────────────────────────────┘
+    │
+    renderCoverages(response)  // Frontend only renders what server returns
+```
+
 ### Benefits
 
 | Benefit         | Description                                                  |
