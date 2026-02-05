@@ -993,10 +993,15 @@ def generate_click_to_copy_script() -> str:
                 } else if (point.customdata) {
                     const cd = point.customdata;
                     // Check if this is a Proposed/Added/Removed Boreholes trace
-                    // Customdata format: [borehole_index, source_pass] where source_pass is "First Pass", "Second Pass", etc.
+                    // Customdata format: [borehole_index, source_pass, status] where:
+                    //   - source_pass is "First Pass", "Second Pass", "Third Pass"
+                    //   - status is "Proposed", "Added", "Removed", "Locked"
                     const isProposedOrCZRC = traceName.includes('Proposed') || traceName.includes('Added') || traceName.includes('Removed') || traceName.includes('BH');
-                    if (isProposedOrCZRC && Array.isArray(cd) && cd.length === 2 && typeof cd[1] === 'string') {
-                        // Format: [index, source_pass] - Second/Third Pass boreholes
+                    if (isProposedOrCZRC && Array.isArray(cd) && cd.length >= 3 && typeof cd[1] === 'string') {
+                        // Format: [index, source_pass, status] - Full dataclass format
+                        clickText = `Proposed Borehole #${cd[0]}\\nEasting: ${x}\\nNorthing: ${y}\\nSource: ${cd[1]}\\nStatus: ${cd[2]}`;
+                    } else if (isProposedOrCZRC && Array.isArray(cd) && cd.length === 2 && typeof cd[1] === 'string') {
+                        // Format: [index, source_pass] - Legacy Second/Third Pass boreholes
                         clickText = `Proposed Borehole #${cd[0]}\\nEasting: ${x}\\nNorthing: ${y}\\nSource: ${cd[1]}`;
                     } else if (isProposedOrCZRC && Array.isArray(cd) && cd.length === 1) {
                         // Format: [index] - legacy single-value format

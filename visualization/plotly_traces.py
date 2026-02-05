@@ -818,8 +818,9 @@ def build_coverage_marker_trace(
     Build a single merged marker trace for proposed boreholes.
 
     Args:
-        coordinates: List of {"x": float, "y": float, "source_pass"?: str} dicts
+        coordinates: List of {"x": float, "y": float, "source_pass"?: str, "status"?: str} dicts
             source_pass is optional - if provided, shown in tooltip
+            status is optional - if provided, shown in tooltip (added/removed/proposed/locked)
         name: Trace name for legend
         marker_color: RGBA marker color
         marker_size: Marker size in pixels
@@ -844,9 +845,14 @@ def build_coverage_marker_trace(
 
     x_coords = [c["x"] for c in coordinates]
     y_coords = [c["y"] for c in coordinates]
-    # Include source_pass in customdata: [index, source_pass]
+    # Include source_pass and status in customdata: [index, source_pass, status]
     customdata = [
-        [i + 1, c.get("source_pass", "First Pass")] for i, c in enumerate(coordinates)
+        [
+            i + 1,
+            c.get("source_pass", "First Pass"),
+            c.get("status", "proposed").title(),  # Capitalize for display
+        ]
+        for i, c in enumerate(coordinates)
     ]
 
     return go.Scattergl(
@@ -865,6 +871,7 @@ def build_coverage_marker_trace(
             "Easting: %{x:,.0f}<br>"
             "Northing: %{y:,.0f}<br>"
             "Source: %{customdata[1]}<br>"
+            "Status: %{customdata[2]}<br>"
             "<extra></extra>"
         ),
         name=name,
