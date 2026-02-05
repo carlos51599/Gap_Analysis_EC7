@@ -453,6 +453,8 @@
         .panel-toggle-btn.panel-open .arrow {
             transform: rotate(180deg);
         }
+        
+        /* Focus outline disabled via JavaScript when CONFIG.ui.show_zone_focus_outline === false */
     </style>
 </head>
 <body>
@@ -1797,6 +1799,22 @@
             }
             
             // Note: Zone tooltips are handled in renderZones() after zones are loaded
+            
+            // Apply zone focus outline setting (disable black rectangle on click)
+            if (CONFIG.ui && CONFIG.ui.show_zone_focus_outline === false) {
+                // Inject CSS to disable focus outline
+                const styleEl = document.createElement('style');
+                styleEl.id = 'zone-focus-outline-style';
+                styleEl.textContent = '.leaflet-interactive:focus { outline: none; }';
+                document.head.appendChild(styleEl);
+                console.log('🔕 Zone focus outline disabled via config');
+            } else {
+                // Remove the style if it was previously added
+                const existingStyle = document.getElementById('zone-focus-outline-style');
+                if (existingStyle) {
+                    existingStyle.remove();
+                }
+            }
             
             console.log('📋 Config applied:', CONFIG);
         }

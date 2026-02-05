@@ -103,6 +103,7 @@ VIZ_CONFIG_DATA: Dict[str, Any] = {
         "coverage_panel_width_px": 320,
         "coverage_progress_bar_width_px": 100,
         "show_zone_tooltips": False,  # Show zone name tooltips on hover
+        "show_zone_focus_outline": False,  # Show focus outline (black rectangle) when clicking zones
     },
     # ═══════════════════════════════════════════════════════════════════════
     # 🔧 GEOMETRY SETTINGS
