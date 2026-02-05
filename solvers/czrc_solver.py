@@ -48,6 +48,9 @@ import numpy as np
 from shapely import wkt
 from shapely.errors import GEOSException
 from shapely.geometry import Point, Polygon, MultiPolygon, MultiPoint
+
+# Import typed data models for borehole provenance tracking
+from models.data_models import Borehole, BoreholePass, BoreholeStatus
 from shapely.geometry.base import BaseGeometry
 
 from Gap_Analysis_EC7.solvers.czrc_geometry import parse_pair_key
@@ -1315,57 +1318,75 @@ def _assemble_czrc_results(
     candidates: List[Point],
     bh_candidates: List[Dict[str, Any]],
     min_spacing: float,
-    source_pass: str = "Second Pass",
+    source_pass: BoreholePass = BoreholePass.SECOND,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
     """Assemble selected/removed/added boreholes from ILP results.
+
+    Uses typed Borehole dataclass internally to ensure source_pass is always set,
+    then converts to dict for backward compatibility with rest of codebase.
 
     Args:
         indices: ILP solution indices (selected candidates)
         candidates: All candidate positions as Points
         bh_candidates: Tier 1 boreholes that may be removed
         min_spacing: Coverage radius for new boreholes
-        source_pass: Pass identifier for added/removed boreholes
-            ("Second Pass" or "Third Pass")
+        source_pass: Pass identifier for ADDED boreholes only
+            (BoreholePass.SECOND or BoreholePass.THIRD)
+            NOTE: Removed boreholes keep their ORIGINAL source_pass
 
     Returns:
-        Tuple of (selected, removed, added) borehole lists with source_pass.
+        Tuple of (selected, removed, added) borehole dicts with source_pass.
     """
     selected_set = {
         (candidates[i].x, candidates[i].y) for i in indices if i < len(candidates)
     }
     tier1_bh_set = {(bh["x"], bh["y"]) for bh in bh_candidates}
 
-    # Selected = all ILP selections
+    # Selected = all ILP selections (as dicts for backward compatibility)
     selected = [
         {"x": candidates[i].x, "y": candidates[i].y, "coverage_radius": min_spacing}
         for i in indices
         if i < len(candidates)
     ]
+    
     # Removed = Tier 1 boreholes NOT selected
-    # Preserve original source_pass (the pass that created them), default to "First Pass"
-    removed = [
-        {
-            "x": bh["x"],
-            "y": bh["y"],
-            "coverage_radius": bh.get("coverage_radius", min_spacing),
-            "source_pass": bh.get("source_pass", "First Pass"),
-        }
-        for bh in bh_candidates
-        if (bh["x"], bh["y"]) not in selected_set
-    ]
+    # CRITICAL: Preserve ORIGINAL source_pass (the pass that created them)
+    removed = []
+    for bh in bh_candidates:
+        if (bh["x"], bh["y"]) not in selected_set:
+            # Parse original source_pass from input borehole
+            original_pass_str = bh.get("source_pass", "First Pass")
+            if isinstance(original_pass_str, BoreholePass):
+                original_pass = original_pass_str
+            else:
+                original_pass = BoreholePass.from_string(str(original_pass_str))
+            
+            # Create Borehole with original source_pass and REMOVED status
+            removed_bh = Borehole(
+                x=bh["x"],
+                y=bh["y"],
+                coverage_radius=bh.get("coverage_radius", min_spacing),
+                source_pass=original_pass,  # Keep original, not current pass!
+                status=BoreholeStatus.REMOVED,
+            )
+            removed.append(removed_bh.as_dict())
+    
     # Added = Selected NOT in previous pass Tier 1
-    # source_pass indicates which pass created these new boreholes
-    added = [
-        {
-            "x": candidates[i].x,
-            "y": candidates[i].y,
-            "coverage_radius": min_spacing,
-            "source_pass": source_pass,
-        }
-        for i in indices
-        if i < len(candidates)
-        and (candidates[i].x, candidates[i].y) not in tier1_bh_set
-    ]
+    # source_pass = current pass (these boreholes were CREATED by this pass)
+    added = []
+    for i in indices:
+        if i < len(candidates):
+            pos = (candidates[i].x, candidates[i].y)
+            if pos not in tier1_bh_set:
+                added_bh = Borehole(
+                    x=candidates[i].x,
+                    y=candidates[i].y,
+                    coverage_radius=min_spacing,
+                    source_pass=source_pass,  # Current pass created this
+                    status=BoreholeStatus.ADDED,
+                )
+                added.append(added_bh.as_dict())
+    
     # Filter coincident pairs
     removed, added = _filter_coincident_pairs(removed, added)
     return selected, removed, added
@@ -2222,13 +2243,27 @@ def solve_cell_cell_czrc(
     candidate_positions = {(bh["x"], bh["y"]) for bh in bh_candidates}
 
     # Removed = candidates NOT in selected
-    # Preserve original source_pass (the pass that created them)
+    # CRITICAL: Preserve ORIGINAL source_pass (the pass that created them)
     # In Third Pass, bh_candidates could be from FP or SP
-    removed = [
-        {**bh, "source_pass": bh.get("source_pass", "First Pass")}
-        for bh in bh_candidates
-        if (bh["x"], bh["y"]) not in selected_positions
-    ]
+    removed = []
+    for bh in bh_candidates:
+        if (bh["x"], bh["y"]) not in selected_positions:
+            # Parse original source_pass from input borehole
+            original_pass_str = bh.get("source_pass", "First Pass")
+            if isinstance(original_pass_str, BoreholePass):
+                original_pass = original_pass_str
+            else:
+                original_pass = BoreholePass.from_string(str(original_pass_str))
+            
+            # Create Borehole with original source_pass and REMOVED status
+            removed_bh = Borehole(
+                x=bh["x"],
+                y=bh["y"],
+                coverage_radius=bh.get("coverage_radius", spacing),
+                source_pass=original_pass,  # Keep original, not Third Pass!
+                status=BoreholeStatus.REMOVED,
+            )
+            removed.append(removed_bh.as_dict())
 
     # Added = selected positions NOT from previous pass
     # These are NEW boreholes created by Third Pass
@@ -2236,12 +2271,14 @@ def solve_cell_cell_czrc(
     for i in selected_set:
         pos = (candidates[i].x, candidates[i].y)
         if pos not in candidate_positions:
-            added.append({
-                "x": pos[0],
-                "y": pos[1],
-                "coverage_radius": spacing,
-                "source_pass": "Third Pass",
-            })
+            added_bh = Borehole(
+                x=pos[0],
+                y=pos[1],
+                coverage_radius=spacing,
+                source_pass=BoreholePass.THIRD,  # Created by Third Pass
+                status=BoreholeStatus.ADDED,
+            )
+            added.append(added_bh.as_dict())
 
     # Build final selected list: locked (Tier 2) + selected from ILP
     selected = list(locked)
