@@ -64,8 +64,15 @@ data_loader: Optional[DataLoader] = None
 coverage_service: Optional[CoverageService] = None
 
 # Logging setup
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(levelname)s:%(name)s:%(message)s')
 logger = logging.getLogger(__name__)
+
+# Debug logging helper - writes to stderr which is unbuffered
+import sys
+def debug_log(msg: str) -> None:
+    """Write debug message to stderr (unbuffered) for guaranteed visibility."""
+    sys.stderr.write(msg + "\n")
+    sys.stderr.flush()
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 🛣️ API ROUTES
@@ -183,12 +190,12 @@ def update_borehole_coverage() -> Dict[str, Any]:
     """
     import time
     
-    # Force immediate output to terminal using logger
-    logger.info("=" * 60)
-    logger.info("[MOVE] Request received")
+    # Force immediate output to terminal using stderr
+    debug_log("=" * 60)
+    debug_log("[MOVE] Request received")
 
     t_start = time.perf_counter()
-    logger.info(f"    [0] Request started")
+    debug_log(f"    [0] Request started")
 
     if coverage_service is None or data_loader is None:
         return jsonify({"error": "Server not initialized"}), 500
@@ -196,7 +203,7 @@ def update_borehole_coverage() -> Dict[str, Any]:
     t1 = time.perf_counter()
     data = request.get_json()
     t2 = time.perf_counter()
-    logger.info(f"    [1] get_json(): {(t2-t1)*1000:.3f}ms")
+    debug_log(f"    [1] get_json(): {(t2-t1)*1000:.3f}ms")
 
     if not data:
         return jsonify({"error": "Missing request body"}), 400
@@ -211,19 +218,19 @@ def update_borehole_coverage() -> Dict[str, Any]:
     lon = float(data["lon"])
     lat = float(data["lat"])
     t2 = time.perf_counter()
-    logger.info(f"    [2] Parse params: {(t2-t1)*1000:.3f}ms")
+    debug_log(f"    [2] Parse params: {(t2-t1)*1000:.3f}ms | index={index}")
 
     # Get borehole ID for cache
     t1 = time.perf_counter()
     borehole_id = data_loader.get_borehole_id(index)
     t2 = time.perf_counter()
-    logger.info(f"    [3] get_borehole_id: {(t2-t1)*1000:.3f}ms")
+    debug_log(f"    [3] get_borehole_id: {(t2-t1)*1000:.3f}ms | id={borehole_id}")
 
     # Transform ONCE and share with both functions
     t1 = time.perf_counter()
     bng_coords = coverage_service.transform_wgs84_to_bng(lon, lat)
     t2 = time.perf_counter()
-    logger.info(f"    [4] CRS transform: {(t2-t1)*1000:.3f}ms -> {bng_coords}")
+    debug_log(f"    [4] CRS transform: {(t2-t1)*1000:.3f}ms -> BNG={bng_coords}")
 
     # Compute coverage using pre-computed BNG coords
     t1 = time.perf_counter()
@@ -231,12 +238,12 @@ def update_borehole_coverage() -> Dict[str, Any]:
         borehole_id, lon, lat, bng_coords
     )
     t2 = time.perf_counter()
-    logger.info(f"    [5] compute_coverage_cached: {(t2-t1)*1000:.1f}ms")
+    debug_log(f"    [5] compute_coverage_cached: {(t2-t1)*1000:.1f}ms")
 
     t1 = time.perf_counter()
     zone_info = coverage_service.get_zone_info(lon, lat)
     t2 = time.perf_counter()
-    logger.info(f"    [6] get_zone_info: {(t2-t1)*1000:.1f}ms")
+    debug_log(f"    [6] get_zone_info: {(t2-t1)*1000:.1f}ms")
 
     # Update borehole position using pre-computed BNG coords
     # Returns updated zone_ids for the borehole
@@ -244,16 +251,16 @@ def update_borehole_coverage() -> Dict[str, Any]:
     old_zone_ids = data_loader.get_borehole_zone_ids(index)  # Get BEFORE update
     zone_ids = data_loader.update_borehole_position(index, lon, lat, bng_coords)
     t2 = time.perf_counter()
-    logger.info(f"    [7] update_borehole_position: {(t2-t1)*1000:.1f}ms")
+    debug_log(f"    [7] update_borehole_position: {(t2-t1)*1000:.1f}ms")
     
     # Detect zone change: inside zone (black) <-> outside zone (orange)
     was_in_zone = len(old_zone_ids) > 0
     is_in_zone = len(zone_ids) > 0
     if was_in_zone != is_in_zone:
         color_change = "BLACK->ORANGE" if was_in_zone else "ORANGE->BLACK"
-        logger.info(f"    [ZONE CHANGE] {color_change} | old_zones={old_zone_ids} -> new_zones={zone_ids}")
+        debug_log(f"    [ZONE CHANGE] {color_change} | old_zones={old_zone_ids} -> new_zones={zone_ids}")
     else:
-        logger.info(f"    [NO ZONE CHANGE] zones={zone_ids}")
+        debug_log(f"    [NO ZONE CHANGE] zones={zone_ids}")
 
     # DON'T compute stats - let frontend fetch them lazily
     t1 = time.perf_counter()
@@ -264,20 +271,20 @@ def update_borehole_coverage() -> Dict[str, Any]:
         "stats_pending": True,
     }
     t2 = time.perf_counter()
-    logger.info(f"    [8] Build result dict: {(t2-t1)*1000:.3f}ms")
+    debug_log(f"    [8] Build result dict: {(t2-t1)*1000:.3f}ms")
     
     # Log coverage result
     coverage_type = "null" if coverage is None else ("polygon" if coverage.get("geometry") else "empty")
-    logger.info(f"    [COVERAGE] type={coverage_type}, zone_info={zone_info}")
+    debug_log(f"    [COVERAGE] type={coverage_type}, zone_info={zone_info}")
 
     t1 = time.perf_counter()
     response = jsonify(result)
     t2 = time.perf_counter()
-    logger.info(f"    [9] jsonify: {(t2-t1)*1000:.1f}ms")
+    debug_log(f"    [9] jsonify: {(t2-t1)*1000:.1f}ms")
 
     t_end = time.perf_counter()
-    logger.info(f"    [TOTAL] MOVE: {(t_end-t_start)*1000:.1f}ms")
-    logger.info("=" * 60)
+    debug_log(f"    [TOTAL] MOVE: {(t_end-t_start)*1000:.1f}ms")
+    debug_log("=" * 60)
 
     return response
 
@@ -302,8 +309,8 @@ def delete_borehole() -> Dict[str, Any]:
     """
     import time
 
-    logger.info("=" * 60)
-    logger.info("[DELETE] Request received")
+    debug_log("=" * 60)
+    debug_log("[DELETE] Request received")
     
     t_start = time.perf_counter()
 
@@ -313,32 +320,32 @@ def delete_borehole() -> Dict[str, Any]:
     t1 = time.perf_counter()
     data = request.get_json()
     t2 = time.perf_counter()
-    logger.info(f"    [1] get_json(): {(t2-t1)*1000:.3f}ms")
+    debug_log(f"    [1] get_json(): {(t2-t1)*1000:.3f}ms")
 
     if not data or "index" not in data:
         return jsonify({"error": "Missing index in request body"}), 400
 
     index = int(data["index"])
-    logger.info(f"    [2] Deleting borehole at index {index}")
+    debug_log(f"    [2] Deleting borehole at index {index}")
 
     # Delete and get the borehole ID
     t1 = time.perf_counter()
     deleted_id = data_loader.delete_borehole(index)
     t2 = time.perf_counter()
-    logger.info(f"    [3] delete_borehole(): {(t2-t1)*1000:.3f}ms -> deleted_id={deleted_id}")
+    debug_log(f"    [3] delete_borehole(): {(t2-t1)*1000:.3f}ms -> deleted_id={deleted_id}")
 
     if deleted_id:
         # Invalidate cache for deleted borehole (marks stats as dirty)
         t1 = time.perf_counter()
         coverage_service.invalidate_cache(deleted_id)
         t2 = time.perf_counter()
-        logger.info(f"    [4] invalidate_cache(): {(t2-t1)*1000:.3f}ms")
+        debug_log(f"    [4] invalidate_cache(): {(t2-t1)*1000:.3f}ms")
 
         # Get updated boreholes
         t1 = time.perf_counter()
         boreholes = data_loader.get_boreholes_geojson()
         t2 = time.perf_counter()
-        logger.info(f"    [5] get_boreholes_geojson(): {(t2-t1)*1000:.3f}ms")
+        debug_log(f"    [5] get_boreholes_geojson(): {(t2-t1)*1000:.3f}ms")
 
         # DON'T compute stats - let frontend fetch them lazily
         # This makes delete feel instant (~5ms vs ~230ms)
@@ -353,11 +360,11 @@ def delete_borehole() -> Dict[str, Any]:
             }
         )
         t2 = time.perf_counter()
-        logger.info(f"    [6] jsonify: {(t2-t1)*1000:.3f}ms")
+        debug_log(f"    [6] jsonify: {(t2-t1)*1000:.3f}ms")
 
         t_end = time.perf_counter()
-        logger.info(f"    [TOTAL] DELETE: {(t_end-t_start)*1000:.1f}ms")
-        logger.info("=" * 60)
+        debug_log(f"    [TOTAL] DELETE: {(t_end-t_start)*1000:.1f}ms")
+        debug_log("=" * 60)
 
         return result
     else:
