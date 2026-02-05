@@ -262,6 +262,20 @@
         .coverage-stats .pct-medium { color: #f39c12; }
         .coverage-stats .pct-poor { color: #e74c3c; }
         
+        /* Hidden zone styling - greyed out appearance */
+        .coverage-stats .stat-row.hidden-zone {
+            opacity: 0.5;
+        }
+        .coverage-stats .stat-row.hidden-zone .progress-fill {
+            background: #999 !important;
+        }
+        .coverage-stats .stat-row.hidden-zone .pct-value {
+            color: #999 !important;
+        }
+        .coverage-stats .stat-row.hidden-zone .zone-name {
+            color: #999;
+        }
+        
         .coverage-stats .progress-bar {
             width: var(--coverage-progress-bar-width, 100px);
             flex-shrink: 0;
@@ -1205,12 +1219,14 @@
                     const pctClass = getPctClass(zone.coverage_pct);
                     const pctColor = getPctColor(zone.coverage_pct);
                     const isVisible = zoneVisibility[zone.zone_name] !== false;
+                    const hiddenClass = isVisible ? '' : 'hidden-zone';
                     
                     // Extract just the zone number for display (e.g., "Embankment_0" -> "Zone 0")
                     const shortName = zone.zone_name.replace(/^.*_(\d+)$/, 'Zone $1');
                     
                     html += `
-                        <div class="stat-row">
+                        <div class="stat-row ${hiddenClass}"
+                             data-zone="${zone.zone_name}">
                             <input type="checkbox" class="zone-checkbox" 
                                    data-zone="${zone.zone_name}"
                                    data-layer="${layerKey}"
@@ -1385,7 +1401,17 @@
             // 6. Re-sync coverage zones to markers after re-rendering
             syncCoverageZonesToMarkers();
             
-            // 7. Update count display
+            // 7. Update stat-row styling in coverage panel (grey out hidden zones)
+            const statRow = document.querySelector(`.stat-row[data-zone="${zoneName}"]`);
+            if (statRow) {
+                if (visible) {
+                    statRow.classList.remove('hidden-zone');
+                } else {
+                    statRow.classList.add('hidden-zone');
+                }
+            }
+            
+            // 8. Update count display
             updateBoreholeCountDisplay();
             
             const t_end = performance.now();
