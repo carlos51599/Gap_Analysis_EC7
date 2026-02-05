@@ -471,10 +471,10 @@ class DataLoader:
     def get_borehole_id(self, index: int) -> str:
         """
         Get the ID of a borehole by index.
-        
+
         Args:
             index: Borehole index (0-based)
-            
+
         Returns:
             The borehole's ID string.
         """
@@ -484,12 +484,12 @@ class DataLoader:
             if index < len(features):
                 props = features[index].get("properties", {})
                 return props.get("location_id") or props.get("id") or f"BH_{index}"
-        
+
         # Try GeoDataFrame
         if self._boreholes_gdf is not None and index < len(self._boreholes_gdf):
             row = self._boreholes_gdf.iloc[index]
             return row.get("Location_ID") or row.get("location_id") or f"BH_{index}"
-        
+
         return f"BH_{index}"
 
     def add_borehole(

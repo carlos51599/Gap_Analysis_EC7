@@ -35,6 +35,7 @@ from geopandas import GeoDataFrame
 
 from Gap_Analysis_EC7.config import CONFIG
 from Gap_Analysis_EC7.config_types import VisualizationConfig, BoreholeMarkerConfig
+from Gap_Analysis_EC7.solvers.czrc_geometry import parse_pair_key
 
 # Module-level logger for debug output
 _logger = logging.getLogger(__name__)
@@ -1123,7 +1124,8 @@ def _add_third_pass_intersections_trace(
             if region_geom.is_empty:
                 continue
             x_coords, y_coords = _extract_polygon_coords(region_geom)
-            cells = pair_key.replace("_", " + ")
+            # Handle both || (new) and _ (legacy) delimiters for display
+            cells = pair_key.replace("||", " + ").replace("_", " + ")
             fig.add_trace(
                 go.Scattergl(
                     x=x_coords,
@@ -1200,17 +1202,19 @@ def _add_third_pass_grid_trace(
     czrc_cfg = CONFIG.get("czrc_solver", {})
     tier1_mult = czrc_cfg.get("tier1_rmax_multiplier", 1.0)
 
-    # Estimate spacing from cell_intersections (use first available)
-    # For cells, we use the cluster spacing which is typically the max zone spacing
+    # Get spacing from third pass data (actual spacing used by solver)
+    # Falls back to config default if not available
     ilp_cfg = CONFIG.get("ilp_solver", {})
     spacing_mult = ilp_cfg.get("candidate_spacing_mult", 0.5)
 
-    # Get default spacing from the third pass data or config
-    default_spacing = czrc_cfg.get("default_spacing", 100.0)
-    grid_spacing = default_spacing * spacing_mult
+    # Use actual max_spacing from solver, falling back to config default
+    max_spacing = third_pass_data.get("max_spacing", 0.0)
+    if max_spacing <= 0:
+        max_spacing = czrc_cfg.get("default_spacing", 100.0)
+    grid_spacing = max_spacing * spacing_mult
 
     # Buffer the unified CZRC region to Tier 1 (CZRC + tier1_mult × spacing)
-    tier1_region = unified_czrc.buffer(tier1_mult * default_spacing)
+    tier1_region = unified_czrc.buffer(tier1_mult * max_spacing)
     if tier1_region.is_empty:
         return (start_idx, len(fig.data))
 
@@ -1248,7 +1252,7 @@ def _add_third_pass_grid_trace(
 
     # Add Tier 2 visibility boundary line (same as Second Pass Grid has)
     tier2_mult = czrc_cfg.get("tier2_rmax_multiplier", 2.0)
-    tier2_region = unified_czrc.buffer(tier2_mult * default_spacing)
+    tier2_region = unified_czrc.buffer(tier2_mult * max_spacing)
 
     if tier2_region is not None and not tier2_region.is_empty:
         # Get Tier 2 styling from config (same as CZRC uses)
@@ -1260,11 +1264,12 @@ def _add_third_pass_grid_trace(
 
         # Format multiplier for legend (remove trailing zeros)
         mult_str = f"{tier2_mult:g}"
-        
+
         # Parse per-cluster Tier 2 boundaries for individual tooltips
         # cell_intersections keys are like "cluster_{N}_{pair_key}" or "Cell_{i}_Cell_{j}"
         cluster_intersections: Dict[str, List] = {}  # cluster_num -> list of geometries
         import re
+
         for pair_key, wkt_str in cell_intersections.items():
             try:
                 geom = shapely_wkt.loads(wkt_str)
@@ -1282,11 +1287,11 @@ def _add_third_pass_grid_trace(
                 cluster_intersections[cluster_num].append(geom)
             except Exception:  # noqa: BLE001
                 pass
-        
+
         # Create per-cluster Tier 2 boundaries with tooltips
         for cluster_num, geoms in sorted(cluster_intersections.items()):
             cluster_czrc = unary_union(geoms)
-            cluster_tier2 = cluster_czrc.buffer(tier2_mult * default_spacing)
+            cluster_tier2 = cluster_czrc.buffer(tier2_mult * max_spacing)
             if cluster_tier2.is_empty:
                 continue
             # Create tooltip text matching log file naming (1-based display)
@@ -2025,7 +2030,8 @@ def _add_czrc_pairwise_trace(
             if region_geom.is_empty:
                 continue
             x_coords, y_coords = _extract_polygon_coords(region_geom)
-            zones = pair_key.replace("_", " + ")
+            # Handle both || (new) and _ (legacy) delimiters for display
+            zones = pair_key.replace("||", " + ").replace("_", " + ")
             fig.add_trace(
                 go.Scattergl(
                     x=x_coords,
@@ -2296,8 +2302,8 @@ def _add_czrc_ilp_visibility_trace(
             if region_geom.is_empty or not region_geom.is_valid:
                 continue
 
-            # Parse zone names from pair_key (format: "ZoneA_ZoneB")
-            zone_names = pair_key.split("_")
+            # Parse zone names from pair_key (format: "ZoneA||ZoneB" or legacy "ZoneA_ZoneB")
+            zone_names = parse_pair_key(pair_key, zone_spacings)
 
             # Get R_max = max spacing of all involved zones
             spacings = []

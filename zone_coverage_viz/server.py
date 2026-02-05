@@ -186,7 +186,7 @@ def update_borehole_coverage() -> Dict[str, Any]:
     index = int(data["index"])
     lon = float(data["lon"])
     lat = float(data["lat"])
-    
+
     # Get borehole ID for cache
     borehole_id = data_loader.get_borehole_id(index)
 
@@ -196,7 +196,7 @@ def update_borehole_coverage() -> Dict[str, Any]:
     # Compute coverage using cache (updates cache entry)
     coverage = coverage_service.compute_coverage_cached(borehole_id, lon, lat)
     zone_info = coverage_service.get_zone_info(lon, lat)
-    
+
     # Get stats from cache (includes updated coverage)
     stats = coverage_service.get_stats_from_cache()
 
@@ -229,26 +229,28 @@ def delete_borehole() -> Dict[str, Any]:
         return jsonify({"error": "Missing index in request body"}), 400
 
     index = int(data["index"])
-    
+
     # Delete and get the borehole ID
     deleted_id = data_loader.delete_borehole(index)
 
     if deleted_id:
         # Invalidate cache for deleted borehole
         coverage_service.invalidate_cache(deleted_id)
-        
+
         # Get updated boreholes
         boreholes = data_loader.get_boreholes_geojson()
-        
+
         # Get stats from cache (fast - no re-computation needed)
         stats = coverage_service.get_stats_from_cache()
-        
-        return jsonify({
-            "success": True, 
-            "boreholes": boreholes,
-            "deleted_id": deleted_id,
-            "stats": stats
-        })
+
+        return jsonify(
+            {
+                "success": True,
+                "boreholes": boreholes,
+                "deleted_id": deleted_id,
+                "stats": stats,
+            }
+        )
     else:
         return jsonify({"success": False, "error": "Invalid index"}), 400
 
@@ -288,7 +290,7 @@ def add_borehole() -> Dict[str, Any]:
 
     # Add the borehole
     new_index = data_loader.add_borehole(lon, lat, location_id)
-    
+
     # Get the assigned ID
     borehole_id = data_loader.get_borehole_id(new_index)
 
@@ -297,7 +299,7 @@ def add_borehole() -> Dict[str, Any]:
 
     # Get updated boreholes list
     boreholes = data_loader.get_boreholes_geojson()
-    
+
     # Get stats from cache (includes the new borehole)
     stats = coverage_service.get_stats_from_cache()
 
@@ -330,19 +332,21 @@ def compute_all_coverages() -> Dict[str, Any]:
         return jsonify({"error": "Server not initialized"}), 500
 
     boreholes = data_loader.get_boreholes_geojson()
-    
+
     # Use cached computation (populates cache for future delta updates)
     coverages_fc = coverage_service.compute_all_coverages_and_cache(boreholes)
-    
+
     # Get stats from cache (fast after caching)
     stats = coverage_service.get_stats_from_cache()
-    
+
     # Return both coverages and stats in one response
-    return jsonify({
-        "type": "FeatureCollection",
-        "features": coverages_fc.get("features", []),
-        "stats": stats
-    })
+    return jsonify(
+        {
+            "type": "FeatureCollection",
+            "features": coverages_fc.get("features", []),
+            "stats": stats,
+        }
+    )
 
 
 @app.route("/api/coverage/stats", methods=["GET"])

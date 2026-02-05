@@ -552,7 +552,7 @@ def worker_process_filter_combination(
                 # 🔗 CZRC SECOND-PASS OPTIMIZATION (New approach replacing border_consolidation)
                 # ═══════════════════════════════════════════════════════════════════
                 czrc_opt_config = CONFIG.get("czrc_optimization", {})
-                
+
                 # Apply testing mode mip_gap override to CZRC config
                 testing_mode = CONFIG.get("testing_mode", {})
                 if testing_mode.get("enabled", False):
@@ -563,8 +563,10 @@ def worker_process_filter_combination(
                         czrc_ilp = dict(czrc_opt_config.get("ilp", {}))
                         czrc_ilp["mip_gap"] = solver_overrides["mip_gap"]
                         czrc_opt_config["ilp"] = czrc_ilp
-                        print(f"   🧪 CZRC: testing mode mip_gap override applied: {solver_overrides['mip_gap']}")
-                
+                        print(
+                            f"   🧪 CZRC: testing mode mip_gap override applied: {solver_overrides['mip_gap']}"
+                        )
+
                 if czrc_opt_config.get("enabled", False):
                     czrc_cache = None  # Initialize for cleanup handling
                     try:

@@ -632,7 +632,7 @@ CONFIG: Dict[str, Any] = {
         ),  # Tier 1 = CZRC + mult × R_max
         # Tier 2: Coverage context region (locked boreholes provide pre-coverage)
         "tier2_rmax_multiplier": _env_or_default(
-            "EC7_TIER2_RMAX_MULT", 2.0, float
+            "EC7_TIER2_RMAX_MULT", 2.5, float
         ),  # Tier 2 = CZRC + mult × R_max
         # ═══════════════════════════════════════════════════════════════════
         # CANDIDATE GRID SETTINGS
@@ -790,11 +790,11 @@ CONFIG: Dict[str, Any] = {
         # unless explicitly overridden in this section's "ilp" subsection.
         "cell_boundary_consolidation": {
             # Master switch for third pass cell-cell CZRC
-            "enabled": False,
+            "enabled": True,
             # Tier 1 multiplier (same as zone CZRC - inherit from parent)
             "tier1_rmax_multiplier": 1.0,
             # Tier 2 multiplier (same as zone CZRC - inherit from parent)
-            "tier2_rmax_multiplier": 2.0,
+            "tier2_rmax_multiplier": 2.5,
             # Test point spacing multiplier (same as zone CZRC)
             "test_spacing_mult": 0.2,
             # NOTE: ILP settings (exclusion_factor, coverage_target_pct, etc.)

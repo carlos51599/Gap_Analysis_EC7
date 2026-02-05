@@ -77,7 +77,7 @@ SHAPEFILE_CONFIG: Dict[str, Any] = {
             "layer_order": 10,  # Drawn on top
             "use_for_coverage": True,  # Used for coverage analysis
             "name_column": None,  # No per-zone breakdown - single max_spacing for whole shapefile
-            "max_spacing_m": 100.0,  # Single spacing for all features
+            "max_spacing_m": 200.0,  # Single spacing for all features
             "order": 2,  # Priority for overlap resolution (lower = higher priority, used when spacing equal)
             "rendering": {
                 "boundary_color": "#FF0000",  # Red
