@@ -2,6 +2,19 @@
 REM Zone Coverage Visualization Server Launcher
 REM Run from Embankment_Grid directory or Gap_Analysis_EC7 directory
 
+REM Check if Windows Terminal is available and use it for better emoji/color support
+where wt >nul 2>&1
+if %ERRORLEVEL% EQU 0 (
+    REM Windows Terminal found - relaunch in it if not already in wt
+    if "%WT_SESSION%"=="" (
+        start "" wt new-tab -d . cmd /k call "%~nx0"
+        exit /b
+    )
+)
+
+REM Enable UTF-8 support for emojis and special characters
+chcp 65001 >nul 2>&1
+
 echo Starting Zone Coverage Visualization Server...
 echo.
 
