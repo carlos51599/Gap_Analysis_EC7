@@ -184,7 +184,7 @@ def update_borehole_coverage() -> Dict[str, Any]:
     import time
 
     t_start = time.perf_counter()
-    print(f"    [0] Request started")
+    print(f"    [0] Request started", flush=True)
 
     if coverage_service is None or data_loader is None:
         return jsonify({"error": "Server not initialized"}), 500
@@ -192,7 +192,7 @@ def update_borehole_coverage() -> Dict[str, Any]:
     t1 = time.perf_counter()
     data = request.get_json()
     t2 = time.perf_counter()
-    print(f"    [1] get_json(): {(t2-t1)*1000:.3f}ms")
+    print(f"    [1] get_json(): {(t2-t1)*1000:.3f}ms", flush=True)
 
     if not data:
         return jsonify({"error": "Missing request body"}), 400
@@ -207,19 +207,19 @@ def update_borehole_coverage() -> Dict[str, Any]:
     lon = float(data["lon"])
     lat = float(data["lat"])
     t2 = time.perf_counter()
-    print(f"    [2] Parse params: {(t2-t1)*1000:.3f}ms")
+    print(f"    [2] Parse params: {(t2-t1)*1000:.3f}ms", flush=True)
 
     # Get borehole ID for cache
     t1 = time.perf_counter()
     borehole_id = data_loader.get_borehole_id(index)
     t2 = time.perf_counter()
-    print(f"    [3] get_borehole_id: {(t2-t1)*1000:.3f}ms")
+    print(f"    [3] get_borehole_id: {(t2-t1)*1000:.3f}ms", flush=True)
 
     # Transform ONCE and share with both functions
     t1 = time.perf_counter()
     bng_coords = coverage_service.transform_wgs84_to_bng(lon, lat)
     t2 = time.perf_counter()
-    print(f"    [4] CRS transform: {(t2-t1)*1000:.3f}ms -> {bng_coords}")
+    print(f"    [4] CRS transform: {(t2-t1)*1000:.3f}ms -> {bng_coords}", flush=True)
 
     # Compute coverage using pre-computed BNG coords
     t1 = time.perf_counter()
@@ -227,19 +227,29 @@ def update_borehole_coverage() -> Dict[str, Any]:
         borehole_id, lon, lat, bng_coords
     )
     t2 = time.perf_counter()
-    print(f"    [5] compute_coverage_cached: {(t2-t1)*1000:.1f}ms")
+    print(f"    [5] compute_coverage_cached: {(t2-t1)*1000:.1f}ms", flush=True)
 
     t1 = time.perf_counter()
     zone_info = coverage_service.get_zone_info(lon, lat)
     t2 = time.perf_counter()
-    print(f"    [6] get_zone_info: {(t2-t1)*1000:.1f}ms")
+    print(f"    [6] get_zone_info: {(t2-t1)*1000:.1f}ms", flush=True)
 
     # Update borehole position using pre-computed BNG coords
     # Returns updated zone_ids for the borehole
     t1 = time.perf_counter()
+    old_zone_ids = data_loader.get_borehole_zone_ids(index)  # Get BEFORE update
     zone_ids = data_loader.update_borehole_position(index, lon, lat, bng_coords)
     t2 = time.perf_counter()
-    print(f"    [7] update_borehole_position: {(t2-t1)*1000:.1f}ms")
+    print(f"    [7] update_borehole_position: {(t2-t1)*1000:.1f}ms", flush=True)
+    
+    # Detect zone change: inside zone (black) <-> outside zone (orange)
+    was_in_zone = len(old_zone_ids) > 0
+    is_in_zone = len(zone_ids) > 0
+    if was_in_zone != is_in_zone:
+        color_change = "⚫→🟠" if was_in_zone else "🟠→⚫"
+        print(f"    [ZONE CHANGE] {color_change} | old_zones={old_zone_ids} -> new_zones={zone_ids}", flush=True)
+    else:
+        print(f"    [NO ZONE CHANGE] zones={zone_ids}", flush=True)
 
     # DON'T compute stats - let frontend fetch them lazily
     t1 = time.perf_counter()
@@ -250,15 +260,20 @@ def update_borehole_coverage() -> Dict[str, Any]:
         "stats_pending": True,
     }
     t2 = time.perf_counter()
-    print(f"    [8] Build result dict: {(t2-t1)*1000:.3f}ms")
+    print(f"    [8] Build result dict: {(t2-t1)*1000:.3f}ms", flush=True)
+    
+    # Log coverage result
+    coverage_type = "null" if coverage is None else ("polygon" if coverage.get("geometry") else "empty")
+    print(f"    [COVERAGE] type={coverage_type}, zone_info={zone_info}", flush=True)
 
     t1 = time.perf_counter()
     response = jsonify(result)
     t2 = time.perf_counter()
-    print(f"    [9] jsonify: {(t2-t1)*1000:.1f}ms")
+    print(f"    [9] jsonify: {(t2-t1)*1000:.1f}ms", flush=True)
 
     t_end = time.perf_counter()
-    print(f"    [TOTAL] MOVE: {(t_end-t_start)*1000:.1f}ms")
+    print(f"    [TOTAL] MOVE: {(t_end-t_start)*1000:.1f}ms", flush=True)
+    print(f"=" * 60, flush=True)
 
     return response
 
@@ -281,29 +296,49 @@ def delete_borehole() -> Dict[str, Any]:
             "stats_pending": bool (true = frontend should request stats separately)
         }
     """
+    import time
+
+    t_start = time.perf_counter()
+    print(f"    [DELETE] Request started", flush=True)
+
     if data_loader is None or coverage_service is None:
         return jsonify({"error": "Server not initialized"}), 500
 
+    t1 = time.perf_counter()
     data = request.get_json()
+    t2 = time.perf_counter()
+    print(f"    [1] get_json(): {(t2-t1)*1000:.3f}ms", flush=True)
+
     if not data or "index" not in data:
         return jsonify({"error": "Missing index in request body"}), 400
 
     index = int(data["index"])
+    print(f"    [2] Deleting borehole at index {index}", flush=True)
 
     # Delete and get the borehole ID
+    t1 = time.perf_counter()
     deleted_id = data_loader.delete_borehole(index)
+    t2 = time.perf_counter()
+    print(f"    [3] delete_borehole(): {(t2-t1)*1000:.3f}ms -> deleted_id={deleted_id}", flush=True)
 
     if deleted_id:
         # Invalidate cache for deleted borehole (marks stats as dirty)
+        t1 = time.perf_counter()
         coverage_service.invalidate_cache(deleted_id)
+        t2 = time.perf_counter()
+        print(f"    [4] invalidate_cache(): {(t2-t1)*1000:.3f}ms", flush=True)
 
         # Get updated boreholes
+        t1 = time.perf_counter()
         boreholes = data_loader.get_boreholes_geojson()
+        t2 = time.perf_counter()
+        print(f"    [5] get_boreholes_geojson(): {(t2-t1)*1000:.3f}ms", flush=True)
 
         # DON'T compute stats - let frontend fetch them lazily
         # This makes delete feel instant (~5ms vs ~230ms)
 
-        return jsonify(
+        t1 = time.perf_counter()
+        result = jsonify(
             {
                 "success": True,
                 "boreholes": boreholes,
@@ -311,6 +346,14 @@ def delete_borehole() -> Dict[str, Any]:
                 "stats_pending": True,  # Signal frontend to fetch stats separately
             }
         )
+        t2 = time.perf_counter()
+        print(f"    [6] jsonify: {(t2-t1)*1000:.3f}ms", flush=True)
+
+        t_end = time.perf_counter()
+        print(f"    [TOTAL] DELETE: {(t_end-t_start)*1000:.1f}ms", flush=True)
+        print(f"=" * 60, flush=True)
+
+        return result
     else:
         return jsonify({"success": False, "error": "Invalid index"}), 400
 

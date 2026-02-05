@@ -564,6 +564,23 @@ class DataLoader:
         logger.info(f"🗑️ Deleted borehole {deleted_id} at index {index}")
         return deleted_id
 
+    def get_borehole_zone_ids(self, index: int) -> List[str]:
+        """
+        Get the zone_ids of a borehole by index.
+
+        Args:
+            index: Borehole index (0-based)
+
+        Returns:
+            List of zone IDs the borehole is associated with, or empty list if outside all zones.
+        """
+        if self._boreholes_data is not None:
+            features = self._boreholes_data.get("features", [])
+            if index < len(features):
+                props = features[index].get("properties", {})
+                return props.get("zone_ids", [])
+        return []
+
     def get_borehole_id(self, index: int) -> str:
         """
         Get the ID of a borehole by index.

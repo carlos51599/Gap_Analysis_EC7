@@ -75,7 +75,9 @@ class BoreholeMarkerConfig:
     hover_scale: float = 2.0  # Scale factor on hover (2.0 = double size)
     # Outside-zone marker styling (boreholes not within any zone polygon)
     outside_zone_color: str = "#FF8C00"  # Dark orange
-    outside_zone_radius_multiplier: float = 2.0  # Outside radius = visible_radius * this
+    outside_zone_radius_multiplier: float = (
+        2.0  # Outside radius = visible_radius * this
+    )
 
     @property
     def grab_radius_m(self) -> float:

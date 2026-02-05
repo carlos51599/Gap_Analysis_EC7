@@ -825,31 +825,55 @@
         }
         
         async function updateBoreholePosition(index, lon, lat) {
+            const t_start = performance.now();
+            console.log(`📍 [MOVE] Starting update for borehole ${index} to (${lon.toFixed(6)}, ${lat.toFixed(6)})`);
             try {
+                const t_fetch_start = performance.now();
                 const response = await fetch('/api/coverage/update', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ index, lon, lat })
                 });
+                const t_fetch_end = performance.now();
+                console.log(`    [MOVE] Fetch: ${(t_fetch_end - t_fetch_start).toFixed(1)}ms`);
+                
+                const t_parse_start = performance.now();
                 const data = await response.json();
+                const t_parse_end = performance.now();
+                console.log(`    [MOVE] Parse JSON: ${(t_parse_end - t_parse_start).toFixed(1)}ms`);
+                
+                const t_total = performance.now() - t_start;
+                console.log(`✅ [MOVE] Total: ${t_total.toFixed(1)}ms`);
                 return data;
             } catch (error) {
-                console.error('Failed to update borehole:', error);
+                console.error('❌ [MOVE] Failed to update borehole:', error);
                 return null;
             }
         }
         
         async function deleteBorehole(index) {
+            const t_start = performance.now();
+            console.log(`🗑️ [DELETE] Starting delete for borehole ${index}`);
             try {
+                const t_fetch_start = performance.now();
                 const response = await fetch('/api/borehole/delete', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ index })
                 });
+                const t_fetch_end = performance.now();
+                console.log(`    [DELETE] Fetch: ${(t_fetch_end - t_fetch_start).toFixed(1)}ms`);
+                
+                const t_parse_start = performance.now();
                 const data = await response.json();
+                const t_parse_end = performance.now();
+                console.log(`    [DELETE] Parse JSON: ${(t_parse_end - t_parse_start).toFixed(1)}ms`);
+                
+                const t_total = performance.now() - t_start;
+                console.log(`✅ [DELETE] Total API call: ${t_total.toFixed(1)}ms`);
                 return data;
             } catch (error) {
-                console.error('Failed to delete borehole:', error);
+                console.error('❌ [DELETE] Failed to delete borehole:', error);
                 return null;
             }
         }
@@ -1533,6 +1557,9 @@
                 async function onDragEnd(e) {
                     if (!isDragging) return;
                     
+                    const t_drag_end = performance.now();
+                    console.log(`🖱️ [DRAG] Drag ended`);
+                    
                     isDragging = false;
                     map.dragging.enable();
                     map.getContainer().style.cursor = '';
@@ -1545,13 +1572,18 @@
                     
                     // Only update if position actually changed
                     if (newLatLng.lat !== dragStartLatLng.lat || newLatLng.lng !== dragStartLatLng.lng) {
+                        const t_api_start = performance.now();
                         const result = await updateBoreholePosition(
                             grabCircle.boreholeIndex,
                             newLatLng.lng,
                             newLatLng.lat
                         );
+                        const t_api_end = performance.now();
+                        console.log(`    [DRAG] API call took: ${(t_api_end - t_api_start).toFixed(1)}ms`);
                         
                         if (result) {
+                            const t_ui_start = performance.now();
+                            
                             // Update local data
                             boreholesData.features[grabCircle.boreholeIndex].geometry.coordinates = [newLatLng.lng, newLatLng.lat];
                             
@@ -1587,12 +1619,18 @@
                             // Update count display
                             updateBoreholeCountDisplay();
                             
+                            const t_ui_end = performance.now();
+                            console.log(`    [DRAG] UI update took: ${(t_ui_end - t_ui_start).toFixed(1)}ms`);
+                            
                             // Lazy stats update - fetch after short delay for perceived instant response
                             if (result.stats_pending) {
                                 setTimeout(() => refreshCoverageStats(), 50);
                             } else if (result.stats) {
                                 renderCoverageStats(result.stats);
                             }
+                            
+                            const t_drag_total = performance.now();
+                            console.log(`✅ [DRAG] Total drag operation: ${(t_drag_total - t_drag_end).toFixed(1)}ms`);
                         }
                     }
                 }
@@ -1600,12 +1638,21 @@
                 // Shift+Click to delete
                 grabCircle.on('click', async (e) => {
                     if (e.originalEvent.shiftKey) {
+                        const t_delete_start = performance.now();
+                        console.log(`🗑️ [DELETE-UI] Shift+click delete triggered for borehole ${grabCircle.boreholeIndex}`);
+                        
                         // Save state for undo before deleting
                         saveStateForUndo();
                         
                         const deletedIndex = grabCircle.boreholeIndex;
+                        const t_api_start = performance.now();
                         const result = await deleteBorehole(deletedIndex);
+                        const t_api_end = performance.now();
+                        console.log(`    [DELETE-UI] API call took: ${(t_api_end - t_api_start).toFixed(1)}ms`);
+                        
                         if (result && result.success) {
+                            const t_ui_start = performance.now();
+                            
                             // Update local data
                             boreholesData = result.boreholes;
                             
@@ -1618,6 +1665,9 @@
                             // Re-apply zone visibility after re-rendering
                             updateBoreholeVisibilityForZones();
                             
+                            const t_ui_end = performance.now();
+                            console.log(`    [DELETE-UI] UI update took: ${(t_ui_end - t_ui_start).toFixed(1)}ms`);
+                            
                             // Lazy stats update - fetch after a short delay for snappy UI
                             if (result.stats_pending) {
                                 // Defer stats computation - UI feels instant, stats update shortly after
@@ -1628,7 +1678,8 @@
                                 renderCoverageStats(result.stats);
                             }
                             
-                            console.log(`🗑️ Deleted borehole ${grabCircle.boreholeId}`);
+                            const t_delete_total = performance.now();
+                            console.log(`✅ [DELETE-UI] Total delete operation: ${(t_delete_total - t_delete_start).toFixed(1)}ms`);
                         }
                     } else {
                         showBoreholeInfo(grabCircle, null);

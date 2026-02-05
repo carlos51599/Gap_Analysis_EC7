@@ -24,11 +24,11 @@ start "" cmd /c "timeout /t 2 /nobreak >nul && start http://localhost:5051"
 REM Check if we're in the right directory
 if exist "zone_coverage_viz\server.py" (
     echo Found server in current directory
-    python -m zone_coverage_viz.server
+    python -u -m zone_coverage_viz.server
 ) else if exist "Main\Gap_Analysis_EC7\zone_coverage_viz\server.py" (
     echo Found server in Main\Gap_Analysis_EC7
     cd Main\Gap_Analysis_EC7
-    python -m zone_coverage_viz.server
+    python -u -m zone_coverage_viz.server
 ) else (
     echo ERROR: Cannot find zone_coverage_viz\server.py
     echo Please run this script from Embankment_Grid or Gap_Analysis_EC7 directory
