@@ -1290,18 +1290,87 @@
             }
         }
         
-        // Toggle all zones in a group at once
-        function toggleGroupVisibility(layerKey, visible) {
+        // Toggle all zones in a group at once (batch operation - single API call)
+        async function toggleGroupVisibility(layerKey, visible) {
+            console.log(`🔄 Toggle group ${layerKey}: ${visible}`);
+            const t_start = performance.now();
+            const mode = getZoneVisibilityMode();
+            
             // Find all zone checkboxes in this group
             const checkboxes = document.querySelectorAll(`.zone-checkbox[data-layer="${layerKey}"]`);
             
+            // 1. Update all zones' state immediately (no API calls yet)
             checkboxes.forEach(cb => {
                 const zoneName = cb.dataset.zone;
-                if (zoneVisibility[zoneName] !== visible) {
-                    cb.checked = visible;
-                    toggleZoneVisibility(zoneName, visible);
+                cb.checked = visible;
+                zoneVisibility[zoneName] = visible;
+                
+                // Update zone polygon opacity (instant)
+                zonesLayer.eachLayer((layer) => {
+                    const props = layer.feature?.properties;
+                    if (props && (props.zone_name === zoneName || props.display_name === zoneName)) {
+                        layer.setStyle(visible 
+                            ? { opacity: 0.8, fillOpacity: 1 } 
+                            : { opacity: 0, fillOpacity: 0 });
+                    }
+                });
+                
+                // Update stat-row styling
+                const statRow = document.querySelector(`.stat-row[data-zone="${zoneName}"]`);
+                if (statRow) {
+                    statRow.classList.toggle('hidden-zone', !visible);
                 }
             });
+            
+            // 2. Update borehole visibility based on mode
+            boreholeMarkers.forEach((grabCircle) => {
+                const markerGroup = grabCircle.markerGroup;
+                let shouldBeVisible;
+                
+                if (mode === 'hide_zone_boreholes') {
+                    const locationZoneIds = grabCircle.zoneIds || [];
+                    shouldBeVisible = isBoreholeVisibleByLocationZone(locationZoneIds);
+                } else {
+                    const coverageZoneIds = grabCircle.coverageZoneIds || [];
+                    shouldBeVisible = isBoreholeVisibleByZones(coverageZoneIds);
+                }
+                
+                if (shouldBeVisible) {
+                    if (!map.hasLayer(markerGroup)) {
+                        boreholesLayer.addLayer(markerGroup);
+                    }
+                } else {
+                    if (map.hasLayer(markerGroup)) {
+                        markerGroup.remove();
+                    }
+                }
+            });
+            
+            // 3. Make SINGLE API call with all current hidden zones
+            const hiddenZones = getHiddenZoneNames();
+            
+            if (hiddenZones.length === 0) {
+                const [coverages, existingCoverage] = await Promise.all([
+                    fetchAllCoverages(),
+                    fetchExistingCoverage()
+                ]);
+                renderCoverages(coverages);
+                renderExistingCoverage(existingCoverage);
+            } else {
+                const [filteredCoverages, filteredExisting] = await Promise.all([
+                    fetchFilteredCoverages(hiddenZones, mode),
+                    fetchFilteredExistingCoverage(hiddenZones)
+                ]);
+                renderCoverages(filteredCoverages);
+                renderExistingCoverage(filteredExisting);
+            }
+            
+            // 4. Finalize
+            syncCoverageZonesToMarkers();
+            updateBoreholeCountDisplay();
+            
+            const t_end = performance.now();
+            console.log(`✅ Group toggle complete in ${(t_end - t_start).toFixed(1)}ms (mode: ${mode})`);
         }
         
         // Update group checkbox state based on children
