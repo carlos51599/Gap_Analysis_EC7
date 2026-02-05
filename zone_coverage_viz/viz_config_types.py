@@ -205,6 +205,7 @@ class UIConfig:
     add_mode_indicator_color: str = "#27ae60"
     coverage_panel_width_px: int = 320
     coverage_progress_bar_width_px: int = 100
+    show_zone_tooltips: bool = True  # Show zone name tooltips on hover
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "UIConfig":
@@ -218,6 +219,7 @@ class UIConfig:
             add_mode_indicator_color=d.get("add_mode_indicator_color", "#27ae60"),
             coverage_panel_width_px=d.get("coverage_panel_width_px", 320),
             coverage_progress_bar_width_px=d.get("coverage_progress_bar_width_px", 100),
+            show_zone_tooltips=d.get("show_zone_tooltips", True),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -231,6 +233,7 @@ class UIConfig:
             "add_mode_indicator_color": self.add_mode_indicator_color,
             "coverage_panel_width_px": self.coverage_panel_width_px,
             "coverage_progress_bar_width_px": self.coverage_progress_bar_width_px,
+            "show_zone_tooltips": self.show_zone_tooltips,
         }
 
 

@@ -102,6 +102,7 @@ VIZ_CONFIG_DATA: Dict[str, Any] = {
         "add_mode_indicator_color": "#27ae60",
         "coverage_panel_width_px": 320,
         "coverage_progress_bar_width_px": 100,
+        "show_zone_tooltips": False,  # Show zone name tooltips on hover
     },
     # ═══════════════════════════════════════════════════════════════════════
     # 🔧 GEOMETRY SETTINGS

@@ -247,7 +247,7 @@ def update_borehole_coverage() -> Dict[str, Any]:
         "coverage": coverage,
         "zone_info": zone_info,
         "zone_ids": zone_ids,  # New: zone associations for this borehole
-        "stats_pending": True
+        "stats_pending": True,
     }
     t2 = time.perf_counter()
     print(f"    [8] Build result dict: {(t2-t1)*1000:.3f}ms")

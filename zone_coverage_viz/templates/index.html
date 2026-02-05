@@ -579,12 +579,15 @@
             onEachFeature: (feature, layer) => {
                 const props = feature.properties || {};
                 const zoneName = props.zone_name || props.display_name || 'Zone';
-                // Bind tooltip that follows cursor along the geometry
+                // Bind tooltip if enabled in config (default: true, check after CONFIG loads)
+                // Note: CONFIG is not available yet, so we bind and may unbind later in applyConfig()
                 layer.bindTooltip(zoneName, {
                     permanent: false,
                     sticky: true,  // Follow the cursor
                     className: 'zone-tooltip'
                 });
+                // Store zone name for later reference
+                layer.zoneName = zoneName;
                 // Prevent click from showing bounding box - instead highlight actual geometry
                 layer.on('click', (e) => {
                     L.DomEvent.stopPropagation(e);  // Don't propagate to map
@@ -1319,6 +1322,16 @@
             zonesLayer.clearLayers();
             zonesLayer.addData(geojson);
             
+            // Disable zone tooltips if configured (CONFIG should be loaded by now)
+            if (CONFIG && CONFIG.ui && CONFIG.ui.show_zone_tooltips === false) {
+                zonesLayer.eachLayer((layer) => {
+                    if (layer.unbindTooltip) {
+                        layer.unbindTooltip();
+                    }
+                });
+                console.log('🔕 Zone tooltips disabled via config');
+            }
+            
             // Update info panel
             document.getElementById('zoneCount').textContent = geojson.features.length;
         }
@@ -1782,6 +1795,8 @@
                     CONFIG.ui.coverage_progress_bar_width_px + 'px'
                 );
             }
+            
+            // Note: Zone tooltips are handled in renderZones() after zones are loaded
             
             console.log('📋 Config applied:', CONFIG);
         }

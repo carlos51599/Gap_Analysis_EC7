@@ -345,8 +345,12 @@ class DataLoader:
             return
 
         if self._zones_gdf is None or self._zones_gdf.empty:
-            logger.warning("No zones available - all boreholes will have empty zone_ids")
-            self._boreholes_gdf["zone_ids"] = [[] for _ in range(len(self._boreholes_gdf))]
+            logger.warning(
+                "No zones available - all boreholes will have empty zone_ids"
+            )
+            self._boreholes_gdf["zone_ids"] = [
+                [] for _ in range(len(self._boreholes_gdf))
+            ]
             return
 
         logger.info(f"Computing zone_ids for {len(self._boreholes_gdf)} boreholes...")
@@ -427,7 +431,7 @@ class DataLoader:
 
     def get_boreholes_geojson(self) -> Dict[str, Any]:
         """Get boreholes as GeoJSON FeatureCollection in WGS84.
-        
+
         Always includes zone_ids computed from zone containment.
         """
         # Always use GeoDataFrame to ensure zone_ids are included
@@ -523,7 +527,9 @@ class DataLoader:
             if index < len(features):
                 features[index]["geometry"]["coordinates"] = [lon, lat]
 
-        logger.debug(f"Updated borehole {index} to ({x:.2f}, {y:.2f}), zones: {containing_zones}")
+        logger.debug(
+            f"Updated borehole {index} to ({x:.2f}, {y:.2f}), zones: {containing_zones}"
+        )
         return containing_zones
 
     def delete_borehole(self, index: int) -> Optional[str]:
