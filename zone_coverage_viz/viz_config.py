@@ -33,17 +33,17 @@ VIZ_CONFIG_DATA: Dict[str, Any] = {
     # 📍 BOREHOLE MARKER SETTINGS
     # ═══════════════════════════════════════════════════════════════════════
     "borehole_marker": {
-        # Inside-zone markers (black, scales with zoom)
-        "visible_radius_m": 8.0,  # Radius in meters (scales with zoom)
+        # All markers use L.circle (meters) for smooth drag transitions
+        "visible_radius_m": 8.0,  # Radius in meters (scales with zoom) - used for all boreholes
         "grab_radius_multiplier": 2.0,  # Grab area = visible_radius * multiplier
-        "color": "#000000",  # Black
+        "color": "#000000",  # Black (inside-zone boreholes)
         "fill_color": "#000000",
         "fill_opacity": 1.0,
         "weight": 0,
         "hover_scale": 2.0,  # Scale factor on hover
-        # Outside-zone markers (orange, FIXED screen size - doesn't scale with zoom)
+        # Outside-zone markers (same size as inside, different color)
         "outside_zone_color": "#FF8C00",  # Dark orange
-        "outside_zone_radius_px": 4,  # Fixed pixel radius (screen-space)
+        "outside_zone_radius_px": 4,  # DEPRECATED - no longer used (keeping for backward compat)
     },
     # ═══════════════════════════════════════════════════════════════════════
     # 🎨 ZONE STYLING

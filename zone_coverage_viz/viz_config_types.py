@@ -206,7 +206,9 @@ class UIConfig:
     coverage_panel_width_px: int = 320
     coverage_progress_bar_width_px: int = 100
     show_zone_tooltips: bool = True  # Show zone name tooltips on hover
-    show_zone_focus_outline: bool = True  # Show focus outline (black rectangle) when clicking zones
+    show_zone_focus_outline: bool = (
+        True  # Show focus outline (black rectangle) when clicking zones
+    )
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "UIConfig":

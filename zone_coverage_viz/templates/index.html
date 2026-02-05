@@ -1372,8 +1372,9 @@
         }
         
         // Create visible marker based on zone membership
-        // Inside zone: L.circle (meters, scales with zoom)
-        // Outside zone: L.circleMarker (pixels, fixed screen size)
+        // Both use L.circle (meters, scales with zoom) for consistency during drag operations
+        // Inside zone: black marker at configured radius
+        // Outside zone: orange marker at configured radius
         function createVisibleMarker(latlng, isInsideZone) {
             if (isInsideZone) {
                 const visibleRadius = getBoreholeVisibleRadius();
@@ -1388,9 +1389,10 @@
                 });
             } else {
                 const outsideColor = getOutsideZoneColor();
-                const outsideRadiusPx = getOutsideZoneRadiusPx();
-                return L.circleMarker(latlng, {
-                    radius: outsideRadiusPx,  // pixels
+                // Use same radius type (meters) as inside-zone markers for smooth transitions
+                const visibleRadius = getBoreholeVisibleRadius();
+                return L.circle(latlng, {
+                    radius: visibleRadius,
                     color: outsideColor,
                     fillColor: outsideColor,
                     fillOpacity: 1,
@@ -1401,26 +1403,21 @@
         }
         
         // Update marker when moving between zones
-        // Need to recreate marker if type changes (L.circle <-> L.circleMarker)
+        // Since both use L.circle with same radius, just update the color
         function updateMarkerForZoneChange(grabCircle, lon, lat) {
             const isInsideZone = isPointInAnyZone(lon, lat);
             const wasInsideZone = grabCircle.isInsideZone;
-            const latlng = [lat, lon];
             
-            // If zone membership changed, recreate the visible marker
+            // If zone membership changed, update the marker color
             if (isInsideZone !== wasInsideZone) {
-                const markerGroup = grabCircle.markerGroup;
-                const oldVisibleCircle = grabCircle.visibleCircle;
+                const visibleCircle = grabCircle.visibleCircle;
+                const newColor = isInsideZone ? getBoreholeColor() : getOutsideZoneColor();
                 
-                // Remove old visible marker
-                markerGroup.removeLayer(oldVisibleCircle);
+                visibleCircle.setStyle({
+                    color: newColor,
+                    fillColor: newColor
+                });
                 
-                // Create new visible marker of correct type
-                const newVisibleCircle = createVisibleMarker(latlng, isInsideZone);
-                markerGroup.addLayer(newVisibleCircle);
-                
-                // Update references
-                grabCircle.visibleCircle = newVisibleCircle;
                 grabCircle.isInsideZone = isInsideZone;
             }
         }
