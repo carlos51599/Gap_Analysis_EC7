@@ -1341,18 +1341,20 @@ def _assemble_czrc_results(
         for i in indices
         if i < len(candidates)
     ]
-    # Removed = Tier 1 first-pass NOT selected
+    # Removed = Tier 1 boreholes NOT selected
+    # Preserve original source_pass (the pass that created them), default to "First Pass"
     removed = [
         {
             "x": bh["x"],
             "y": bh["y"],
             "coverage_radius": bh.get("coverage_radius", min_spacing),
-            "source_pass": source_pass,
+            "source_pass": bh.get("source_pass", "First Pass"),
         }
         for bh in bh_candidates
         if (bh["x"], bh["y"]) not in selected_set
     ]
-    # Added = Selected NOT in first-pass Tier 1
+    # Added = Selected NOT in previous pass Tier 1
+    # source_pass indicates which pass created these new boreholes
     added = [
         {
             "x": candidates[i].x,
@@ -2219,16 +2221,17 @@ def solve_cell_cell_czrc(
     # Candidate positions from first-pass
     candidate_positions = {(bh["x"], bh["y"]) for bh in bh_candidates}
 
-    # Removed = first-pass candidates NOT in selected
-    # Add source_pass for Third Pass tooltip identification
+    # Removed = candidates NOT in selected
+    # Preserve original source_pass (the pass that created them)
+    # In Third Pass, bh_candidates could be from FP or SP
     removed = [
-        {**bh, "source_pass": "Third Pass"}
+        {**bh, "source_pass": bh.get("source_pass", "First Pass")}
         for bh in bh_candidates
         if (bh["x"], bh["y"]) not in selected_positions
     ]
 
-    # Added = selected positions NOT from first-pass
-    # Add source_pass for Third Pass tooltip identification
+    # Added = selected positions NOT from previous pass
+    # These are NEW boreholes created by Third Pass
     added = []
     for i in selected_set:
         pos = (candidates[i].x, candidates[i].y)
