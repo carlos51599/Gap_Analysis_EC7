@@ -833,6 +833,30 @@
             }
         }
         
+        /**
+         * Fetch coverages clipped to exclude specified zones.
+         * Server computes intersection of coverage buffers with visible zone areas.
+         * @param {string[]} excludeZones - Zone names to exclude from coverage clipping
+         * @returns {Object} GeoJSON FeatureCollection of clipped coverage polygons
+         */
+        async function fetchFilteredCoverages(excludeZones) {
+            const t_start = performance.now();
+            try {
+                const response = await fetch('/api/coverage/filtered', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ excludeZones })
+                });
+                const data = await response.json();
+                const t_end = performance.now();
+                console.log(`🔄 Filtered coverages fetched in ${(t_end - t_start).toFixed(1)}ms (excluding ${excludeZones.length} zones)`);
+                return data;
+            } catch (error) {
+                console.error('Failed to fetch filtered coverages:', error);
+                return { type: 'FeatureCollection', features: [] };
+            }
+        }
+        
         async function fetchExistingCoverage() {
             try {
                 const response = await fetch('/api/existing-coverage');
@@ -1233,10 +1257,11 @@
             }
         }
         
-        // Toggle zone visibility - INSTANT using pre-computed zone_ids
-        // No server calls, no geometry tests - uses zone_ids from borehole data
-        function toggleZoneVisibility(zoneName, visible) {
+        // Toggle zone visibility - Server-clipped coverages (Option A)
+        // Zone polygons and boreholes update instantly, coverages fetch from server
+        async function toggleZoneVisibility(zoneName, visible) {
             console.log(`🔄 Toggle zone ${zoneName}: ${visible}`);
+            const t_start = performance.now();
             
             // 1. Update state
             zoneVisibility[zoneName] = visible;
@@ -1270,24 +1295,27 @@
                 }
             });
             
-            // 4. Update coverage visibility (derives from parent borehole)
-            coverageLayer.eachLayer((layer) => {
-                const props = layer.feature?.properties;
-                if (props && props.borehole_index !== undefined) {
-                    const parentMarker = boreholeMarkers.find(m => m.boreholeIndex === props.borehole_index);
-                    if (parentMarker) {
-                        const coverageZoneIds = parentMarker.coverageZoneIds || [];
-                        const shouldBeVisible = isBoreholeVisibleByZones(coverageZoneIds);
-                        layer.setStyle({
-                            opacity: shouldBeVisible ? 0.8 : 0,
-                            fillOpacity: shouldBeVisible ? 0.25 : 0
-                        });
-                    }
-                }
-            });
+            // 4. Fetch server-clipped coverages (excludes hidden zones)
+            //    This clips coverage polygons to only show area over visible zones
+            const hiddenZones = getHiddenZoneNames();
+            if (hiddenZones.length === 0) {
+                // All zones visible - fetch full coverages
+                const coverages = await fetchAllCoverages();
+                renderCoverages(coverages);
+            } else {
+                // Some zones hidden - fetch clipped coverages
+                const clippedCoverages = await fetchFilteredCoverages(hiddenZones);
+                renderCoverages(clippedCoverages);
+            }
             
-            // 5. Update count display
+            // 5. Re-sync coverage zones to markers after re-rendering
+            syncCoverageZonesToMarkers();
+            
+            // 6. Update count display
             updateBoreholeCountDisplay();
+            
+            const t_end = performance.now();
+            console.log(`✅ Zone toggle complete in ${(t_end - t_start).toFixed(1)}ms`);
         }
         
         // DEPRECATED: This function was part of the old visibility system that used
