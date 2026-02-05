@@ -911,6 +911,7 @@ def generate_click_to_copy_script() -> str:
         plotDiv.on('plotly_hover', function(data) {
             if (data && data.points && data.points.length > 0) {
                 const point = data.points[0];
+                const traceName = point.data && point.data.name ? point.data.name : '';
                 // Extract text from hovertemplate or hovertext
                 let hoverText = '';
                 
@@ -922,10 +923,20 @@ def generate_click_to_copy_script() -> str:
                 } else if (point.customdata) {
                     // Build text from customdata (used by boreholes)
                     const cd = point.customdata;
-                    if (Array.isArray(cd)) {
-                        // Format: [LocationID, Depth, has_spt, has_tx_total, has_tx_effective]
+                    const x = point.x !== undefined ? point.x.toFixed(1) : '?';
+                    const y = point.y !== undefined ? point.y.toFixed(1) : '?';
+                    // Check if this is a Proposed/Added/Removed Boreholes trace
+                    const isProposedOrCZRC = traceName.includes('Proposed') || traceName.includes('Added') || traceName.includes('Removed') || traceName.includes('BH');
+                    if (isProposedOrCZRC && Array.isArray(cd) && cd.length === 2 && typeof cd[1] === 'string') {
+                        // Format: [index, source_pass] - Second/Third Pass boreholes
+                        hoverText = `Proposed Borehole #${cd[0]}\\nEasting: ${x}\\nNorthing: ${y}\\nSource: ${cd[1]}`;
+                    } else if (isProposedOrCZRC && Array.isArray(cd) && cd.length === 1) {
+                        // Format: [index] - legacy single-value format
+                        hoverText = `Proposed Borehole #${cd[0]}\\nEasting: ${x}\\nNorthing: ${y}`;
+                    } else if (Array.isArray(cd)) {
+                        // Existing borehole format: [LocationID, Depth, has_spt, has_tx_total, has_tx_effective]
                         hoverText = `Location: ${cd[0] || 'Unknown'}`;
-                        if (cd.length > 1 && cd[1] !== null) {
+                        if (cd.length > 1 && cd[1] !== null && typeof cd[1] !== 'string') {
                             hoverText += `\\nDepth: ${cd[1]}m`;
                         }
                         if (cd.length > 2) {
@@ -981,13 +992,19 @@ def generate_click_to_copy_script() -> str:
                     clickText = lastHoverText;
                 } else if (point.customdata) {
                     const cd = point.customdata;
-                    // Check if this is a Proposed Boreholes trace (customdata is [borehole_number])
-                    if (traceName.includes('Proposed') && Array.isArray(cd) && cd.length === 1) {
+                    // Check if this is a Proposed/Added/Removed Boreholes trace
+                    // Customdata format: [borehole_index, source_pass] where source_pass is "First Pass", "Second Pass", etc.
+                    const isProposedOrCZRC = traceName.includes('Proposed') || traceName.includes('Added') || traceName.includes('Removed') || traceName.includes('BH');
+                    if (isProposedOrCZRC && Array.isArray(cd) && cd.length === 2 && typeof cd[1] === 'string') {
+                        // Format: [index, source_pass] - Second/Third Pass boreholes
+                        clickText = `Proposed Borehole #${cd[0]}\\nEasting: ${x}\\nNorthing: ${y}\\nSource: ${cd[1]}`;
+                    } else if (isProposedOrCZRC && Array.isArray(cd) && cd.length === 1) {
+                        // Format: [index] - legacy single-value format
                         clickText = `Proposed Borehole #${cd[0]}\\nEasting: ${x}\\nNorthing: ${y}`;
                     } else if (Array.isArray(cd)) {
                         // Existing borehole format: [location_id, depth, has_spt, has_tx_total, has_tx_eff]
                         clickText = `Location: ${cd[0] || 'Unknown'}`;
-                        if (cd.length > 1 && cd[1] !== null) {
+                        if (cd.length > 1 && cd[1] !== null && typeof cd[1] !== 'string') {
                             clickText += `\\nDepth: ${cd[1]}m`;
                         }
                         if (cd.length > 2) {
