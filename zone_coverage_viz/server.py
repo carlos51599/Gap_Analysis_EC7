@@ -235,14 +235,20 @@ def update_borehole_coverage() -> Dict[str, Any]:
     print(f"    [6] get_zone_info: {(t2-t1)*1000:.1f}ms")
 
     # Update borehole position using pre-computed BNG coords
+    # Returns updated zone_ids for the borehole
     t1 = time.perf_counter()
-    data_loader.update_borehole_position(index, lon, lat, bng_coords)
+    zone_ids = data_loader.update_borehole_position(index, lon, lat, bng_coords)
     t2 = time.perf_counter()
     print(f"    [7] update_borehole_position: {(t2-t1)*1000:.1f}ms")
 
     # DON'T compute stats - let frontend fetch them lazily
     t1 = time.perf_counter()
-    result = {"coverage": coverage, "zone_info": zone_info, "stats_pending": True}
+    result = {
+        "coverage": coverage,
+        "zone_info": zone_info,
+        "zone_ids": zone_ids,  # New: zone associations for this borehole
+        "stats_pending": True
+    }
     t2 = time.perf_counter()
     print(f"    [8] Build result dict: {(t2-t1)*1000:.3f}ms")
 

@@ -151,6 +151,9 @@ class DataLoader:
             )
         )
 
+        # Compute zone associations for each borehole (single source of truth)
+        self._compute_borehole_zone_ids()
+
     def _geojson_to_gdf(
         self,
         geojson: Dict[str, Any],
@@ -203,6 +206,9 @@ class DataLoader:
 
         # Try loading zones from shapefiles via EC7 config
         self._zones_gdf = self._load_zones_shapefile()
+
+        # Compute zone associations for each borehole (single source of truth)
+        self._compute_borehole_zone_ids()
 
     def _load_boreholes_csv(self) -> gpd.GeoDataFrame:
         """Load proposed boreholes from CSV output."""
@@ -327,6 +333,51 @@ class DataLoader:
 
         return start_dir.parent
 
+    def _compute_borehole_zone_ids(self) -> None:
+        """
+        Pre-compute zone_ids for each borehole (which zones contain it).
+
+        This is the single source of truth for zone-borehole associations.
+        Called after loading data. Updates _boreholes_gdf with zone_ids column.
+        """
+        if self._boreholes_gdf is None or self._boreholes_gdf.empty:
+            logger.info("No boreholes to compute zone_ids for")
+            return
+
+        if self._zones_gdf is None or self._zones_gdf.empty:
+            logger.warning("No zones available - all boreholes will have empty zone_ids")
+            self._boreholes_gdf["zone_ids"] = [[] for _ in range(len(self._boreholes_gdf))]
+            return
+
+        logger.info(f"Computing zone_ids for {len(self._boreholes_gdf)} boreholes...")
+
+        zone_ids_list = []
+        for bh_idx, bh_row in self._boreholes_gdf.iterrows():
+            bh_point = bh_row.geometry
+            containing_zones = []
+
+            for zone_idx, zone_row in self._zones_gdf.iterrows():
+                zone_geom = zone_row.geometry
+                if zone_geom is None or zone_geom.is_empty:
+                    continue
+
+                # Use intersects() for boundary inclusion
+                if zone_geom.intersects(bh_point):
+                    zone_name = zone_row.get("zone_name", f"Zone_{zone_idx}")
+                    containing_zones.append(zone_name)
+
+            zone_ids_list.append(containing_zones)
+
+        self._boreholes_gdf["zone_ids"] = zone_ids_list
+
+        # Log summary
+        with_zones = sum(1 for z in zone_ids_list if z)
+        multi_zone = sum(1 for z in zone_ids_list if len(z) > 1)
+        logger.info(
+            f"Zone associations computed: {with_zones}/{len(self._boreholes_gdf)} "
+            f"in zones, {multi_zone} in multiple zones"
+        )
+
     # ═══════════════════════════════════════════════════════════════════════
     # 📤 PUBLIC API
     # ═══════════════════════════════════════════════════════════════════════
@@ -375,12 +426,11 @@ class DataLoader:
         return {"type": "FeatureCollection", "features": features}
 
     def get_boreholes_geojson(self) -> Dict[str, Any]:
-        """Get boreholes as GeoJSON FeatureCollection in WGS84."""
-        # If we loaded from JSON, return the original
-        if self._boreholes_data is not None:
-            return self._boreholes_data
-
-        # Otherwise convert from GeoDataFrame
+        """Get boreholes as GeoJSON FeatureCollection in WGS84.
+        
+        Always includes zone_ids computed from zone containment.
+        """
+        # Always use GeoDataFrame to ensure zone_ids are included
         boreholes_gdf = self.get_boreholes_gdf()
 
         if boreholes_gdf.empty:
@@ -390,12 +440,18 @@ class DataLoader:
 
         features = []
         for idx, row in boreholes_wgs84.iterrows():
+            # Get zone_ids - may be list or need conversion
+            zone_ids = row.get("zone_ids", [])
+            if not isinstance(zone_ids, list):
+                zone_ids = list(zone_ids) if zone_ids else []
+
             feature = {
                 "type": "Feature",
                 "geometry": mapping(row.geometry),
                 "properties": {
                     "index": idx,
                     "location_id": row.get("Location_ID", f"PROP_{idx:03d}"),
+                    "zone_ids": zone_ids,
                 },
             }
             features.append(feature)
@@ -421,19 +477,22 @@ class DataLoader:
         lon: float,
         lat: float,
         bng_coords: Optional[Tuple[float, float]] = None,
-    ) -> None:
+    ) -> List[str]:
         """
-        Update a borehole's position.
+        Update a borehole's position and recompute its zone associations.
 
         Args:
             index: Borehole index (0-based)
             lon: New longitude in WGS84
             lat: New latitude in WGS84
             bng_coords: Pre-computed (x, y) in BNG to avoid duplicate transform
+
+        Returns:
+            Updated list of zone_ids for the borehole.
         """
         if self._boreholes_gdf is None or index >= len(self._boreholes_gdf):
             logger.warning(f"Invalid borehole index: {index}")
-            return
+            return []
 
         # Use pre-computed BNG coords if provided, else transform
         if bng_coords:
@@ -442,7 +501,21 @@ class DataLoader:
             x, y = self._wgs84_to_bng.transform(lon, lat)
 
         # Update geometry in GeoDataFrame
-        self._boreholes_gdf.at[index, "geometry"] = Point(x, y)
+        new_point = Point(x, y)
+        self._boreholes_gdf.at[index, "geometry"] = new_point
+
+        # Recompute zone_ids for this borehole
+        containing_zones = []
+        if self._zones_gdf is not None and not self._zones_gdf.empty:
+            for zone_idx, zone_row in self._zones_gdf.iterrows():
+                zone_geom = zone_row.geometry
+                if zone_geom is not None and not zone_geom.is_empty:
+                    if zone_geom.intersects(new_point):
+                        zone_name = zone_row.get("zone_name", f"Zone_{zone_idx}")
+                        containing_zones.append(zone_name)
+
+        # Update zone_ids in GeoDataFrame
+        self._boreholes_gdf.at[index, "zone_ids"] = containing_zones
 
         # Also update the JSON data if present
         if self._boreholes_data is not None:
@@ -450,7 +523,8 @@ class DataLoader:
             if index < len(features):
                 features[index]["geometry"]["coordinates"] = [lon, lat]
 
-        logger.debug(f"Updated borehole {index} to ({x:.2f}, {y:.2f})")
+        logger.debug(f"Updated borehole {index} to ({x:.2f}, {y:.2f}), zones: {containing_zones}")
+        return containing_zones
 
     def delete_borehole(self, index: int) -> Optional[str]:
         """
