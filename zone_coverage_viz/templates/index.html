@@ -276,6 +276,22 @@
             color: #999;
         }
         
+        /* Group header with hidden zones - grey out the percentage */
+        .coverage-stats .group-header.partial-hidden .group-pct {
+            color: #999 !important;
+        }
+        
+        /* Total row when any zones hidden */
+        .coverage-stats .total-row.partial-hidden {
+            opacity: 0.7;
+        }
+        .coverage-stats .total-row.partial-hidden .progress-fill {
+            background: #999 !important;
+        }
+        .coverage-stats .total-row.partial-hidden .pct-value {
+            color: #999 !important;
+        }
+        
         .coverage-stats .progress-bar {
             width: var(--coverage-progress-bar-width, 100px);
             flex-shrink: 0;
@@ -1199,10 +1215,11 @@
                 // Check if all zones in group are visible
                 const allVisible = group.zones.every(z => zoneVisibility[z.zone_name] !== false);
                 const someVisible = group.zones.some(z => zoneVisibility[z.zone_name] !== false);
+                const partialHiddenClass = allVisible ? '' : 'partial-hidden';
                 
                 html += `
                     <div class="zone-group" data-layer="${layerKey}">
-                        <div class="group-header" onclick="toggleGroupExpand('${layerKey}')">
+                        <div class="group-header ${partialHiddenClass}" onclick="toggleGroupExpand('${layerKey}')">
                             <span class="group-toggle" id="toggle-${layerKey}">▼</span>
                             <input type="checkbox" class="group-checkbox" 
                                    data-layer="${layerKey}" 
@@ -1249,8 +1266,12 @@
             
             // Add total row (no checkbox for total)
             const totalPctClass = getPctClass(stats.total.coverage_pct);
+            // Check if ANY zones are hidden - grey out total if so
+            const anyZonesHidden = stats.per_zone.some(z => zoneVisibility[z.zone_name] === false);
+            const totalHiddenClass = anyZonesHidden ? 'partial-hidden' : '';
+            
             html += `
-                <div class="stat-row total-row">
+                <div class="stat-row total-row ${totalHiddenClass}">
                     <span class="zone-name" style="margin-left: 22px;">Total</span>
                     <div class="progress-bar">
                         <div class="progress-fill" style="width: ${Math.min(stats.total.coverage_pct, 100)}%; background: ${getPctColor(stats.total.coverage_pct)};"></div>
@@ -1367,6 +1388,7 @@
             
             // 4. Finalize
             syncCoverageZonesToMarkers();
+            updateCoverageStatsGreyout();  // Update group and total greyout
             updateBoreholeCountDisplay();
             
             const t_end = performance.now();
@@ -1473,18 +1495,42 @@
             // 7. Update stat-row styling in coverage panel (grey out hidden zones)
             const statRow = document.querySelector(`.stat-row[data-zone="${zoneName}"]`);
             if (statRow) {
-                if (visible) {
-                    statRow.classList.remove('hidden-zone');
-                } else {
-                    statRow.classList.add('hidden-zone');
-                }
+                statRow.classList.toggle('hidden-zone', !visible);
             }
             
-            // 8. Update count display
+            // 8. Update group header and total row styling
+            updateCoverageStatsGreyout();
+            
+            // 9. Update count display
             updateBoreholeCountDisplay();
             
             const t_end = performance.now();
             console.log(`✅ Zone toggle complete in ${(t_end - t_start).toFixed(1)}ms (mode: ${mode})`);
+        }
+        
+        /**
+         * Update grey-out styling for group headers and total row based on zone visibility.
+         * Called after zone visibility changes to reflect partial-hidden state.
+         */
+        function updateCoverageStatsGreyout() {
+            // Update each group header's partial-hidden class
+            document.querySelectorAll('.zone-group').forEach(group => {
+                const layerKey = group.dataset.layer;
+                const childCbs = group.querySelectorAll('.zone-checkbox');
+                const allVisible = Array.from(childCbs).every(cb => cb.checked);
+                
+                const header = group.querySelector('.group-header');
+                if (header) {
+                    header.classList.toggle('partial-hidden', !allVisible);
+                }
+            });
+            
+            // Update total row if any zones are hidden
+            const anyHidden = Object.values(zoneVisibility).includes(false);
+            const totalRow = document.querySelector('.total-row');
+            if (totalRow) {
+                totalRow.classList.toggle('partial-hidden', anyHidden);
+            }
         }
         
         // DEPRECATED: This function was part of the old visibility system that used
