@@ -400,11 +400,11 @@ class CoverageService:
         # Use pre-computed BNG coords if provided, else transform
         if bng_coords:
             x, y = bng_coords
-            print(f"    ⏱️ Using pre-computed BNG coords", flush=True)
+            logger.info(f"    [GEO] Using pre-computed BNG coords")
         else:
             x, y = self._wgs84_to_bng.transform(lon, lat)
             t1 = time.perf_counter()
-            print(f"    ⏱️ CRS transform + Point: {(t1-t_start)*1000:.1f}ms", flush=True)
+            logger.info(f"    [GEO] CRS transform + Point: {(t1-t_start)*1000:.1f}ms")
 
         point = Point(x, y)
 
@@ -443,21 +443,19 @@ class CoverageService:
                 zone_names.append(zone_name)
 
         t_loop_end = time.perf_counter()
-        print(
-            f"    ⏱️ Zone loop ({zones_checked} checked, {zones_intersected} hit): {(t_loop_end-t_loop_start)*1000:.1f}ms",
-            flush=True
+        logger.info(
+            f"    [GEO] Zone loop ({zones_checked} checked, {zones_intersected} hit): {(t_loop_end-t_loop_start)*1000:.1f}ms"
         )
 
         if not fragments:
-            print(f"    ⏱️ No zone intersections - borehole outside all zones", flush=True)
+            logger.info(f"    [GEO] No zone intersections - borehole outside all zones")
             return None, []
 
         t_union_start = time.perf_counter()
         coverage_bng = unary_union(fragments)
         t_union_end = time.perf_counter()
-        print(
-            f"    ⏱️ unary_union ({len(fragments)} fragments): {(t_union_end-t_union_start)*1000:.1f}ms",
-            flush=True
+        logger.info(
+            f"    [GEO] unary_union ({len(fragments)} fragments): {(t_union_end-t_union_start)*1000:.1f}ms"
         )
 
         return coverage_bng, zone_names
@@ -515,7 +513,7 @@ class CoverageService:
         self._stats_dirty = True
 
         if coverage_bng is None:
-            print(f"    ⏱️ COVERAGE: None (outside all zones)", flush=True)
+            logger.info(f"    [GEO] COVERAGE: None (outside all zones)")
             return None
 
         import time
@@ -525,14 +523,15 @@ class CoverageService:
         t0 = time.perf_counter()
         simplified_bng = coverage_bng.simplify(tolerance=1.0, preserve_topology=True)
         t1 = time.perf_counter()
-        print(
-            f"    ⏱️ Simplify ({len(coverage_bng.exterior.coords) if hasattr(coverage_bng, 'exterior') else '?'} → {len(simplified_bng.exterior.coords) if hasattr(simplified_bng, 'exterior') else '?'} pts): {(t1-t0)*1000:.1f}ms",
-            flush=True
+        orig_pts = len(coverage_bng.exterior.coords) if hasattr(coverage_bng, 'exterior') else '?'
+        simp_pts = len(simplified_bng.exterior.coords) if hasattr(simplified_bng, 'exterior') else '?'
+        logger.info(
+            f"    [GEO] Simplify ({orig_pts} -> {simp_pts} pts): {(t1-t0)*1000:.1f}ms"
         )
 
         coverage_wgs84 = self._transform_to_wgs84(simplified_bng)
         t2 = time.perf_counter()
-        print(f"    ⏱️ BNG→WGS84 transform: {(t2-t1)*1000:.1f}ms | zones={zone_names}", flush=True)
+        logger.info(f"    [GEO] BNG->WGS84 transform: {(t2-t1)*1000:.1f}ms | zones={zone_names}")
 
         return {
             "type": "Feature",
