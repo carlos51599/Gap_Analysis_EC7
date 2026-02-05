@@ -74,14 +74,18 @@ class BoreholeMarkerConfig:
     weight: int = 0
     hover_scale: float = 2.0  # Scale factor on hover (2.0 = double size)
     # Outside-zone marker styling (boreholes not within any zone polygon)
-    # Uses fixed pixel size (doesn't scale with zoom, unlike black markers)
     outside_zone_color: str = "#FF8C00"  # Dark orange
-    outside_zone_radius_px: int = 6  # Fixed pixel radius (screen-space)
+    outside_zone_radius_multiplier: float = 2.0  # Outside radius = visible_radius * this
 
     @property
     def grab_radius_m(self) -> float:
         """Computed grab radius based on visible radius and multiplier."""
         return self.visible_radius_m * self.grab_radius_multiplier
+
+    @property
+    def outside_zone_radius_m(self) -> float:
+        """Computed outside-zone marker radius (2x visible radius by default)."""
+        return self.visible_radius_m * self.outside_zone_radius_multiplier
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "BoreholeMarkerConfig":
@@ -95,7 +99,7 @@ class BoreholeMarkerConfig:
             weight=d.get("weight", 0),
             hover_scale=d.get("hover_scale", 2.0),
             outside_zone_color=d.get("outside_zone_color", "#FF8C00"),
-            outside_zone_radius_px=d.get("outside_zone_radius_px", 6),
+            outside_zone_radius_multiplier=d.get("outside_zone_radius_multiplier", 2.0),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -110,7 +114,8 @@ class BoreholeMarkerConfig:
             "weight": self.weight,
             "hover_scale": self.hover_scale,
             "outside_zone_color": self.outside_zone_color,
-            "outside_zone_radius_px": self.outside_zone_radius_px,
+            "outside_zone_radius_multiplier": self.outside_zone_radius_multiplier,
+            "outside_zone_radius_m": self.outside_zone_radius_m,  # Computed for frontend
         }
 
 

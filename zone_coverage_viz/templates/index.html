@@ -1354,8 +1354,9 @@
             return (CONFIG && CONFIG.boreholeMarker) ? CONFIG.boreholeMarker.outside_zone_color : '#FF8C00';
         }
         
-        function getOutsideZoneRadiusPx() {
-            return (CONFIG && CONFIG.boreholeMarker) ? CONFIG.boreholeMarker.outside_zone_radius_px : 6;
+        function getOutsideZoneRadiusM() {
+            // Outside-zone markers are 2x the size of inside-zone markers by default
+            return (CONFIG && CONFIG.boreholeMarker) ? CONFIG.boreholeMarker.outside_zone_radius_m : 16;
         }
         
         // Check if a point is inside any zone
@@ -1373,8 +1374,8 @@
         
         // Create visible marker based on zone membership
         // Both use L.circle (meters, scales with zoom) for consistency during drag operations
-        // Inside zone: black marker at configured radius
-        // Outside zone: orange marker at configured radius
+        // Inside zone: black marker at visible_radius_m
+        // Outside zone: orange marker at outside_zone_radius_m (2x visible by default)
         function createVisibleMarker(latlng, isInsideZone) {
             if (isInsideZone) {
                 const visibleRadius = getBoreholeVisibleRadius();
@@ -1389,10 +1390,9 @@
                 });
             } else {
                 const outsideColor = getOutsideZoneColor();
-                // Use same radius type (meters) as inside-zone markers for smooth transitions
-                const visibleRadius = getBoreholeVisibleRadius();
+                const outsideRadius = getOutsideZoneRadiusM();  // 2x visible_radius by default
                 return L.circle(latlng, {
-                    radius: visibleRadius,
+                    radius: outsideRadius,
                     color: outsideColor,
                     fillColor: outsideColor,
                     fillOpacity: 1,
@@ -1403,20 +1403,22 @@
         }
         
         // Update marker when moving between zones
-        // Since both use L.circle with same radius, just update the color
+        // Both use L.circle, so just update color and radius (no marker recreation)
         function updateMarkerForZoneChange(grabCircle, lon, lat) {
             const isInsideZone = isPointInAnyZone(lon, lat);
             const wasInsideZone = grabCircle.isInsideZone;
             
-            // If zone membership changed, update the marker color
+            // If zone membership changed, update the marker color and radius
             if (isInsideZone !== wasInsideZone) {
                 const visibleCircle = grabCircle.visibleCircle;
                 const newColor = isInsideZone ? getBoreholeColor() : getOutsideZoneColor();
+                const newRadius = isInsideZone ? getBoreholeVisibleRadius() : getOutsideZoneRadiusM();
                 
                 visibleCircle.setStyle({
                     color: newColor,
                     fillColor: newColor
                 });
+                visibleCircle.setRadius(newRadius);
                 
                 grabCircle.isInsideZone = isInsideZone;
             }
@@ -1491,7 +1493,7 @@
                         if (grabCircle.isInsideZone) {
                             grabCircle.visibleCircle.setRadius(getBoreholeVisibleRadius());
                         } else {
-                            grabCircle.visibleCircle.setRadius(getOutsideZoneRadiusPx());
+                            grabCircle.visibleCircle.setRadius(getOutsideZoneRadiusM());
                         }
                         map.getContainer().style.cursor = '';
                     }
