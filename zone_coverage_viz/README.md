@@ -176,3 +176,139 @@ updateBoreholeCountDisplay();
 ### CSV Export Behavior
 
 The export endpoint accepts an `excludeIndices` query parameter with comma-separated borehole indices to exclude. The frontend automatically passes hidden borehole indices when exporting, ensuring only visible boreholes are exported.
+
+## Single Source of Truth (SSOT) Architecture
+
+### Overview
+
+Zone-borehole associations are maintained as a **server-authoritative single source of truth** via the `zone_ids` property. This enables instant UI feedback without client-side geometry tests.
+
+### Architecture Layers
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│                   DATA LOADER (Authoritative)                   │
+│                      data_loader.py                             │
+├────────────────────────────────────────────────────────────────┤
+│  _compute_borehole_zone_ids()     - Initial computation         │
+│  update_borehole_position()       - Incremental update          │
+│                                                                 │
+│  Both use identical: zone_geom.intersects(bh_point)             │
+│                           │                                     │
+│                           ▼                                     │
+│              zone_ids: ["Zone_0", "Zone_3"]                     │
+└────────────────────────────────────────────────────────────────┘
+                           │
+                           │ /api/boreholes, /api/coverage/update
+                           ▼
+┌────────────────────────────────────────────────────────────────┐
+│                      FRONTEND (Consumer Only)                   │
+│                      templates/index.html                       │
+├────────────────────────────────────────────────────────────────┤
+│  grabCircle.zoneIds = feature.properties.zone_ids               │
+│                                                                 │
+│  isBoreholeVisibleByZones(zoneIds):                             │
+│    • Returns true if NO containing zones are hidden             │
+│    • Never computes geometry - only reads zone_ids              │
+│                                                                 │
+│  toggleZoneVisibility(zoneName, visible):                       │
+│    • Pure state lookup - instant, no async, no server calls     │
+└────────────────────────────────────────────────────────────────┘
+```
+
+### Data Flow
+
+**Initial Load:**
+```
+zone_coverage_data.json
+        │
+        ▼
+DataLoader._load_from_json()
+        │
+        ▼
+_compute_borehole_zone_ids()  ← SSOT computation
+        │
+        │  For each borehole:
+        │  └─ For each zone: if zone.intersects(point)
+        │                    → add zone_name to zone_ids
+        ▼
+_boreholes_gdf['zone_ids'] = [["Zone_0"], ["Zone_1"], ...]
+        │
+        │  GET /api/boreholes
+        ▼
+Frontend stores: grabCircle.zoneIds = feature.properties.zone_ids
+```
+
+**Update Flow (Move Borehole):**
+```
+[User drags marker]
+        │
+        ▼
+POST /api/coverage/update { index, lon, lat }
+        │
+        ├─► data_loader.update_borehole_position()
+        │       └─► Re-computes zone_ids using same intersects() logic
+        │
+        ├─► Returns { zone_ids: [...], coverage: {...} }
+        │
+[Frontend receives response]
+        │
+        ▼
+marker.zoneIds = response.zone_ids  ← SSOT sync
+        │
+        ▼
+isBoreholeVisibleByZones() re-evaluated if zones hidden
+```
+
+### Key Components
+
+| Component                      | File             | Responsibility               |
+| ------------------------------ | ---------------- | ---------------------------- |
+| `_compute_borehole_zone_ids()` | `data_loader.py` | Initial zone assignment      |
+| `update_borehole_position()`   | `data_loader.py` | Re-compute on move           |
+| `get_boreholes_geojson()`      | `data_loader.py` | Include zone_ids in response |
+| `isBoreholeVisibleByZones()`   | `index.html`     | Visibility check (read-only) |
+| `toggleZoneVisibility()`       | `index.html`     | Instant toggle (no server)   |
+
+### Visibility Rule
+
+A borehole is **hidden** if **ANY** of its containing zones is hidden:
+
+```javascript
+function isBoreholeVisibleByZones(zoneIds) {
+    if (!zoneIds || zoneIds.length === 0) return true;  // Outside all zones = visible
+    return !zoneIds.some(zid => zoneVisibility[zid] === false);
+}
+```
+
+### Benefits
+
+| Benefit         | Description                                                  |
+| --------------- | ------------------------------------------------------------ |
+| **Instant UI**  | No async calls for zone toggle - pure state lookup           |
+| **Consistency** | Server uses same `intersects()` for initial load and updates |
+| **No Drift**    | Frontend never computes zone associations                    |
+| **Predictable** | Zone changes during drag are detected server-side            |
+
+### Zone Change Detection
+
+When a borehole is moved, the server logs zone transitions:
+```
+[ZONE CHANGE] BLACK->ORANGE | old_zones=["Zone_0"] -> new_zones=[]
+```
+
+Color semantics:
+- **BLACK (in-zone)**: `zone_ids.length > 0` 
+- **ORANGE (outside)**: `zone_ids.length === 0`
+
+### Implementation Checklist
+
+For maintainers extending the system:
+
+- [x] Server computes zone_ids at load time
+- [x] zone_ids included in `/api/boreholes` response
+- [x] `update_borehole_position()` returns updated zone_ids
+- [x] Frontend stores zone_ids on marker objects
+- [x] `toggleZoneVisibility()` uses zone_ids (no geometry tests)
+- [x] Coverage visibility derives from parent borehole
+- [x] Old async function deprecated as no-op
