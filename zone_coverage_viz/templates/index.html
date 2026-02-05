@@ -290,6 +290,82 @@
             width: auto;
         }
         
+        /* Hierarchical zone groups */
+        .coverage-stats .zone-group {
+            margin-bottom: 6px;
+        }
+        
+        .coverage-stats .group-header {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
+            padding: 4px 0;
+            font-weight: bold;
+            color: #333;
+            user-select: none;
+        }
+        
+        .coverage-stats .group-header:hover {
+            background: #f5f5f5;
+            border-radius: 3px;
+        }
+        
+        .coverage-stats .group-toggle {
+            width: 16px;
+            height: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 10px;
+            color: #666;
+            flex-shrink: 0;
+            transition: transform 0.15s ease;
+        }
+        
+        .coverage-stats .group-toggle.collapsed {
+            transform: rotate(-90deg);
+        }
+        
+        .coverage-stats .group-checkbox {
+            width: 14px;
+            height: 14px;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+        
+        .coverage-stats .group-name {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        
+        .coverage-stats .group-pct {
+            font-weight: bold;
+            min-width: 45px;
+            text-align: right;
+            flex-shrink: 0;
+        }
+        
+        .coverage-stats .group-children {
+            margin-left: 22px;
+            overflow: hidden;
+            transition: max-height 0.2s ease;
+        }
+        
+        .coverage-stats .group-children.collapsed {
+            max-height: 0 !important;
+        }
+        
+        .coverage-stats .group-children .stat-row {
+            font-size: 12px;
+        }
+        
+        .coverage-stats .group-children .zone-name {
+            font-weight: normal;
+        }
+        
         .data-timestamp {
             font-size: 10px;
             color: #888;
@@ -915,25 +991,80 @@
                 }
             }
             
-            // Build HTML for per-zone stats
+            // Group zones by layer_key for hierarchical display
+            const groupedZones = {};
+            for (const zone of stats.per_zone) {
+                const layerKey = zone.layer_key || 'unknown';
+                const displayName = zone.layer_display_name || layerKey.replace(/_/g, ' ');
+                if (!groupedZones[layerKey]) {
+                    groupedZones[layerKey] = {
+                        displayName: displayName,
+                        zones: [],
+                        totalArea: 0,
+                        coveredArea: 0
+                    };
+                }
+                groupedZones[layerKey].zones.push(zone);
+                groupedZones[layerKey].totalArea += zone.total_area_m2;
+                groupedZones[layerKey].coveredArea += zone.covered_area_m2;
+            }
+            
+            // Build HTML for hierarchical per-zone stats
             let html = '';
             
-            for (const zone of stats.per_zone) {
-                const pctClass = getPctClass(zone.coverage_pct);
-                const pctColor = getPctColor(zone.coverage_pct);
-                const isVisible = zoneVisibility[zone.zone_name] !== false;
+            for (const [layerKey, group] of Object.entries(groupedZones)) {
+                // Calculate group coverage percentage
+                const groupPct = group.totalArea > 0 
+                    ? Math.round((group.coveredArea / group.totalArea) * 1000) / 10 
+                    : 0;
+                const groupPctClass = getPctClass(groupPct);
+                const groupPctColor = getPctColor(groupPct);
+                
+                // Check if all zones in group are visible
+                const allVisible = group.zones.every(z => zoneVisibility[z.zone_name] !== false);
+                const someVisible = group.zones.some(z => zoneVisibility[z.zone_name] !== false);
                 
                 html += `
-                    <div class="stat-row">
-                        <input type="checkbox" class="zone-checkbox" 
-                               data-zone="${zone.zone_name}" 
-                               ${isVisible ? 'checked' : ''}
-                               onchange="toggleZoneVisibility('${zone.zone_name}', this.checked)">
-                        <span class="zone-name" title="${zone.zone_name}">${zone.zone_name}</span>
-                        <div class="progress-bar">
-                            <div class="progress-fill" style="width: ${Math.min(zone.coverage_pct, 100)}%; background: ${pctColor};"></div>
+                    <div class="zone-group" data-layer="${layerKey}">
+                        <div class="group-header" onclick="toggleGroupExpand('${layerKey}')">
+                            <span class="group-toggle" id="toggle-${layerKey}">▼</span>
+                            <input type="checkbox" class="group-checkbox" 
+                                   data-layer="${layerKey}" 
+                                   ${allVisible ? 'checked' : ''}
+                                   ${!allVisible && someVisible ? 'indeterminate' : ''}
+                                   onclick="event.stopPropagation(); toggleGroupVisibility('${layerKey}', this.checked)">
+                            <span class="group-name">${group.displayName}</span>
+                            <span class="group-pct ${groupPctClass}">${groupPct}%</span>
                         </div>
-                        <span class="pct-value ${pctClass}">${zone.coverage_pct}%</span>
+                        <div class="group-children" id="children-${layerKey}">
+                `;
+                
+                for (const zone of group.zones) {
+                    const pctClass = getPctClass(zone.coverage_pct);
+                    const pctColor = getPctColor(zone.coverage_pct);
+                    const isVisible = zoneVisibility[zone.zone_name] !== false;
+                    
+                    // Extract just the zone number for display (e.g., "Embankment_0" -> "Zone 0")
+                    const shortName = zone.zone_name.replace(/^.*_(\d+)$/, 'Zone $1');
+                    
+                    html += `
+                        <div class="stat-row">
+                            <input type="checkbox" class="zone-checkbox" 
+                                   data-zone="${zone.zone_name}"
+                                   data-layer="${layerKey}"
+                                   ${isVisible ? 'checked' : ''}
+                                   onchange="toggleZoneVisibility('${zone.zone_name}', this.checked); updateGroupCheckbox('${layerKey}');">
+                            <span class="zone-name" title="${zone.zone_name}">${shortName}</span>
+                            <div class="progress-bar">
+                                <div class="progress-fill" style="width: ${Math.min(zone.coverage_pct, 100)}%; background: ${pctColor};"></div>
+                            </div>
+                            <span class="pct-value ${pctClass}">${zone.coverage_pct}%</span>
+                        </div>
+                    `;
+                }
+                
+                html += `
+                        </div>
                     </div>
                 `;
             }
@@ -951,6 +1082,69 @@
             `;
             
             container.innerHTML = html;
+            
+            // Set indeterminate state on group checkboxes where applicable
+            for (const [layerKey, group] of Object.entries(groupedZones)) {
+                updateGroupCheckbox(layerKey);
+            }
+        }
+        
+        // Track group expansion state
+        const groupExpanded = {};
+        
+        // Toggle group expand/collapse
+        function toggleGroupExpand(layerKey) {
+            const children = document.getElementById(`children-${layerKey}`);
+            const toggle = document.getElementById(`toggle-${layerKey}`);
+            
+            if (!children || !toggle) return;
+            
+            const isExpanded = !children.classList.contains('collapsed');
+            
+            if (isExpanded) {
+                children.classList.add('collapsed');
+                toggle.classList.add('collapsed');
+                groupExpanded[layerKey] = false;
+            } else {
+                children.classList.remove('collapsed');
+                toggle.classList.remove('collapsed');
+                groupExpanded[layerKey] = true;
+            }
+        }
+        
+        // Toggle all zones in a group at once
+        function toggleGroupVisibility(layerKey, visible) {
+            // Find all zone checkboxes in this group
+            const checkboxes = document.querySelectorAll(`.zone-checkbox[data-layer="${layerKey}"]`);
+            
+            checkboxes.forEach(cb => {
+                const zoneName = cb.dataset.zone;
+                if (zoneVisibility[zoneName] !== visible) {
+                    cb.checked = visible;
+                    toggleZoneVisibility(zoneName, visible);
+                }
+            });
+        }
+        
+        // Update group checkbox state based on children
+        function updateGroupCheckbox(layerKey) {
+            const groupCb = document.querySelector(`.group-checkbox[data-layer="${layerKey}"]`);
+            const childCbs = document.querySelectorAll(`.zone-checkbox[data-layer="${layerKey}"]`);
+            
+            if (!groupCb || childCbs.length === 0) return;
+            
+            const checkedCount = Array.from(childCbs).filter(cb => cb.checked).length;
+            
+            if (checkedCount === 0) {
+                groupCb.checked = false;
+                groupCb.indeterminate = false;
+            } else if (checkedCount === childCbs.length) {
+                groupCb.checked = true;
+                groupCb.indeterminate = false;
+            } else {
+                groupCb.checked = false;
+                groupCb.indeterminate = true;
+            }
         }
         
         // Toggle zone visibility (zone polygon and boreholes inside it)

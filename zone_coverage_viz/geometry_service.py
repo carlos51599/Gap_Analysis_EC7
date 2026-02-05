@@ -292,6 +292,47 @@ class CoverageService:
 
         return f"Zone_{idx}"
 
+    def _get_zone_layer_key(self, zone: gpd.GeoSeries) -> str:
+        """
+        Get layer key for a zone (e.g., 'embankment_zones', 'highways').
+
+        Args:
+            zone: Row from zones GeoDataFrame
+
+        Returns:
+            Layer key string.
+        """
+        if "layer_key" in zone.index and zone["layer_key"] is not None:
+            return str(zone["layer_key"])
+        return "unknown"
+
+    def _get_zone_display_name(self, zone: gpd.GeoSeries, idx: int) -> str:
+        """
+        Get display name for a zone's layer (e.g., 'Embankment', 'Highways').
+
+        Args:
+            zone: Row from zones GeoDataFrame
+            idx: Index of the zone
+
+        Returns:
+            Display name string for the layer.
+        """
+        # Priority order for display name column
+        for col in ["display_name", "original_name"]:
+            if col in zone.index and zone[col] is not None:
+                return str(zone[col])
+        
+        # Fallback: derive from zone_name by removing trailing _N index
+        zone_name = self._get_zone_name(zone, idx)
+        import re
+        match = re.match(r'^(.+?)_\d+$', zone_name)
+        if match:
+            return match.group(1)
+        
+        # Last resort: derive from layer_key
+        layer_key = self._get_zone_layer_key(zone)
+        return layer_key.replace("_zones", "").replace("_", " ").title()
+
     def transform_wgs84_to_bng(self, lon: float, lat: float) -> Tuple[float, float]:
         """
         Transform WGS84 coordinates to BNG (accurate).
@@ -557,9 +598,15 @@ class CoverageService:
 
             coverage_pct = (covered_area / zone_area * 100.0) if zone_area > 0 else 0.0
 
+            # Get layer_key for grouping in UI
+            layer_key = self._get_zone_layer_key(zone)
+            layer_display_name = self._get_zone_display_name(zone, idx)
+
             per_zone_stats.append(
                 {
                     "zone_name": zone_name,
+                    "layer_key": layer_key,
+                    "layer_display_name": layer_display_name,
                     "total_area_m2": round(zone_area, 1),
                     "covered_area_m2": round(covered_area, 1),
                     "coverage_pct": round(coverage_pct, 1),
@@ -739,9 +786,15 @@ class CoverageService:
 
             coverage_pct = (covered_area / zone_area * 100.0) if zone_area > 0 else 0.0
 
+            # Get layer_key for grouping in UI
+            layer_key = self._get_zone_layer_key(zone)
+            layer_display_name = self._get_zone_display_name(zone, idx)
+
             per_zone_stats.append(
                 {
                     "zone_name": zone_name,
+                    "layer_key": layer_key,
+                    "layer_display_name": layer_display_name,
                     "total_area_m2": round(zone_area, 1),
                     "covered_area_m2": round(covered_area, 1),
                     "coverage_pct": round(coverage_pct, 1),
