@@ -22,7 +22,7 @@ For Navigation: Use VS Code outline (Ctrl+Shift+O)
 """
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
 import json
 import logging
@@ -420,6 +420,7 @@ class DataLoader:
         index: int,
         lon: float,
         lat: float,
+        bng_coords: Optional[Tuple[float, float]] = None,
     ) -> None:
         """
         Update a borehole's position.
@@ -428,13 +429,17 @@ class DataLoader:
             index: Borehole index (0-based)
             lon: New longitude in WGS84
             lat: New latitude in WGS84
+            bng_coords: Pre-computed (x, y) in BNG to avoid duplicate transform
         """
         if self._boreholes_gdf is None or index >= len(self._boreholes_gdf):
             logger.warning(f"Invalid borehole index: {index}")
             return
 
-        # Convert WGS84 to BNG
-        x, y = self._wgs84_to_bng.transform(lon, lat)
+        # Use pre-computed BNG coords if provided, else transform
+        if bng_coords:
+            x, y = bng_coords
+        else:
+            x, y = self._wgs84_to_bng.transform(lon, lat)
 
         # Update geometry in GeoDataFrame
         self._boreholes_gdf.at[index, "geometry"] = Point(x, y)
@@ -447,7 +452,7 @@ class DataLoader:
 
         logger.debug(f"Updated borehole {index} to ({x:.2f}, {y:.2f})")
 
-    def delete_borehole(self, index: int) -> bool:
+    def delete_borehole(self, index: int) -> Optional[str]:
         """
         Delete a borehole by index.
 
@@ -455,11 +460,14 @@ class DataLoader:
             index: Borehole index (0-based)
 
         Returns:
-            True if deleted successfully, False otherwise.
+            The deleted borehole's ID if successful, None otherwise.
         """
         if self._boreholes_gdf is None or index >= len(self._boreholes_gdf):
             logger.warning(f"Invalid borehole index for deletion: {index}")
-            return False
+            return None
+
+        # Get the borehole ID before deleting
+        deleted_id = self.get_borehole_id(index)
 
         # Delete from GeoDataFrame
         self._boreholes_gdf = self._boreholes_gdf.drop(index).reset_index(drop=True)
@@ -473,8 +481,32 @@ class DataLoader:
                 for i, feature in enumerate(features):
                     feature["properties"]["index"] = i
 
-        logger.info(f"🗑️ Deleted borehole at index {index}")
-        return True
+        logger.info(f"🗑️ Deleted borehole {deleted_id} at index {index}")
+        return deleted_id
+
+    def get_borehole_id(self, index: int) -> str:
+        """
+        Get the ID of a borehole by index.
+
+        Args:
+            index: Borehole index (0-based)
+
+        Returns:
+            The borehole's ID string.
+        """
+        # Try JSON data first
+        if self._boreholes_data is not None:
+            features = self._boreholes_data.get("features", [])
+            if index < len(features):
+                props = features[index].get("properties", {})
+                return props.get("location_id") or props.get("id") or f"BH_{index}"
+
+        # Try GeoDataFrame
+        if self._boreholes_gdf is not None and index < len(self._boreholes_gdf):
+            row = self._boreholes_gdf.iloc[index]
+            return row.get("Location_ID") or row.get("location_id") or f"BH_{index}"
+
+        return f"BH_{index}"
 
     def add_borehole(
         self,

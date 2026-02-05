@@ -402,11 +402,27 @@ def export_boreholes_csv() -> Response:
     """
     Export current borehole positions as CSV with Easting/Northing coordinates.
 
+    Query Parameters:
+        excludeIndices: Comma-separated list of borehole indices to exclude (optional)
+
     Returns:
         CSV file download with columns: ID, Easting, Northing, Zone
     """
     if data_loader is None:
         return jsonify({"error": "Server not initialized"}), 500
+
+    # Parse excludeIndices query parameter (comma-separated integers)
+    exclude_indices_param = request.args.get("excludeIndices", "")
+    exclude_indices: set[int] = set()
+    if exclude_indices_param:
+        try:
+            exclude_indices = {
+                int(idx.strip())
+                for idx in exclude_indices_param.split(",")
+                if idx.strip()
+            }
+        except ValueError:
+            pass  # Ignore invalid indices, export all
 
     boreholes_geojson = data_loader.get_boreholes_geojson()
 
@@ -418,7 +434,13 @@ def export_boreholes_csv() -> Response:
     writer = csv.writer(output)
     writer.writerow(["ID", "Easting", "Northing", "Zone"])
 
-    for feature in boreholes_geojson.get("features", []):
+    for idx, feature in enumerate(boreholes_geojson.get("features", [])):
+        # Skip excluded indices
+        if idx in exclude_indices:
+            continue
+
+        props = feature.get("properties", {})
+        coords = feature.get("geometry", {}).get("coordinates", [0, 0])
         props = feature.get("properties", {})
         coords = feature.get("geometry", {}).get("coordinates", [0, 0])
 
@@ -467,6 +489,41 @@ def compute_all_coverages() -> Dict[str, Any]:
 
     # Add stats to the response
     coverages_geojson["stats"] = stats
+
+    return jsonify(coverages_geojson)
+
+
+@app.route("/api/coverage/filtered", methods=["POST"])
+def compute_filtered_coverages() -> Dict[str, Any]:
+    """
+    Compute coverage polygons excluding specified zones (for zone visibility filtering).
+
+    Used when user hides zones via checkboxes - coverage circles are clipped
+    to only show coverage over visible zones.
+
+    Request Body:
+        {
+            "excludeZones": ["ZoneName1", "ZoneName2", ...]
+        }
+
+    Returns:
+        {
+            "type": "FeatureCollection",
+            "features": [...filtered coverage polygons...]
+        }
+    """
+    if coverage_service is None or data_loader is None:
+        return jsonify({"error": "Server not initialized"}), 500
+
+    data = request.get_json()
+    exclude_zones = data.get("excludeZones", []) if data else []
+
+    boreholes = data_loader.get_boreholes_geojson()
+
+    # Compute coverages excluding specified zones (no caching - depends on visibility)
+    coverages_geojson = coverage_service.compute_all_coverages_filtered(
+        boreholes, exclude_zones
+    )
 
     return jsonify(coverages_geojson)
 
