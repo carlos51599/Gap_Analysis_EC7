@@ -1,4 +1,5 @@
 """Data models package for typed borehole and optimization data structures."""
+
 from .data_models import (
     Borehole,
     BoreholePass,
@@ -8,7 +9,7 @@ from .data_models import (
 
 __all__ = [
     "Borehole",
-    "BoreholePass", 
+    "BoreholePass",
     "BoreholeStatus",
     "PassResult",
 ]

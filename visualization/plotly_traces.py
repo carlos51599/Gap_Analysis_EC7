@@ -45,6 +45,7 @@ from geopandas import GeoDataFrame
 from shapely.geometry import Polygon
 
 from Gap_Analysis_EC7.config_types import BoreholeMarkerConfig, ProposedMarkerConfig
+from Gap_Analysis_EC7.models.data_models import BoreholePass
 
 
 # ===========================================================================
@@ -849,7 +850,7 @@ def build_coverage_marker_trace(
     customdata = [
         [
             i + 1,
-            c.get("source_pass", "First Pass"),
+            c.get("source_pass", BoreholePass.FIRST.value),
             c.get("status", "proposed").title(),  # Capitalize for display
         ]
         for i, c in enumerate(coordinates)

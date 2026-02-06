@@ -1251,50 +1251,81 @@ def _add_third_pass_grid_trace(
         fig.add_trace(hexgrid_trace)
 
     # Add Tier 2 visibility boundary line (same as Second Pass Grid has)
+    # === STRATEGY: Use tier2_wkt directly from tier_geometries when available ===
+    # This ensures visualization matches the solver's exact tier2 geometry
+    tier_geometries = third_pass_data.get("tier_geometries", {})
+    
+    # Get Tier 2 styling from config
+    vis_cfg = CONFIG.get("visualization", {})
+    ilp_style = vis_cfg.get("czrc_ilp_visibility", {})
+    tier2_color = ilp_style.get("tier2_color", "rgba(138, 43, 226, 0.8)")
+    tier2_dash = ilp_style.get("tier2_dash", "longdash")
+    tier2_line_width = ilp_style.get("line_width", 2)
     tier2_mult = czrc_cfg.get("tier2_rmax_multiplier", 2.0)
-    tier2_region = unified_czrc.buffer(tier2_mult * max_spacing)
-
-    if tier2_region is not None and not tier2_region.is_empty:
-        # Get Tier 2 styling from config (same as CZRC uses)
-        vis_cfg = CONFIG.get("visualization", {})
-        ilp_style = vis_cfg.get("czrc_ilp_visibility", {})
-        tier2_color = ilp_style.get("tier2_color", "rgba(138, 43, 226, 0.8)")
-        tier2_dash = ilp_style.get("tier2_dash", "longdash")
-        tier2_line_width = ilp_style.get("line_width", 2)
-
-        # Format multiplier for legend (remove trailing zeros)
-        mult_str = f"{tier2_mult:g}"
-
-        # Parse per-cluster Tier 2 boundaries for individual tooltips
-        # cell_intersections keys are like "cluster_{N}_{pair_key}" or "Cell_{i}_Cell_{j}"
-        cluster_intersections: Dict[str, List] = {}  # cluster_num -> list of geometries
-        import re
-
+    mult_str = f"{tier2_mult:g}"
+    
+    # Parse per-cluster Tier 2 boundaries from tier_geometries
+    # Keys are like "cluster_{N}_{pair_key}" or "Cell_{i}_Cell_{j}"
+    import re
+    cluster_tier2_geoms: Dict[int, List] = {}
+    
+    for pair_key, tier_data in tier_geometries.items():
+        tier2_wkt_str = tier_data.get("tier2_wkt")
+        if not tier2_wkt_str:
+            continue
+        try:
+            tier2_geom = shapely_wkt.loads(tier2_wkt_str)
+            if tier2_geom.is_empty:
+                continue
+            # Extract cluster number from key (e.g., "cluster_1_Cell_0_Cell_1")
+            cluster_match = re.match(r"cluster_(\d+)_", pair_key)
+            cluster_num = int(cluster_match.group(1)) if cluster_match else 1
+            if cluster_num not in cluster_tier2_geoms:
+                cluster_tier2_geoms[cluster_num] = []
+            cluster_tier2_geoms[cluster_num].append(tier2_geom)
+        except Exception:  # noqa: BLE001
+            pass
+    
+    # Create per-cluster unified Tier 2 boundaries with tooltips
+    if cluster_tier2_geoms:
+        for cluster_num, geoms in sorted(cluster_tier2_geoms.items()):
+            unified_tier2 = unary_union(geoms)
+            if unified_tier2.is_empty:
+                continue
+            tooltip = f"Cluster{cluster_num}_Tier2"
+            _add_boundary_trace(
+                fig=fig,
+                geometry=unified_tier2,
+                color=tier2_color,
+                dash=tier2_dash,
+                line_width=tier2_line_width,
+                name=f"Third Pass Grid Tier 2 ({mult_str}× R_max)",
+                legendgroup="third_pass_tier2",
+                visible=False,
+                hovertext=tooltip,
+            )
+    else:
+        # FALLBACK: Compute tier2 via buffering if tier_geometries not available
+        # Parse per-cluster boundaries from cell_intersections for individual tooltips
+        cluster_intersections: Dict[str, List] = {}
         for pair_key, wkt_str in cell_intersections.items():
             try:
                 geom = shapely_wkt.loads(wkt_str)
                 if geom.is_empty:
                     continue
-                # Extract cluster number from key (e.g., "cluster_1_Cell_0_Cell_1")
                 cluster_match = re.match(r"cluster_(\d+)_", pair_key)
-                if cluster_match:
-                    cluster_num = int(cluster_match.group(1))
-                else:
-                    # Key is just "Cell_{i}_Cell_{j}" - assign to cluster 1
-                    cluster_num = 1
+                cluster_num = int(cluster_match.group(1)) if cluster_match else 1
                 if cluster_num not in cluster_intersections:
                     cluster_intersections[cluster_num] = []
                 cluster_intersections[cluster_num].append(geom)
             except Exception:  # noqa: BLE001
                 pass
 
-        # Create per-cluster Tier 2 boundaries with tooltips
         for cluster_num, geoms in sorted(cluster_intersections.items()):
             cluster_czrc = unary_union(geoms)
             cluster_tier2 = cluster_czrc.buffer(tier2_mult * max_spacing)
             if cluster_tier2.is_empty:
                 continue
-            # Create tooltip text matching log file naming (1-based display)
             tooltip = f"Cluster{cluster_num}_Tier2"
             _add_boundary_trace(
                 fig=fig,
@@ -1304,7 +1335,7 @@ def _add_third_pass_grid_trace(
                 line_width=tier2_line_width,
                 name=f"Third Pass Grid Tier 2 ({mult_str}× R_max)",
                 legendgroup="third_pass_tier2",
-                visible=False,  # Hidden by default, controlled by Third Pass Grid checkbox
+                visible=False,
                 hovertext=tooltip,
             )
 
@@ -2280,21 +2311,103 @@ def _add_czrc_ilp_visibility_trace(
     # Get Tier 2 multiplier from config (default: 2.0)
     tier2_mult = vis_cfg.get("czrc_tier2_rmax_multiplier", 2.0)
 
-    # === BUILD PAIR_KEY TO CLUSTER_INDEX MAPPING ===
-    # cluster_stats keys are cluster_keys (e.g., "ZoneA_ZoneB" or "ZoneA_ZoneB+ZoneC_ZoneD")
-    # Each cluster_stats entry has pair_keys list and cluster_index
+    # Format multiplier for legend (remove trailing zeros)
+    mult_str = f"{tier2_mult:g}"
+
+    # === STRATEGY: Use tier2_wkt directly from cluster_stats when available ===
+    # This ensures the visualization exactly matches the solver's tier2 geometry
+    # rather than trying to recreate it (which can have small precision differences)
+    #
+    # Two cases:
+    # 1. Unsplit clusters: tier2_wkt is in cluster_stats directly
+    # 2. Split clusters: tier2_wkt is in cluster_stats.cell_czrc_stats.pair_stats
+
+    clusters_handled_idx: set = set()  # Track cluster_idx that we've drawn tier2 for
+
+    if cluster_stats:
+        for cluster_key, stats in cluster_stats.items():
+            cluster_idx = stats.get("cluster_index", 0)
+            was_split = stats.get("was_split", False)
+
+            if not was_split:
+                # === UNSPLIT CLUSTER: tier2_wkt directly in stats ===
+                tier2_wkt_str = stats.get("tier2_wkt")
+                if tier2_wkt_str:
+                    try:
+                        tier2_geom = wkt.loads(tier2_wkt_str)
+                        if tier2_geom is not None and not tier2_geom.is_empty:
+                            tooltip = f"Cluster{cluster_idx}_Tier2"
+                            _add_boundary_trace(
+                                fig=fig,
+                                geometry=tier2_geom,
+                                color=tier2_color,
+                                dash=tier2_dash,
+                                line_width=line_width,
+                                name=f"CZRC Tier 2 ({mult_str}× R_max) - Locked BHs",
+                                legendgroup="czrc_tier2",
+                                visible=False,
+                                hovertext=tooltip,
+                            )
+                            clusters_handled_idx.add(cluster_idx)
+                    except Exception:  # noqa: BLE001 - WKT parsing can fail
+                        pass
+            else:
+                # === SPLIT CLUSTER: tier2_wkt is in cell_stats for each cell ===
+                # Each cell in Second Pass has its own tier2 geometry
+                cell_stats_list = stats.get("cell_stats", [])
+                tier2_geoms = []
+                for cs in cell_stats_list:
+                    tier2_wkt_str = cs.get("tier2_wkt")
+                    if tier2_wkt_str:
+                        try:
+                            tier2_geom = wkt.loads(tier2_wkt_str)
+                            if tier2_geom is not None and not tier2_geom.is_empty:
+                                tier2_geoms.append(tier2_geom)
+                        except Exception:  # noqa: BLE001
+                            pass
+
+                # Union all cell tier2 geometries for this split cluster
+                if tier2_geoms:
+                    unified_tier2 = unary_union(tier2_geoms)
+                    if unified_tier2 is not None and not unified_tier2.is_empty:
+                        tooltip = f"Cluster{cluster_idx}_Tier2 (split)"
+                        _add_boundary_trace(
+                            fig=fig,
+                            geometry=unified_tier2,
+                            color=tier2_color,
+                            dash=tier2_dash,
+                            line_width=line_width,
+                            name=f"CZRC Tier 2 ({mult_str}× R_max) - Locked BHs",
+                            legendgroup="czrc_tier2",
+                            visible=False,
+                            hovertext=tooltip,
+                        )
+                        clusters_handled_idx.add(cluster_idx)
+
+        # If ALL clusters were handled via tier2_wkt, we're done
+        if clusters_handled_idx and len(clusters_handled_idx) == len(cluster_stats):
+            return (start_idx, len(fig.data))
+
+    # === FALLBACK: Compute tier2 from CZRC regions if tier2_wkt not available ===
+    # This handles legacy data or cases where solver didn't export tier2_wkt
+
+    # Build pair_key to cluster mapping
     pair_to_cluster: Dict[str, int] = {}
+    cluster_to_overall_r_max: Dict[int, float] = {}
     if cluster_stats:
         for cluster_key, stats in cluster_stats.items():
             cluster_idx = stats.get("cluster_index", 0)
             pair_keys = stats.get("pair_keys", [])
+            overall_r_max = stats.get("overall_r_max") or stats.get(
+                "max_spacing_m", 0.0
+            )
+            cluster_to_overall_r_max[cluster_idx] = overall_r_max
             for pk in pair_keys:
                 pair_to_cluster[pk] = cluster_idx
 
-    # === COMPUTE EXPANDED BOUNDARIES FOR EACH PAIRWISE REGION ===
-    # Group by cluster_index for per-cluster traces
-    cluster_boundaries: Dict[int, List["BaseGeometry"]] = {}
-    unclustered_boundaries: List["BaseGeometry"] = []
+    # Collect CZRC regions per cluster
+    cluster_czrc_regions: Dict[int, List["BaseGeometry"]] = {}
+    unclustered_regions: List[Tuple["BaseGeometry", float]] = []
 
     for pair_key, region_wkt in pairwise_wkts.items():
         try:
@@ -2302,49 +2415,59 @@ def _add_czrc_ilp_visibility_trace(
             if region_geom.is_empty or not region_geom.is_valid:
                 continue
 
-            # Parse zone names from pair_key (format: "ZoneA||ZoneB" or legacy "ZoneA_ZoneB")
-            zone_names = parse_pair_key(pair_key, zone_spacings)
-
-            # Get R_max = max spacing of all involved zones
-            spacings = []
-            for zn in zone_names:
-                if zn in zone_spacings:
-                    spacings.append(zone_spacings[zn])
-            if not spacings:
-                # Fallback to max_zone_spacing from stats
-                stats = czrc_data.get("stats", {})
-                r_max = stats.get("max_zone_spacing", 150.0)
+            # Group by cluster index if available
+            cluster_idx = pair_to_cluster.get(pair_key)
+            if cluster_idx is not None:
+                if cluster_idx not in cluster_czrc_regions:
+                    cluster_czrc_regions[cluster_idx] = []
+                cluster_czrc_regions[cluster_idx].append(region_geom)
             else:
-                r_max = max(spacings)
-
-            # Tier 2: N× R_max expansion (locked boreholes boundary)
-            tier2_geom = region_geom.buffer(tier2_mult * r_max)
-            if not tier2_geom.is_empty:
-                # Group by cluster index if available
-                cluster_idx = pair_to_cluster.get(pair_key)
-                if cluster_idx is not None:
-                    if cluster_idx not in cluster_boundaries:
-                        cluster_boundaries[cluster_idx] = []
-                    cluster_boundaries[cluster_idx].append(tier2_geom)
+                # Unclustered: compute per-pair r_max as fallback
+                zone_names = parse_pair_key(pair_key, zone_spacings)
+                spacings = [
+                    zone_spacings[zn] for zn in zone_names if zn in zone_spacings
+                ]
+                if not spacings:
+                    stats = czrc_data.get("stats", {})
+                    r_max = stats.get("max_zone_spacing", 150.0)
                 else:
-                    unclustered_boundaries.append(tier2_geom)
+                    r_max = max(spacings)
+                unclustered_regions.append((region_geom, r_max))
 
         except Exception:  # noqa: BLE001 - WKT parsing can fail
             continue
 
-    # Format multiplier for legend (remove trailing zeros)
-    mult_str = f"{tier2_mult:g}"
+    # === ADD PER-CLUSTER TIER 2 TRACES WITH OVERALL_R_MAX ===
+    # Use the cluster's overall_r_max (same as solver) to buffer the unified CZRC region
+    # SKIP clusters already handled via tier2_wkt
+    if cluster_czrc_regions:
+        for cluster_idx in sorted(cluster_czrc_regions.keys()):
+            # Skip clusters already handled by tier2_wkt path
+            if cluster_idx in clusters_handled_idx:
+                continue
 
-    # === ADD PER-CLUSTER TIER 2 TRACES WITH TOOLTIPS ===
-    if cluster_boundaries:
-        for cluster_idx in sorted(cluster_boundaries.keys()):
-            geoms = cluster_boundaries[cluster_idx]
-            cluster_union = unary_union(geoms)
-            if cluster_union is not None and not cluster_union.is_empty:
+            czrc_geoms = cluster_czrc_regions[cluster_idx]
+            unified_czrc = unary_union(czrc_geoms)
+            if unified_czrc is None or unified_czrc.is_empty:
+                continue
+
+            # Use overall_r_max from cluster_stats (what solver used) or fallback
+            overall_r_max = cluster_to_overall_r_max.get(cluster_idx, 0.0)
+            if overall_r_max <= 0:
+                # Fallback: compute max across all pairs' zone spacings
+                for geom in czrc_geoms:
+                    # Can't determine without pair_key, use global fallback
+                    stats = czrc_data.get("stats", {})
+                    overall_r_max = stats.get("max_zone_spacing", 150.0)
+                    break
+
+            # Buffer unified CZRC by tier2_mult × overall_r_max (matches solver)
+            tier2_geom = unified_czrc.buffer(tier2_mult * overall_r_max)
+            if tier2_geom is not None and not tier2_geom.is_empty:
                 tooltip = f"Cluster{cluster_idx}_Tier2"
                 _add_boundary_trace(
                     fig=fig,
-                    geometry=cluster_union,
+                    geometry=tier2_geom,
                     color=tier2_color,
                     dash=tier2_dash,
                     line_width=line_width,
@@ -2355,19 +2478,26 @@ def _add_czrc_ilp_visibility_trace(
                 )
 
     # === ADD UNCLUSTERED BOUNDARIES (FALLBACK) ===
-    if unclustered_boundaries:
-        tier2_union = unary_union(unclustered_boundaries)
-        if tier2_union is not None and not tier2_union.is_empty:
-            _add_boundary_trace(
-                fig=fig,
-                geometry=tier2_union,
-                color=tier2_color,
-                dash=tier2_dash,
-                line_width=line_width,
-                name=f"CZRC Tier 2 ({mult_str}× R_max) - Locked BHs",
-                legendgroup="czrc_tier2",
-                visible=False,  # Hidden by default, controlled by CZRC Grid checkbox
-            )
+    # For unclustered regions, buffer each with its per-pair r_max then union
+    if unclustered_regions:
+        unclustered_tier2_geoms = []
+        for region_geom, r_max in unclustered_regions:
+            tier2_geom = region_geom.buffer(tier2_mult * r_max)
+            if not tier2_geom.is_empty:
+                unclustered_tier2_geoms.append(tier2_geom)
+        if unclustered_tier2_geoms:
+            tier2_union = unary_union(unclustered_tier2_geoms)
+            if tier2_union is not None and not tier2_union.is_empty:
+                _add_boundary_trace(
+                    fig=fig,
+                    geometry=tier2_union,
+                    color=tier2_color,
+                    dash=tier2_dash,
+                    line_width=line_width,
+                    name=f"CZRC Tier 2 ({mult_str}× R_max) - Locked BHs",
+                    legendgroup="czrc_tier2",
+                    visible=False,  # Hidden by default, controlled by CZRC Grid checkbox
+                )
 
     return (start_idx, len(fig.data))
 
