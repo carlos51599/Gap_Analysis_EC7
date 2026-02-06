@@ -35,6 +35,7 @@ from geopandas import GeoDataFrame
 
 from Gap_Analysis_EC7.config import CONFIG
 from Gap_Analysis_EC7.config_types import VisualizationConfig, BoreholeMarkerConfig
+from Gap_Analysis_EC7.models.cluster_stats import ClusterStats
 from Gap_Analysis_EC7.solvers.czrc_geometry import parse_pair_key
 
 # Module-level logger for debug output
@@ -2315,75 +2316,39 @@ def _add_czrc_ilp_visibility_trace(
     # Format multiplier for legend (remove trailing zeros)
     mult_str = f"{tier2_mult:g}"
 
-    # === STRATEGY: Use tier2_wkt directly from cluster_stats when available ===
-    # This ensures the visualization exactly matches the solver's tier2 geometry
-    # rather than trying to recreate it (which can have small precision differences)
+    # === STRATEGY: Use ClusterStats.get_tier2_geometry() for unified access ===
+    # This method handles both split and unsplit clusters transparently,
+    # eliminating the need for separate code paths. For split clusters, it
+    # automatically unions all cell tier2 geometries.
     #
-    # Two cases:
-    # 1. Unsplit clusters: tier2_wkt is in cluster_stats directly
-    # 2. Split clusters: tier2_wkt is in cluster_stats.cell_czrc_stats.pair_stats
+    # Migration: ClusterStats.from_dict() is called here at the visualization
+    # boundary to convert dict data to typed dataclass.
 
     clusters_handled_idx: set = set()  # Track cluster_idx that we've drawn tier2 for
 
     if cluster_stats:
-        for cluster_key, stats in cluster_stats.items():
-            cluster_idx = stats.get("cluster_index", 0)
-            was_split = stats.get("was_split", False)
+        for cluster_key, stats_dict in cluster_stats.items():
+            # Convert dict to typed ClusterStats for unified tier2 access
+            stats = ClusterStats.from_dict(stats_dict)
+            cluster_idx = stats.cluster_index
+            split_indicator = " (split)" if stats.was_split else ""
 
-            if not was_split:
-                # === UNSPLIT CLUSTER: tier2_wkt directly in stats ===
-                tier2_wkt_str = stats.get("tier2_wkt")
-                if tier2_wkt_str:
-                    try:
-                        tier2_geom = wkt.loads(tier2_wkt_str)
-                        if tier2_geom is not None and not tier2_geom.is_empty:
-                            tooltip = f"Cluster{cluster_idx}_Tier2"
-                            _add_boundary_trace(
-                                fig=fig,
-                                geometry=tier2_geom,
-                                color=tier2_color,
-                                dash=tier2_dash,
-                                line_width=line_width,
-                                name=f"CZRC Tier 2 ({mult_str}× R_max) - Locked BHs",
-                                legendgroup="czrc_tier2",
-                                visible=False,
-                                hovertext=tooltip,
-                            )
-                            clusters_handled_idx.add(cluster_idx)
-                    except Exception:  # noqa: BLE001 - WKT parsing can fail
-                        pass
-            else:
-                # === SPLIT CLUSTER: tier2_wkt is in cell_stats for each cell ===
-                # Each cell in Second Pass has its own tier2 geometry
-                cell_stats_list = stats.get("cell_stats", [])
-                tier2_geoms = []
-                for cs in cell_stats_list:
-                    tier2_wkt_str = cs.get("tier2_wkt")
-                    if tier2_wkt_str:
-                        try:
-                            tier2_geom = wkt.loads(tier2_wkt_str)
-                            if tier2_geom is not None and not tier2_geom.is_empty:
-                                tier2_geoms.append(tier2_geom)
-                        except Exception:  # noqa: BLE001
-                            pass
-
-                # Union all cell tier2 geometries for this split cluster
-                if tier2_geoms:
-                    unified_tier2 = unary_union(tier2_geoms)
-                    if unified_tier2 is not None and not unified_tier2.is_empty:
-                        tooltip = f"Cluster{cluster_idx}_Tier2 (split)"
-                        _add_boundary_trace(
-                            fig=fig,
-                            geometry=unified_tier2,
-                            color=tier2_color,
-                            dash=tier2_dash,
-                            line_width=line_width,
-                            name=f"CZRC Tier 2 ({mult_str}× R_max) - Locked BHs",
-                            legendgroup="czrc_tier2",
-                            visible=False,
-                            hovertext=tooltip,
-                        )
-                        clusters_handled_idx.add(cluster_idx)
+            # get_tier2_geometry() handles split/unsplit transparently
+            tier2_geom = stats.get_tier2_geometry()
+            if tier2_geom is not None and not tier2_geom.is_empty:
+                tooltip = f"Cluster{cluster_idx}_Tier2{split_indicator}"
+                _add_boundary_trace(
+                    fig=fig,
+                    geometry=tier2_geom,
+                    color=tier2_color,
+                    dash=tier2_dash,
+                    line_width=line_width,
+                    name=f"CZRC Tier 2 ({mult_str}× R_max) - Locked BHs",
+                    legendgroup="czrc_tier2",
+                    visible=False,
+                    hovertext=tooltip,
+                )
+                clusters_handled_idx.add(cluster_idx)
 
         # If ALL clusters were handled via tier2_wkt, we're done
         if clusters_handled_idx and len(clusters_handled_idx) == len(cluster_stats):
