@@ -319,3 +319,128 @@ class PassResult:
             f"{self.pass_type.value}: {self.input_count} in → {self.output_count} out "
             f"(+{len(self.added)} added, -{len(self.removed)} removed)"
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 🔄 BATCH CONVERSION UTILITIES SECTION
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def boreholes_from_dicts(
+    dicts: List[Dict[str, Any]],
+    default_pass: BoreholePass = BoreholePass.FIRST,
+) -> List[Borehole]:
+    """Convert list of dicts to Borehole instances.
+
+    Use at system boundaries (file I/O, multiprocessing, legacy code).
+    This is the PRIMARY entry point for converting dict-based borehole data.
+
+    Args:
+        dicts: List of dictionaries with x, y, coverage_radius keys
+        default_pass: BoreholePass to use if source_pass is missing
+
+    Returns:
+        List of Borehole instances with normalized source_pass
+    """
+    return [Borehole.from_dict(d, default_pass) for d in dicts]
+
+
+def boreholes_to_dicts(boreholes: List[Borehole]) -> List[Dict[str, Any]]:
+    """Convert Borehole instances to dicts for serialization.
+
+    Use when:
+    - Serializing to JSON
+    - Sending across multiprocessing boundaries
+    - Interfacing with legacy code that expects dicts
+
+    Args:
+        boreholes: List of Borehole dataclass instances
+
+    Returns:
+        List of dicts suitable for JSON serialization
+    """
+    return [bh.as_dict() for bh in boreholes]
+
+
+def get_bh_position(bh: Any) -> Tuple[float, float]:
+    """Extract normalized position from dict or Borehole (duck-typed).
+
+    This enables gradual migration - code can accept BOTH dict and Borehole
+    without explicit type checking at every call site.
+
+    The position is normalized to 6 decimal places to avoid floating-point
+    comparison issues in set operations.
+
+    Args:
+        bh: Either a Dict[str, Any] with x/y keys OR a Borehole instance
+
+    Returns:
+        Tuple of (x, y) rounded to 6 decimal places
+
+    Examples:
+        >>> get_bh_position({"x": 123.456789123, "y": 456.0})
+        (123.456789, 456.0)
+        >>> get_bh_position(Borehole(x=123.456789123, y=456.0, ...))
+        (123.456789, 456.0)
+    """
+    if hasattr(bh, "position"):
+        return bh.position  # Borehole dataclass
+    else:
+        # Dict access with normalization
+        return (round(float(bh["x"]), 6), round(float(bh["y"]), 6))
+
+
+def get_bh_coords(bh: Any) -> Tuple[float, float]:
+    """Extract raw coordinates from dict or Borehole (duck-typed).
+
+    Unlike get_bh_position(), this returns raw coordinates WITHOUT rounding.
+    Use for geometry operations where precision matters.
+
+    Args:
+        bh: Either a Dict[str, Any] with x/y keys OR a Borehole instance
+
+    Returns:
+        Tuple of (x, y) as raw floats
+    """
+    if hasattr(bh, "x") and hasattr(bh, "y"):
+        return (bh.x, bh.y)  # Borehole dataclass (or any object with x, y)
+    else:
+        return (float(bh["x"]), float(bh["y"]))  # Dict
+
+
+def get_bh_radius(bh: Any, default: float = 100.0) -> float:
+    """Extract coverage radius from dict or Borehole (duck-typed).
+
+    Args:
+        bh: Either a Dict[str, Any] or a Borehole instance
+        default: Default radius if not specified (for dict access)
+
+    Returns:
+        Coverage radius as float
+    """
+    if hasattr(bh, "coverage_radius"):
+        return bh.coverage_radius
+    else:
+        return float(bh.get("coverage_radius", default))
+
+
+def get_bh_source_pass(bh: Any, default: BoreholePass = BoreholePass.FIRST) -> BoreholePass:
+    """Extract source_pass from dict or Borehole (duck-typed).
+
+    Args:
+        bh: Either a Dict[str, Any] or a Borehole instance
+        default: Default pass if not specified (for legacy dicts)
+
+    Returns:
+        BoreholePass enum value
+    """
+    if hasattr(bh, "source_pass") and isinstance(bh.source_pass, BoreholePass):
+        return bh.source_pass
+    elif isinstance(bh, dict):
+        source_str = bh.get("source_pass", default.value)
+        if isinstance(source_str, BoreholePass):
+            return source_str
+        return BoreholePass.from_string(str(source_str))
+    else:
+        return default
+
