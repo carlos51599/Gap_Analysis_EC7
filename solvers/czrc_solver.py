@@ -1361,9 +1361,7 @@ def _assemble_czrc_results(
     tier1_bh_set = {get_bh_position(bh) for bh in bh_candidates}
 
     # Build a lookup for existing borehole metadata by position
-    existing_bh_by_pos = {
-        get_bh_position(bh): bh for bh in bh_candidates
-    }
+    existing_bh_by_pos = {get_bh_position(bh): bh for bh in bh_candidates}
 
     # Selected = all ILP selections (as dicts for backward compatibility)
     # Preserve source_pass for existing boreholes, use current pass for new ones
@@ -1411,7 +1409,11 @@ def _assemble_czrc_results(
             removed_bh = Borehole(
                 x=x,
                 y=y,
-                coverage_radius=bh.get("coverage_radius", min_spacing) if isinstance(bh, dict) else bh.coverage_radius,
+                coverage_radius=(
+                    bh.get("coverage_radius", min_spacing)
+                    if isinstance(bh, dict)
+                    else bh.coverage_radius
+                ),
                 source_pass=original_pass,  # Keep original, not current pass!
                 status=BoreholeStatus.REMOVED,
             )
@@ -1894,7 +1896,11 @@ def check_and_split_large_cluster(
                     y=y,
                     coverage_radius=get_bh_radius(bh, default=100.0),
                     source_pass=get_bh_source_pass(bh, default=BoreholePass.SECOND),
-                    status=BoreholeStatus.from_string(bh.get("status", "added") if isinstance(bh, dict) else bh.status.value),
+                    status=BoreholeStatus.from_string(
+                        bh.get("status", "added")
+                        if isinstance(bh, dict)
+                        else bh.status.value
+                    ),
                 ).as_dict()
             )
             seen_output_positions.add(pos)
@@ -2330,9 +2336,7 @@ def solve_cell_cell_czrc(
     selected = list(locked)
 
     # Build a lookup for existing borehole metadata by position
-    existing_bh_by_pos = {
-        get_bh_position(bh): bh for bh in bh_candidates
-    }
+    existing_bh_by_pos = {get_bh_position(bh): bh for bh in bh_candidates}
 
     for i in selected_set:
         pos = (round(candidates[i].x, 6), round(candidates[i].y, 6))
@@ -2962,7 +2966,11 @@ def solve_czrc_ilp_for_cluster(
                 y=get_bh_coords(bh)[1],
                 coverage_radius=get_bh_radius(bh, default=min_spacing),
                 source_pass=get_bh_source_pass(bh, default=BoreholePass.FIRST),
-                status=BoreholeStatus.from_string(bh.get("status", "proposed") if isinstance(bh, dict) else bh.status.value),
+                status=BoreholeStatus.from_string(
+                    bh.get("status", "proposed")
+                    if isinstance(bh, dict)
+                    else bh.status.value
+                ),
             ).as_dict()
             for bh in selected
         ],
@@ -3433,7 +3441,9 @@ def run_czrc_optimization(
         if get_bh_position(bh) not in third_pass_removed_pos_for_viz
     ]
     second_pass_only_added = [
-        bh for bh in all_added if get_bh_position(bh) not in third_pass_added_pos_for_viz
+        bh
+        for bh in all_added
+        if get_bh_position(bh) not in third_pass_added_pos_for_viz
     ]
 
     # Count unified clusters (clusters with more than one pair)

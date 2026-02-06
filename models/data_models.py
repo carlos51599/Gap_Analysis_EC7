@@ -424,7 +424,9 @@ def get_bh_radius(bh: Any, default: float = 100.0) -> float:
         return float(bh.get("coverage_radius", default))
 
 
-def get_bh_source_pass(bh: Any, default: BoreholePass = BoreholePass.FIRST) -> BoreholePass:
+def get_bh_source_pass(
+    bh: Any, default: BoreholePass = BoreholePass.FIRST
+) -> BoreholePass:
     """Extract source_pass from dict or Borehole (duck-typed).
 
     Args:
@@ -443,4 +445,3 @@ def get_bh_source_pass(bh: Any, default: BoreholePass = BoreholePass.FIRST) -> B
         return BoreholePass.from_string(str(source_str))
     else:
         return default
-
