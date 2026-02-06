@@ -19,9 +19,9 @@ Navigation Guide:
 For Navigation: Use VS Code outline (Ctrl+Shift+O)
 """
 
-from typing import Any, Dict, List, Optional, Tuple, NamedTuple
+from typing import Any, Dict, FrozenSet, List, Optional, Tuple, NamedTuple
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import geopandas as gpd
 import numpy as np
@@ -44,6 +44,9 @@ class CachedCoverage:
     lat: float
     coverage_bng: Any  # Shapely geometry in BNG coordinates
     zone_names: List[str]
+    exclude_zones: FrozenSet[str] = field(
+        default_factory=frozenset
+    )  # SSOT: track which zones were excluded
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -221,6 +224,7 @@ class CoverageService:
         self,
         lon: float,
         lat: float,
+        exclude_zones: Optional[List[str]] = None,
     ) -> Dict[str, float]:
         """
         Get zone information for a point.
@@ -228,6 +232,7 @@ class CoverageService:
         Args:
             lon: Longitude in WGS84
             lat: Latitude in WGS84
+            exclude_zones: Optional list of zone names to exclude
 
         Returns:
             Dict mapping zone_name -> max_spacing_m for zones containing the point.
@@ -235,6 +240,9 @@ class CoverageService:
         # Convert WGS84 to BNG
         x, y = self._wgs84_to_bng.transform(lon, lat)
         point = Point(x, y)
+
+        # Normalize exclude_zones to a set for O(1) lookup
+        excluded_set = set(exclude_zones) if exclude_zones else set()
 
         zone_info = {}
 
@@ -245,6 +253,9 @@ class CoverageService:
 
             if zone_geom.contains(point):
                 zone_name = self._get_zone_name(zone, idx)
+                # Skip excluded zones (SSOT: hidden zones treated as non-existent)
+                if zone_name in excluded_set:
+                    continue
                 max_spacing = self._get_zone_spacing(zone)
                 zone_info[zone_name] = max_spacing
 
@@ -380,7 +391,11 @@ class CoverageService:
         return areas
 
     def _compute_coverage_bng(
-        self, lon: float, lat: float, bng_coords: Optional[Tuple[float, float]] = None
+        self,
+        lon: float,
+        lat: float,
+        bng_coords: Optional[Tuple[float, float]] = None,
+        exclude_zones: Optional[List[str]] = None,
     ) -> Tuple[Any, List[str]]:
         """
         Compute zone-clipped coverage in BNG coordinates (internal).
@@ -389,6 +404,7 @@ class CoverageService:
             lon: Longitude in WGS84 (used if bng_coords not provided)
             lat: Latitude in WGS84 (used if bng_coords not provided)
             bng_coords: Pre-computed (x, y) in BNG to avoid duplicate transform
+            exclude_zones: Optional list of zone names to exclude from coverage
 
         Returns:
             Tuple of (coverage_geometry_bng, zone_names_list)
@@ -413,6 +429,9 @@ class CoverageService:
 
         point = Point(x, y)
 
+        # Normalize exclude_zones to a set for O(1) lookup
+        excluded_set = set(exclude_zones) if exclude_zones else set()
+
         fragments: List[Any] = []
         zone_names: List[str] = []
 
@@ -425,6 +444,11 @@ class CoverageService:
             if zone_geom is None or zone_geom.is_empty:
                 continue
             zones_checked += 1
+
+            # Skip excluded zones (SSOT: hidden zones treated as non-existent)
+            zone_name = self._get_zone_name(zone, idx)
+            if zone_name in excluded_set:
+                continue
 
             # Quick bounds check
             if not zone_geom.envelope.contains(point) and not zone_geom.contains(point):
@@ -444,7 +468,6 @@ class CoverageService:
             if not intersection.is_empty:
                 zones_intersected += 1
                 fragments.append(intersection)
-                zone_name = self._get_zone_name(zone, idx)
                 zone_names.append(zone_name)
 
         t_loop_end = time.perf_counter()
@@ -471,6 +494,7 @@ class CoverageService:
         lon: float,
         lat: float,
         bng_coords: Optional[Tuple[float, float]] = None,
+        exclude_zones: Optional[List[str]] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Compute coverage with caching - returns cached if position unchanged.
@@ -480,15 +504,23 @@ class CoverageService:
             lon: Longitude in WGS84
             lat: Latitude in WGS84
             bng_coords: Pre-computed (x, y) in BNG to avoid duplicate transform
+            exclude_zones: Optional list of zone names to exclude from coverage
 
         Returns:
             GeoJSON Feature with coverage polygon, or None if outside zones.
         """
-        # Check cache
+        # Normalize exclude_zones for cache comparison
+        excluded_frozen = frozenset(exclude_zones) if exclude_zones else frozenset()
+
+        # Check cache - must match position AND exclude_zones (SSOT)
         if borehole_id in self._coverage_cache:
             cached = self._coverage_cache[borehole_id]
-            if cached.lon == lon and cached.lat == lat:
-                # Position unchanged - return from cache
+            if (
+                cached.lon == lon
+                and cached.lat == lat
+                and cached.exclude_zones == excluded_frozen
+            ):
+                # Position AND exclusion unchanged - return from cache
                 if cached.coverage_bng is None:
                     return None
                 coverage_wgs84 = self._transform_to_wgs84(cached.coverage_bng)
@@ -502,8 +534,10 @@ class CoverageService:
                     },
                 }
 
-        # Compute new coverage (pass through BNG coords if provided)
-        coverage_bng, zone_names = self._compute_coverage_bng(lon, lat, bng_coords)
+        # Compute new coverage (pass through BNG coords and exclude_zones)
+        coverage_bng, zone_names = self._compute_coverage_bng(
+            lon, lat, bng_coords, exclude_zones
+        )
 
         # Store in cache
         self._coverage_cache[borehole_id] = CachedCoverage(
@@ -512,6 +546,7 @@ class CoverageService:
             lat=lat,
             coverage_bng=coverage_bng,
             zone_names=zone_names,
+            exclude_zones=excluded_frozen,
         )
 
         # Mark stats as dirty (need recomputation)

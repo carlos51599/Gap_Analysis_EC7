@@ -179,6 +179,12 @@
             width: 100%;
         }
         
+        .btn-delete-outside {
+            background: #e67e22;
+            color: white;
+            width: 100%;
+        }
+        
         .add-mode-indicator {
             position: absolute;
             top: 50px;
@@ -561,6 +567,11 @@
             </div>
         </div>
         <div class="divider"></div>
+        <div class="action-buttons">
+            <button class="action-btn btn-delete-outside" id="deleteOutsideBtn" title="Delete all boreholes outside zones (orange markers)">
+                🗑️ Delete Outside Boreholes
+            </button>
+        </div>
         <div class="action-buttons">
             <button class="action-btn btn-export" id="exportCsvBtn" title="Export borehole coordinates to CSV">
                 📥 Export CSV
@@ -1465,6 +1476,15 @@
                 }
             });
             
+            // 3b. Update borehole colors (SSOT: hidden zones = non-existent for color)
+            // Boreholes in a hidden zone should turn orange (outside visible zones)
+            boreholeMarkers.forEach((grabCircle) => {
+                if (!grabCircle.markerGroup || !map.hasLayer(grabCircle.markerGroup)) return;
+                const coords = boreholesData.features[grabCircle.boreholeIndex]?.geometry?.coordinates;
+                if (!coords) return;
+                updateMarkerForZoneChange(grabCircle, coords[0], coords[1]);
+            });
+            
             // 4. Fetch PROPOSED coverages from server (SSOT - server handles all filtering)
             const hiddenZones = getHiddenZoneNames();
             
@@ -1665,12 +1685,15 @@
             return (CONFIG && CONFIG.boreholeMarker) ? CONFIG.boreholeMarker.outside_zone_radius_m : 16;
         }
         
-        // Check if a point is inside any zone
+        // Check if a point is inside any VISIBLE zone (SSOT: hidden zones treated as non-existent)
         function isPointInAnyZone(lon, lat) {
             if (!zonesData || !zonesData.features) return false;
             
             const point = [lon, lat]; // [lon, lat] for GeoJSON
             for (const feature of zonesData.features) {
+                const zoneName = feature.properties?.zone_name || feature.properties?.display_name;
+                // Skip hidden zones - they don't exist for coverage/color purposes
+                if (zoneName && zoneVisibility[zoneName] === false) continue;
                 if (isPointInPolygon(point, feature.geometry)) {
                     return true;
                 }
@@ -2258,6 +2281,65 @@
             window.location.href = exportUrl;
         });
         
+        // Delete outside boreholes button - server identifies outside via zone_ids (SSOT)
+        document.getElementById('deleteOutsideBtn').addEventListener('click', async function() {
+            // Count outside boreholes for confirmation (read from server-provided zone_ids)
+            const outsideCount = boreholeMarkers.filter(
+                gc => !gc.zoneIds || gc.zoneIds.length === 0
+            ).length;
+            
+            if (outsideCount === 0) {
+                alert('No outside-zone boreholes to delete.');
+                return;
+            }
+            
+            if (!confirm(`Delete ${outsideCount} outside-zone (orange) borehole${outsideCount > 1 ? 's' : ''}?`)) {
+                return;
+            }
+            
+            // Save state for undo before bulk delete
+            saveStateForUndo();
+            
+            try {
+                const response = await fetch('/api/boreholes/delete-outside', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const result = await response.json();
+                
+                if (result.success) {
+                    // Invalidate all coverages (bulk operation)
+                    coverageLayer.clearLayers();
+                    
+                    // Update local data from server response
+                    boreholesData = result.boreholes;
+                    renderBoreholes(boreholesData);
+                    
+                    // Re-fetch all coverages for remaining boreholes
+                    const coveragesResponse = await fetchAllCoverages();
+                    renderCoverages(coveragesResponse);
+                    
+                    // Sync coverage zones to markers
+                    syncCoverageZonesToMarkers();
+                    
+                    // Re-apply zone visibility
+                    updateBoreholeVisibilityForZones();
+                    
+                    // Update count
+                    updateBoreholeCountDisplay();
+                    
+                    // Lazy stats update
+                    if (result.stats_pending) {
+                        setTimeout(() => refreshCoverageStats(), 50);
+                    }
+                    
+                    console.log(`🗑️ Deleted ${result.deleted_count} outside-zone boreholes`);
+                }
+            } catch (error) {
+                console.error('Failed to delete outside boreholes:', error);
+            }
+        });
+        
         // Add borehole button
         document.getElementById('addBoreholeBtn').addEventListener('click', function() {
             addBoreholeMode = !addBoreholeMode;
@@ -2302,8 +2384,12 @@
                 // Update local data
                 boreholesData = result.boreholes;
                 
-                // Re-render all boreholes
-                renderBoreholes(boreholesData);
+                // Re-render all boreholes (handles zone visibility via shouldHide)
+                try {
+                    renderBoreholes(boreholesData);
+                } catch (err) {
+                    console.error('❌ renderBoreholes failed after add:', err);
+                }
                 
                 // Add the new coverage
                 if (result.coverage) {
@@ -2312,13 +2398,34 @@
                     coverageLayer.addData(result.coverage);
                 }
                 
-                // Re-apply zone visibility after re-rendering
-                updateBoreholeVisibilityForZones();
+                // Re-apply zone visibility to all boreholes (replaces deprecated no-op)
+                const hiddenZones = getHiddenZoneNames();
+                if (hiddenZones.length > 0) {
+                    boreholeMarkers.forEach((gc) => {
+                        const zoneIds = gc.zoneIds || [];
+                        const coverageZoneIds = gc.coverageZoneIds || [];
+                        const mode = getZoneVisibilityMode();
+                        let shouldBeVisible;
+                        if (mode === 'hide_zone_boreholes') {
+                            shouldBeVisible = isBoreholeVisibleByLocationZone(zoneIds);
+                        } else {
+                            shouldBeVisible = isBoreholeVisibleByZones(coverageZoneIds.length > 0 ? coverageZoneIds : zoneIds);
+                        }
+                        if (shouldBeVisible) {
+                            if (!map.hasLayer(gc.markerGroup)) boreholesLayer.addLayer(gc.markerGroup);
+                        } else {
+                            if (map.hasLayer(gc.markerGroup)) gc.markerGroup.remove();
+                        }
+                    });
+                }
                 
                 // Render coverage stats from response (fast - avoids extra API call)
                 if (result.stats) {
                     renderCoverageStats(result.stats);
                 }
+                
+                // Update count display after visibility filtering
+                updateBoreholeCountDisplay();
                 
                 console.log(`➕ Added borehole at (${lon.toFixed(6)}, ${lat.toFixed(6)})`);
             }

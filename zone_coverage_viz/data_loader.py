@@ -610,6 +610,51 @@ class DataLoader:
 
         return f"BH_{index}"
 
+    def delete_outside_boreholes(self) -> List[str]:
+        """
+        Delete all boreholes that are outside every zone (zone_ids is empty).
+
+        Uses zone_ids (single source of truth) to identify outside boreholes.
+
+        Returns:
+            List of deleted borehole IDs.
+        """
+        if self._boreholes_gdf is None or self._boreholes_gdf.empty:
+            return []
+
+        # Identify outside boreholes (empty zone_ids) - SSOT from _compute_borehole_zone_ids
+        outside_mask = self._boreholes_gdf["zone_ids"].apply(
+            lambda z: not z or len(z) == 0
+        )
+        outside_indices = self._boreholes_gdf.index[outside_mask].tolist()
+
+        if not outside_indices:
+            logger.info("No outside-zone boreholes to delete")
+            return []
+
+        # Collect IDs before deletion
+        deleted_ids = []
+        for idx in outside_indices:
+            deleted_ids.append(self.get_borehole_id(idx))
+
+        # Remove from GeoDataFrame (drop all outside rows, reset index)
+        self._boreholes_gdf = self._boreholes_gdf[~outside_mask].reset_index(drop=True)
+
+        # Remove from JSON data if present (iterate in reverse to preserve indices)
+        if self._boreholes_data is not None:
+            features = self._boreholes_data.get("features", [])
+            for idx in sorted(outside_indices, reverse=True):
+                if idx < len(features):
+                    features.pop(idx)
+            # Re-index remaining features
+            for i, feature in enumerate(features):
+                feature["properties"]["index"] = i
+
+        logger.info(
+            f"🗑️ Deleted {len(deleted_ids)} outside-zone boreholes: {deleted_ids}"
+        )
+        return deleted_ids
+
     def add_borehole(
         self,
         lon: float,

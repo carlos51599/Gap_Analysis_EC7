@@ -255,13 +255,13 @@ def update_borehole_coverage() -> Dict[str, Any]:
     # Compute coverage using pre-computed BNG coords
     t1 = time.perf_counter()
     coverage = coverage_service.compute_coverage_cached(
-        borehole_id, lon, lat, bng_coords
+        borehole_id, lon, lat, bng_coords, exclude_zones
     )
     t2 = time.perf_counter()
     debug_log(f"    [5] compute_coverage_cached: {(t2-t1)*1000:.1f}ms")
 
     t1 = time.perf_counter()
-    zone_info = coverage_service.get_zone_info(lon, lat)
+    zone_info = coverage_service.get_zone_info(lon, lat, exclude_zones)
     t2 = time.perf_counter()
     debug_log(f"    [6] get_zone_info: {(t2-t1)*1000:.1f}ms")
 
@@ -401,6 +401,51 @@ def delete_borehole() -> Dict[str, Any]:
         return jsonify({"success": False, "error": "Invalid index"}), 400
 
 
+@app.route("/api/boreholes/delete-outside", methods=["POST"])
+def delete_outside_boreholes() -> Dict[str, Any]:
+    """
+    Delete all boreholes outside every zone (SSOT: server identifies via zone_ids).
+
+    Returns:
+        {
+            "success": bool,
+            "deleted_count": int,
+            "deleted_ids": list[str],
+            "boreholes": GeoJSON FeatureCollection (updated list),
+            "stats_pending": bool
+        }
+    """
+    if data_loader is None or coverage_service is None:
+        return jsonify({"error": "Server not initialized"}), 500
+
+    debug_log("=" * 60)
+    debug_log("[DELETE-OUTSIDE] Request received")
+
+    # Server determines which boreholes are outside (SSOT via zone_ids)
+    deleted_ids = data_loader.delete_outside_boreholes()
+
+    # Invalidate cache for all deleted boreholes
+    for bid in deleted_ids:
+        coverage_service.invalidate_cache(bid)
+
+    boreholes = data_loader.get_boreholes_geojson()
+
+    debug_log(
+        f"    [DELETE-OUTSIDE] Deleted {len(deleted_ids)} boreholes: {deleted_ids}"
+    )
+    debug_log("=" * 60)
+
+    return jsonify(
+        {
+            "success": True,
+            "deleted_count": len(deleted_ids),
+            "deleted_ids": deleted_ids,
+            "boreholes": boreholes,
+            "stats_pending": True,
+        }
+    )
+
+
 @app.route("/api/borehole/add", methods=["POST"])
 def add_borehole() -> Dict[str, Any]:
     """
@@ -444,7 +489,9 @@ def add_borehole() -> Dict[str, Any]:
     borehole_id = data_loader.get_borehole_id(new_index)
 
     # Compute coverage using cache (adds to cache)
-    coverage = coverage_service.compute_coverage_cached(borehole_id, lon, lat)
+    coverage = coverage_service.compute_coverage_cached(
+        borehole_id, lon, lat, exclude_zones=exclude_zones
+    )
 
     # Get updated boreholes list
     boreholes = data_loader.get_boreholes_geojson()
@@ -536,15 +583,15 @@ def export_boreholes_csv() -> Response:
 
         props = feature.get("properties", {})
         coords = feature.get("geometry", {}).get("coordinates", [0, 0])
-        props = feature.get("properties", {})
-        coords = feature.get("geometry", {}).get("coordinates", [0, 0])
 
         # coords are [lon, lat] in WGS84
         lon, lat = coords[0], coords[1]
         easting, northing = transformer.transform(lon, lat)
 
-        borehole_id = props.get("id", "")
-        zone = props.get("zone", "")
+        borehole_id = props.get("location_id", "") or props.get("id", "")
+        # zone_ids is the SSOT list of zone names from the server
+        zone_ids = props.get("zone_ids", [])
+        zone = ", ".join(zone_ids) if zone_ids else ""
 
         writer.writerow([borehole_id, f"{easting:.2f}", f"{northing:.2f}", zone])
 
