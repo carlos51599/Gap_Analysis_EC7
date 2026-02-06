@@ -32,6 +32,7 @@ try:
     from shapely.geometry.base import BaseGeometry
     from shapely import wkt
     from shapely.ops import unary_union
+
     SHAPELY_AVAILABLE = True
 except ImportError:
     BaseGeometry = Any  # type: ignore
@@ -46,15 +47,16 @@ except ImportError:
 @dataclass
 class CellStats:
     """Statistics for a single cell in a split cluster (Second Pass output).
-    
-    When a cluster is partitioned due to size, each cell gets its own 
+
+    When a cluster is partitioned due to size, each cell gets its own
     Second Pass optimization. This dataclass captures the per-cell results.
-    
+
     Key Field:
     ----------
     tier2_wkt: The cell-specific Tier 2 boundary. For split clusters,
                the overall tier2 is the UNION of all cell tier2 geometries.
     """
+
     cell_index: int
     tier2_wkt: Optional[str] = None
     tier1_wkt: Optional[str] = None
@@ -66,7 +68,7 @@ class CellStats:
     precovered_count: int = 0
     area_ha: float = 0.0
     r_max: float = 0.0
-    
+
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "CellStats":
         """Create CellStats from solver dict output."""
@@ -83,10 +85,10 @@ class CellStats:
             area_ha=d.get("area_ha", 0.0),
             r_max=d.get("r_max", 0.0),
         )
-    
+
     def get_tier2_geometry(self) -> Optional["BaseGeometry"]:
         """Parse tier2_wkt into a Shapely geometry.
-        
+
         Returns:
             Shapely geometry or None if tier2_wkt is missing/invalid.
         """
@@ -96,7 +98,7 @@ class CellStats:
             return wkt.loads(self.tier2_wkt)
         except Exception:
             return None
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert back to dict for serialization."""
         result: Dict[str, Any] = {
@@ -125,16 +127,17 @@ class CellStats:
 @dataclass
 class ThirdPassPairStats:
     """Statistics for a single cell-cell pair in Third Pass.
-    
+
     Third Pass optimizes the boundaries between adjacent cells,
     creating new tier2 boundaries for each cell pair.
     """
+
     cell_key: str = ""
     tier2_wkt: Optional[str] = None
     bh_count: int = 0
     status: str = "unknown"
     r_max: float = 0.0
-    
+
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "ThirdPassPairStats":
         """Create from solver dict output."""
@@ -145,7 +148,7 @@ class ThirdPassPairStats:
             status=d.get("status", "unknown"),
             r_max=d.get("r_max", 0.0),
         )
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert back to dict for serialization."""
         result: Dict[str, Any] = {
@@ -162,22 +165,22 @@ class ThirdPassPairStats:
 @dataclass
 class ThirdPassStats:
     """Aggregated Third Pass statistics for a split cluster.
-    
+
     Contains results from optimizing all adjacent cell pairs.
     """
+
     status: str = "not_run"
     pairs_processed: int = 0
     pair_stats: List[ThirdPassPairStats] = field(default_factory=list)
     tier_geometries: Dict[str, Dict[str, str]] = field(default_factory=dict)
     third_pass_removed: List[Dict[str, Any]] = field(default_factory=list)
     third_pass_added: List[Dict[str, Any]] = field(default_factory=list)
-    
+
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "ThirdPassStats":
         """Create from solver dict output."""
         pair_stats = [
-            ThirdPassPairStats.from_dict(ps) 
-            for ps in d.get("pair_stats", [])
+            ThirdPassPairStats.from_dict(ps) for ps in d.get("pair_stats", [])
         ]
         return cls(
             status=d.get("status", "not_run"),
@@ -187,7 +190,7 @@ class ThirdPassStats:
             third_pass_removed=d.get("third_pass_removed", []),
             third_pass_added=d.get("third_pass_added", []),
         )
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert back to dict for serialization."""
         return {
@@ -209,105 +212,105 @@ class ThirdPassStats:
 class ClusterStats:
     """
     Typed container for CZRC cluster optimization statistics.
-    
+
     Handles both split and unsplit clusters with a unified interface.
     Use `get_tier2_geometry()` to access the Tier 2 boundary regardless
     of whether the cluster was partitioned during optimization.
-    
+
     Why This Exists:
     ----------------
-    The tier2 boundary visualization bug (where split cluster tier2 wasn't 
+    The tier2 boundary visualization bug (where split cluster tier2 wasn't
     shown) happened because:
     - Unsplit clusters store tier2 in `stats["tier2_wkt"]`
     - Split clusters store tier2 in `stats["cell_stats"][i]["tier2_wkt"]`
-    
+
     This dataclass provides `get_tier2_geometry()` which handles both cases
     transparently, preventing future bugs.
-    
+
     Usage:
     ------
     ```python
     # Convert from solver output at module boundary
     stats = ClusterStats.from_dict(solver_output["cluster_stats"]["ZoneA+ZoneB"])
-    
+
     # Access tier2 without knowing if cluster was split
     tier2_geom = stats.get_tier2_geometry()
     if tier2_geom:
         _add_boundary_trace(fig, geometry=tier2_geom, ...)
-    
+
     # Use typed attributes (IDE autocomplete works!)
     print(f"Cluster {stats.cluster_index}: {stats.selected_count} boreholes")
     ```
     """
-    
+
     # === Identity ===
     cluster_key: str = ""
     cluster_index: int = 0
     pair_keys: List[str] = field(default_factory=list)
-    
+
     # === Cluster Type ===
     was_split: bool = False
     is_unified_cluster: bool = False
-    
+
     # === Geometry (Unsplit Clusters Only) ===
     tier1_wkt: Optional[str] = None
     tier2_wkt: Optional[str] = None  # Only populated for unsplit clusters!
-    
+
     # === Spacing ===
     overall_r_max: float = 0.0
     r_max: float = 0.0
     max_spacing_m: float = 0.0
     area_ha: float = 0.0
-    
+
     # === Test Point Counts ===
     tier1_test_points: int = 0
     tier2_ring_test_points: int = 0
     precovered_count: int = 0
     unsatisfied_count: int = 0
-    
+
     # === Borehole Counts ===
     candidates_count: int = 0
     selected_count: int = 0
     boreholes_removed: int = 0
     boreholes_added: int = 0
-    
+
     # === Timing ===
     solve_time: float = 0.0
-    
+
     # === Status ===
     status: str = "unknown"
-    
+
     # === Split Cluster Data ===
     cell_wkts: List[str] = field(default_factory=list)
     cell_stats: List[CellStats] = field(default_factory=list)
     cell_czrc_stats: Optional[ThirdPassStats] = None
-    
+
     # === ILP Details (kept as dict for flexibility) ===
     ilp_stats: Dict[str, Any] = field(default_factory=dict)
-    
+
     # === Borehole Lists (expensive to type fully, kept as dicts) ===
     first_pass_candidates: List[Dict[str, Any]] = field(default_factory=list)
     czrc_test_points: List[Dict[str, Any]] = field(default_factory=list)
     second_pass_boreholes: List[Dict[str, Any]] = field(default_factory=list)
-    
+
     # ═══════════════════════════════════════════════════════════════════
     # UNIFIED GEOMETRY ACCESS - The main reason this dataclass exists!
     # ═══════════════════════════════════════════════════════════════════
-    
+
     def get_tier2_geometry(self) -> Optional["BaseGeometry"]:
         """
         Get the Tier 2 boundary geometry, handling split/unsplit transparently.
-        
+
         For unsplit clusters: Returns the single tier2 polygon from tier2_wkt
         For split clusters: Returns the union of all cell tier2 polygons
-        
+
         This method eliminates the need for callers to check `was_split` and
         handle the two data access patterns separately.
-        
+
         Returns:
             Shapely geometry representing the Tier 2 boundary, or None if
             the geometry is unavailable or Shapely is not installed.
-        
+
         Example:
             >>> stats = ClusterStats.from_dict(solver_output)
             >>> tier2 = stats.get_tier2_geometry()
@@ -316,7 +319,7 @@ class ClusterStats:
         """
         if not SHAPELY_AVAILABLE:
             return None
-            
+
         if not self.was_split:
             # Unsplit: tier2_wkt is at cluster level
             if self.tier2_wkt:
@@ -331,15 +334,15 @@ class ClusterStats:
                 geom = cs.get_tier2_geometry()
                 if geom is not None and not geom.is_empty:
                     tier2_geoms.append(geom)
-            
+
             if tier2_geoms:
                 return unary_union(tier2_geoms)
-        
+
         return None
-    
+
     def get_tier1_geometry(self) -> Optional["BaseGeometry"]:
         """Get the Tier 1 boundary geometry.
-        
+
         Returns:
             Shapely geometry or None if tier1_wkt is missing/invalid.
         """
@@ -349,10 +352,10 @@ class ClusterStats:
             return wkt.loads(self.tier1_wkt)
         except Exception:
             return None
-    
+
     def get_cell_geometries(self) -> List["BaseGeometry"]:
         """Get the cell partition geometries (split clusters only).
-        
+
         Returns:
             List of Shapely geometries for each cell, or empty list if
             cluster is not split or Shapely is unavailable.
@@ -366,40 +369,39 @@ class ClusterStats:
             except Exception:
                 continue
         return geoms
-    
+
     # ═══════════════════════════════════════════════════════════════════
     # FACTORY METHODS
     # ═══════════════════════════════════════════════════════════════════
-    
+
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "ClusterStats":
         """
         Create ClusterStats from a dictionary (solver output).
-        
+
         This method handles the full complexity of split vs unsplit cluster
         data, parsing nested cell_stats and cell_czrc_stats automatically.
-        
+
         Args:
             d: Dictionary from czrc_solver.py output
-        
+
         Returns:
             Typed ClusterStats instance
-        
+
         Example:
             >>> raw_stats = czrc_result["cluster_stats"]["ZoneA+ZoneB"]
             >>> stats = ClusterStats.from_dict(raw_stats)
             >>> print(stats.selected_count)  # IDE autocomplete works!
         """
         # Parse cell_stats for split clusters
-        cell_stats = [
-            CellStats.from_dict(cs) 
-            for cs in d.get("cell_stats", [])
-        ]
-        
+        cell_stats = [CellStats.from_dict(cs) for cs in d.get("cell_stats", [])]
+
         # Parse Third Pass stats if present
         cell_czrc_raw = d.get("cell_czrc_stats")
-        cell_czrc_stats = ThirdPassStats.from_dict(cell_czrc_raw) if cell_czrc_raw else None
-        
+        cell_czrc_stats = (
+            ThirdPassStats.from_dict(cell_czrc_raw) if cell_czrc_raw else None
+        )
+
         return cls(
             cluster_key=d.get("cluster_key", ""),
             cluster_index=d.get("cluster_index", 0),
@@ -430,14 +432,14 @@ class ClusterStats:
             czrc_test_points=d.get("czrc_test_points", []),
             second_pass_boreholes=d.get("second_pass_boreholes", []),
         )
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """
         Convert back to dictionary for JSON serialization.
-        
+
         Maintains backward compatibility with existing code paths that
         expect dict format.
-        
+
         Returns:
             Dictionary representation matching solver output format
         """
@@ -466,13 +468,13 @@ class ClusterStats:
             "czrc_test_points": self.czrc_test_points,
             "second_pass_boreholes": self.second_pass_boreholes,
         }
-        
+
         # Only include geometry fields if present
         if self.tier1_wkt:
             result["tier1_wkt"] = self.tier1_wkt
         if self.tier2_wkt:
             result["tier2_wkt"] = self.tier2_wkt
-            
+
         # Only include split cluster fields if applicable
         if self.cell_wkts:
             result["cell_wkts"] = self.cell_wkts
@@ -480,29 +482,29 @@ class ClusterStats:
             result["cell_stats"] = [cs.to_dict() for cs in self.cell_stats]
         if self.cell_czrc_stats:
             result["cell_czrc_stats"] = self.cell_czrc_stats.to_dict()
-        
+
         return result
-    
+
     # ═══════════════════════════════════════════════════════════════════
     # UTILITY METHODS
     # ═══════════════════════════════════════════════════════════════════
-    
+
     def get_total_boreholes(self) -> int:
         """Get total borehole count across all cells.
-        
+
         For split clusters, sums across cell_stats. For unsplit, returns
         selected_count directly.
         """
         if not self.was_split:
             return self.selected_count
         return sum(cs.selected_count for cs in self.cell_stats)
-    
+
     def get_cell_count(self) -> int:
         """Get number of cells (1 for unsplit clusters)."""
         if not self.was_split:
             return 1
         return len(self.cell_stats)
-    
+
     def summary(self) -> str:
         """Human-readable summary of cluster optimization results."""
         split_indicator = " (split)" if self.was_split else ""

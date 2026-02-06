@@ -2282,7 +2282,7 @@ def _add_czrc_ilp_visibility_trace(
 
     Where R_max = max(R_A, R_B, ...) for all zones involved in the region.
 
-    The Tier 2 multiplier is configurable via CONFIG["visualization"]["czrc_tier2_rmax_multiplier"].
+    The Tier 2 multiplier is configurable via CONFIG["czrc_optimization"]["tier2_rmax_multiplier"].
 
     This trace is controlled by the CZRC Grid checkbox in the Layers panel.
 
@@ -2310,8 +2310,10 @@ def _add_czrc_ilp_visibility_trace(
     tier2_dash = ilp_style.get("tier2_dash", "longdash")
     line_width = ilp_style.get("line_width", 2)
 
-    # Get Tier 2 multiplier from config (default: 2.0)
-    tier2_mult = vis_cfg.get("czrc_tier2_rmax_multiplier", 2.0)
+    # Get Tier 2 multiplier from canonical source: czrc_optimization section
+    # (Unifies with solver config - visualization should match solver behavior)
+    czrc_cfg = CONFIG.get("czrc_optimization", {})
+    tier2_mult = czrc_cfg.get("tier2_rmax_multiplier", 2.0)
 
     # Format multiplier for legend (remove trailing zeros)
     mult_str = f"{tier2_mult:g}"

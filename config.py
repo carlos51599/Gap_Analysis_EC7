@@ -571,7 +571,7 @@ CONFIG: Dict[str, Any] = {
         # - Tier 1 (CZRC + 1×R_max): Test points + candidate grid + first-pass BHs as candidates
         # - Tier 2 (CZRC + tier2_rmax_multiplier×R_max): First-pass BHs as locked constants
         # where R_max = max(zone spacings) for each pairwise CZRC region
-        "czrc_tier2_rmax_multiplier": 2.5,  # Multiplier for Tier 2 expansion (default: 2.0)
+        # NOTE: tier2_rmax_multiplier is defined in czrc_optimization section
         #
         # Show expanded ILP visibility regions (tier2_rmax_multiplier × R_max expansion boundaries)
         # Displays: Tier 1 (candidate grid boundary) and Tier 2 (visibility boundary) as lines
