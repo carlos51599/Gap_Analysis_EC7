@@ -50,7 +50,14 @@ from shapely.errors import GEOSException
 from shapely.geometry import Point, Polygon, MultiPolygon, MultiPoint
 
 # Import typed data models for borehole provenance tracking
-from Gap_Analysis_EC7.models.data_models import Borehole, BoreholePass, BoreholeStatus
+from Gap_Analysis_EC7.models.data_models import (
+    Borehole,
+    BoreholePass,
+    BoreholeStatus,
+    get_bh_coords,
+    get_bh_position,
+    get_bh_source_pass,
+)
 from shapely.geometry.base import BaseGeometry
 
 from Gap_Analysis_EC7.solvers.czrc_geometry import parse_pair_key
@@ -282,27 +289,29 @@ def _validate_removed_in_tier1(
     cross_cluster_violations = 0
 
     for bh in removed_boreholes:
-        pt = Point(bh["x"], bh["y"])
+        # Duck-typed: works with Dict or Borehole
+        x, y = get_bh_coords(bh)
+        pt = Point(x, y)
 
         # Check 1: Is it inside ANY Tier 1?
         if not tier1_union.contains(pt):
             tier_violations += 1
             log.warning(
                 "🚨 TIER VIOLATION: Removed borehole (%.1f, %.1f) is OUTSIDE Tier 1!",
-                bh["x"],
-                bh["y"],
+                x,
+                y,
             )
 
         # Check 2: Is it from the CURRENT cluster? (compare full cluster_key strings)
         if current_cluster_key is not None:
-            origin_cluster = bh.get("origin_cluster")
+            origin_cluster = bh.get("origin_cluster") if isinstance(bh, dict) else None
             if origin_cluster is not None and origin_cluster != current_cluster_key:
                 cross_cluster_violations += 1
                 log.warning(
                     "🔴 CROSS-CLUSTER VIOLATION: Borehole (%.1f, %.1f) from '%s' "
                     "removed by '%s'!",
-                    bh["x"],
-                    bh["y"],
+                    x,
+                    y,
                     origin_cluster,
                     current_cluster_key,
                 )
@@ -348,14 +357,16 @@ def _validate_provenance(
 
     cross_cluster_count = 0
     for bh in removed_boreholes:
-        origin = bh.get("origin_cluster")
+        # Duck-typed: works with Dict or Borehole
+        x, y = get_bh_coords(bh)
+        origin = bh.get("origin_cluster") if isinstance(bh, dict) else None
         # Compare cluster_key strings directly (both are pair_keys joined)
         if origin is not None and origin != current_cluster_key:
             cross_cluster_count += 1
             log.warning(
                 "⚠️ CROSS-CLUSTER: Borehole (%.1f, %.1f) from '%s' processed by '%s'",
-                bh["x"],
-                bh["y"],
+                x,
+                y,
                 origin,
                 current_cluster_key,
             )
