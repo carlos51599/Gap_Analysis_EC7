@@ -45,7 +45,10 @@ from geopandas import GeoDataFrame
 from shapely.geometry import Polygon
 
 from Gap_Analysis_EC7.config_types import BoreholeMarkerConfig, ProposedMarkerConfig
-from Gap_Analysis_EC7.models.data_models import BoreholePass
+from Gap_Analysis_EC7.models.data_models import (
+    BoreholePass,
+    get_bh_coords, get_bh_position, get_bh_radius,
+)
 
 
 # ===========================================================================
@@ -1198,7 +1201,7 @@ def _build_proposed_coverage_per_zone(
         nearby_boreholes = [
             bh
             for bh in proposed_boreholes
-            if Point(bh["x"], bh["y"]).within(expanded_zone)
+            if Point(*get_bh_coords(bh)).within(expanded_zone)
         ]
 
         if not nearby_boreholes:
@@ -1206,7 +1209,7 @@ def _build_proposed_coverage_per_zone(
 
         # Buffer each borehole by ZONE's spacing (not borehole's origin zone)
         borehole_buffers = [
-            Point(bh["x"], bh["y"]).buffer(zone_spacing) for bh in nearby_boreholes
+            Point(*get_bh_coords(bh)).buffer(zone_spacing) for bh in nearby_boreholes
         ]
 
         # Union and clip to zone
@@ -1307,7 +1310,7 @@ def add_proposed_borehole_traces(
     elif coverage_radius is not None and coverage_radius > 0:
         # Fallback: single radius for all boreholes (legacy behavior)
         buffer_circles = [
-            Point(bh["x"], bh["y"]).buffer(bh.get("coverage_radius", coverage_radius))
+            Point(*get_bh_coords(bh)).buffer(get_bh_radius(bh) or coverage_radius)
             for bh in proposed_boreholes
         ]
         buffer_union = unary_union(buffer_circles)
@@ -1349,8 +1352,8 @@ def add_proposed_borehole_traces(
             )
 
     # Add marker trace
-    proposed_x = [bh["x"] for bh in proposed_boreholes]
-    proposed_y = [bh["y"] for bh in proposed_boreholes]
+    proposed_x = [get_bh_coords(bh)[0] for bh in proposed_boreholes]
+    proposed_y = [get_bh_coords(bh)[1] for bh in proposed_boreholes]
     customdata = [[i + 1] for i in range(len(proposed_boreholes))]
 
     fig.add_trace(

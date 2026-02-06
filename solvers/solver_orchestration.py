@@ -57,7 +57,10 @@ from Gap_Analysis_EC7.solvers.solver_config import (
     create_parallel_config,
     create_precision_config,
 )
-from Gap_Analysis_EC7.models.data_models import Borehole, BoreholePass, BoreholeStatus
+from Gap_Analysis_EC7.models.data_models import (
+    Borehole, BoreholePass, BoreholeStatus,
+    get_bh_coords, get_bh_position,
+)
 
 
 # ===========================================================================
@@ -1065,7 +1068,7 @@ def _ensure_complete_coverage(
 
     # Calculate remaining uncovered area
     coverage_union = unary_union(
-        [Point(bh["x"], bh["y"]).buffer(radius) for bh in boreholes]
+        [Point(*get_bh_coords(bh)).buffer(radius) for bh in boreholes]
     )
     remaining = uncovered_gaps.difference(coverage_union)
 
@@ -1133,7 +1136,7 @@ def verify_coverage(
         remaining_area = original_area
     else:
         coverage_union = unary_union(
-            [Point(bh["x"], bh["y"]).buffer(radius) for bh in boreholes]
+            [Point(*get_bh_coords(bh)).buffer(radius) for bh in boreholes]
         )
         remaining = uncovered_gaps.difference(coverage_union)
         remaining_area = remaining.area if not remaining.is_empty else 0
