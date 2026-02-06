@@ -28,7 +28,15 @@ import math
 import geopandas as gpd
 from shapely.geometry.base import BaseGeometry
 
-from Gap_Analysis_EC7.models.data_models import Borehole, BoreholePass, BoreholeStatus
+from Gap_Analysis_EC7.models.data_models import (
+    Borehole,
+    BoreholePass,
+    BoreholeStatus,
+    get_bh_coords,
+    get_bh_position,
+    get_bh_radius,
+    get_bh_source_pass,
+)
 from Gap_Analysis_EC7.parallel.coverage_orchestrator import (
     deserialize_geodataframe,
     serialize_geometry,
@@ -723,10 +731,10 @@ def worker_process_filter_combination(
                         # czrc_solver now sets source_pass on all boreholes via Borehole dataclass.
                         # Position-based fallback retained as safety net for edge cases.
                         second_pass_added_positions = {
-                            (bh["x"], bh["y"]) for bh in czrc_added
+                            get_bh_position(bh) for bh in czrc_added
                         }
                         third_pass_added_positions = {
-                            (bh["x"], bh["y"]) for bh in third_pass_added
+                            get_bh_position(bh) for bh in third_pass_added
                         }
 
                         def _get_source_pass(bh: Dict[str, Any]) -> BoreholePass:
@@ -744,7 +752,7 @@ def worker_process_filter_combination(
                                     return upstream
                                 return BoreholePass.from_string(str(upstream))
                             # Fallback: position-based lookup (legacy safety net)
-                            pos = (bh["x"], bh["y"])
+                            pos = get_bh_position(bh)
                             if pos in third_pass_added_positions:
                                 return BoreholePass.THIRD
                             if pos in second_pass_added_positions:
@@ -754,9 +762,9 @@ def worker_process_filter_combination(
                         # Update result with optimized boreholes including source_pass
                         result["proposed"] = [
                             Borehole(
-                                x=bh["x"],
-                                y=bh["y"],
-                                coverage_radius=bh.get("coverage_radius", max_spacing),
+                                x=get_bh_coords(bh)[0],
+                                y=get_bh_coords(bh)[1],
+                                coverage_radius=get_bh_radius(bh) or max_spacing,
                                 source_pass=_get_source_pass(bh),
                                 status=BoreholeStatus.from_string(
                                     bh.get("status", "proposed")
