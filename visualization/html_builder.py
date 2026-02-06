@@ -1254,7 +1254,7 @@ def _add_third_pass_grid_trace(
     # === STRATEGY: Use tier2_wkt directly from tier_geometries when available ===
     # This ensures visualization matches the solver's exact tier2 geometry
     tier_geometries = third_pass_data.get("tier_geometries", {})
-    
+
     # Get Tier 2 styling from config
     vis_cfg = CONFIG.get("visualization", {})
     ilp_style = vis_cfg.get("czrc_ilp_visibility", {})
@@ -1263,12 +1263,13 @@ def _add_third_pass_grid_trace(
     tier2_line_width = ilp_style.get("line_width", 2)
     tier2_mult = czrc_cfg.get("tier2_rmax_multiplier", 2.0)
     mult_str = f"{tier2_mult:g}"
-    
+
     # Parse per-cluster Tier 2 boundaries from tier_geometries
     # Keys are like "cluster_{N}_{pair_key}" or "Cell_{i}_Cell_{j}"
     import re
+
     cluster_tier2_geoms: Dict[int, List] = {}
-    
+
     for pair_key, tier_data in tier_geometries.items():
         tier2_wkt_str = tier_data.get("tier2_wkt")
         if not tier2_wkt_str:
@@ -1285,7 +1286,7 @@ def _add_third_pass_grid_trace(
             cluster_tier2_geoms[cluster_num].append(tier2_geom)
         except Exception:  # noqa: BLE001
             pass
-    
+
     # Create per-cluster unified Tier 2 boundaries with tooltips
     if cluster_tier2_geoms:
         for cluster_num, geoms in sorted(cluster_tier2_geoms.items()):
