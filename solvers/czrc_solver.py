@@ -179,6 +179,61 @@ def _get_cluster_log_header(cluster_key: str) -> str:
     return full_name if full_name else safe_name
 
 
+def _setup_highs_logging(
+    highs_log_folder: Optional[str],
+    cluster_idx: int,
+    cluster_key: str,
+) -> Optional[str]:
+    """
+    Set up HiGHS solver log file for a cluster solve.
+
+    Creates the log folder if needed, generates an appropriate log file path
+    based on cluster index, and writes a header with cluster composition.
+
+    Args:
+        highs_log_folder: Optional folder path for log files. If None, no logging.
+        cluster_idx: Cluster index for naming. Encoding:
+            - >= 1000: Direct solve (non-split cluster), display as Cluster{N}
+            - < 1000: Split cluster cell, display as Cluster{N}_Cell{M}
+        cluster_key: Original cluster key for header (e.g., "Zone1_Zone2+Zone2_Zone3")
+
+    Returns:
+        Path to log file, or None if logging disabled.
+    """
+    if not highs_log_folder:
+        return None
+
+    import os
+
+    os.makedirs(highs_log_folder, exist_ok=True)
+
+    # Generate full composition header for the log file
+    cluster_header = _get_cluster_log_header(cluster_key)
+
+    # Determine log file path based on cluster index encoding
+    if cluster_idx >= 1000:
+        # Direct solve - use simple Cluster{N} naming (N is 1-based for display)
+        actual_cluster_num = (cluster_idx - 1000) + 1
+        highs_log_file = os.path.join(
+            highs_log_folder, f"second_Cluster{actual_cluster_num}.log"
+        )
+    else:
+        # Cell solve within split cluster - use Cluster{N}_Cell{M} naming
+        actual_cluster_num = (cluster_idx // 100) + 1
+        cell_num = (cluster_idx % 100) + 1
+        highs_log_file = os.path.join(
+            highs_log_folder,
+            f"second_Cluster{actual_cluster_num}_Cell{cell_num}.log",
+        )
+
+    # Write cluster composition header to log file
+    with open(highs_log_file, "w") as f:
+        f.write(f"# Cluster composition: {cluster_header}\n")
+        f.write(f"# Original cluster_key: {cluster_key}\n\n")
+
+    return highs_log_file
+
+
 def _get_czrc_stall_detection_config(czrc_ilp_config: Dict[str, Any]) -> Dict[str, Any]:
     """
     Resolve stall detection config for CZRC, respecting apply_to_czrc flag.
@@ -657,6 +712,66 @@ def filter_tier2_by_existing_coverage(
         f"      🔶 filter_tier2_by_existing_coverage: {original_count} → {len(filtered)} (removed {removed_count} in coverage)"
     )
     return filtered
+
+
+def _compute_tier2_ring_test_points_with_filter(
+    tier1_region: BaseGeometry,
+    tier2_region: BaseGeometry,
+    r_max: float,
+    config: Dict[str, Any],
+    zones_clip_geometry: Optional[BaseGeometry],
+) -> List[Dict[str, Any]]:
+    """
+    Generate Tier 2 ring test points with config-driven filtering.
+
+    Combines test point generation, existing coverage filtering, and
+    config-based enable/disable logic into a single orchestration call.
+
+    Args:
+        tier1_region: Tier 1 boundary geometry
+        tier2_region: Tier 2 boundary geometry
+        r_max: Maximum coverage radius
+        config: CZRC config dict with tier2_test_point_protection settings
+        zones_clip_geometry: Optional geometry to clip test points to
+
+    Returns:
+        List of Tier 2 ring test points (empty if disabled or no points)
+    """
+    t2_protection = config.get("tier2_test_point_protection", {})
+    if not t2_protection.get("enabled", True):
+        return []
+
+    t2_multiplier = t2_protection.get("tier2_test_spacing_multiplier", 3.0)
+    base_test_mult = config.get("test_spacing_mult", 0.2)
+
+    tier2_ring_test_points = generate_tier2_ring_test_points(
+        tier1_region,
+        tier2_region,
+        r_max,
+        tier2_spacing_multiplier=t2_multiplier,
+        base_test_spacing_mult=base_test_mult,
+        clip_geometry=zones_clip_geometry,
+    )
+
+    if not tier2_ring_test_points:
+        return []
+
+    # Filter out points inside existing borehole coverage
+    existing_coverage = config.get("_existing_coverage")
+    print(
+        f"   🔷 [_compute_tier2_ring] existing_coverage={existing_coverage is not None}, "
+        f"tier2 count={len(tier2_ring_test_points)}"
+    )
+    if existing_coverage is not None:
+        tier2_ring_test_points = filter_tier2_by_existing_coverage(
+            tier2_ring_test_points, existing_coverage
+        )
+    else:
+        print(
+            "   ⚠️ [_compute_tier2_ring] NO _existing_coverage in config - Tier 2 NOT filtered!"
+        )
+
+    return tier2_ring_test_points
 
 
 def classify_first_pass_boreholes(
@@ -1440,8 +1555,154 @@ def _assemble_czrc_results(
     return selected, removed, added
 
 
+def _validate_tier1_removals(
+    removed: List[Dict[str, Any]],
+    tier1_geom: BaseGeometry,
+    logger: logging.Logger,
+) -> int:
+    """
+    Validate that all removed boreholes were inside the Tier 1 region.
+
+    Logs warnings for each violation and an error summary if any found.
+    This is a sanity check to catch CZRC bugs where boreholes outside
+    the optimization region are incorrectly marked as removed.
+
+    Args:
+        removed: List of removed borehole dicts
+        tier1_geom: Tier 1 boundary geometry
+        logger: Logger for warnings/errors
+
+    Returns:
+        Count of tier violations found
+    """
+    tier1_violations = 0
+    for bh in removed:
+        x, y = get_bh_coords(bh)
+        pt = Point(x, y)
+        if not tier1_geom.contains(pt):
+            tier1_violations += 1
+            logger.warning(
+                f"⚠️ SECOND PASS TIER VIOLATION: Removed borehole "
+                f"({x:.1f}, {y:.1f}) is OUTSIDE Tier 1!"
+            )
+    if tier1_violations > 0:
+        logger.error(
+            f"❌ SECOND PASS: {tier1_violations} boreholes removed from OUTSIDE Tier 1!"
+        )
+    return tier1_violations
+
+
+def _build_cluster_stats(
+    cluster_key: str,
+    pair_keys: List[str],
+    unified_tier1: BaseGeometry,
+    unified_tier2: BaseGeometry,
+    overall_r_max: float,
+    cluster_idx: int,
+    tier1_test_points: List[Dict[str, Any]],
+    tier2_ring_test_points: List[Dict[str, Any]],
+    precovered_ct: int,
+    external: List[Dict[str, Any]],
+    locked: List[Dict[str, Any]],
+    unsatisfied: List[Dict[str, Any]],
+    candidates: List[Any],
+    bh_candidates: List[Dict[str, Any]],
+    selected: List[Dict[str, Any]],
+    removed: List[Dict[str, Any]],
+    added: List[Dict[str, Any]],
+    min_spacing: float,
+    elapsed: float,
+    ilp_stats: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Build comprehensive stats dictionary for cluster solve result.
+
+    Centralizes stats construction to simplify main function and ensure
+    consistent output format.
+
+    Args:
+        cluster_key: Cluster key string (e.g., "Zone1_Zone2+Zone2_Zone3")
+        pair_keys: List of constituent pair keys
+        unified_tier1: Tier 1 geometry
+        unified_tier2: Tier 2 geometry
+        overall_r_max: Maximum coverage radius
+        cluster_idx: Cluster index for display numbering
+        tier1_test_points: All Tier 1 test points
+        tier2_ring_test_points: All Tier 2 ring test points
+        precovered_ct: Count of precovered test points
+        external: External boreholes providing coverage
+        locked: Locked boreholes
+        unsatisfied: Unsatisfied test points sent to ILP
+        candidates: ILP candidate positions
+        bh_candidates: First-pass borehole candidates
+        selected: Selected boreholes from ILP
+        removed: Removed boreholes
+        added: Added boreholes
+        min_spacing: Coverage radius used
+        elapsed: Solve time in seconds
+        ilp_stats: ILP solver statistics
+
+    Returns:
+        Stats dictionary for cluster solve result
+    """
+    cluster_area_ha = unified_tier1.area / 10000.0  # m² to hectares
+
+    # Determine cluster display index (1-based for user display)
+    cluster_display_idx = (
+        (cluster_idx - 1000 + 1) if cluster_idx >= 1000 else (cluster_idx + 1)
+    )
+
+    return {
+        "status": "success",
+        "cluster_key": cluster_key,
+        "cluster_index": cluster_display_idx,
+        "pair_keys": pair_keys,
+        "is_unified_cluster": len(pair_keys) > 1,
+        "overall_r_max": overall_r_max,
+        "r_max": overall_r_max,
+        "area_ha": cluster_area_ha,
+        "max_spacing_m": overall_r_max,
+        "tier1_wkt": unified_tier1.wkt,
+        "tier2_wkt": unified_tier2.wkt,
+        "tier1_test_points": len(tier1_test_points),
+        "tier2_ring_test_points": len(tier2_ring_test_points),
+        "precovered_count": precovered_ct,
+        "external_coverage_bhs": len(external),
+        "unsatisfied_count": len(unsatisfied),
+        "candidates_count": len(candidates),
+        "selected_count": len(selected),
+        "boreholes_removed": len(removed),
+        "boreholes_added": len(added),
+        "solve_time": elapsed,
+        "ilp_stats": ilp_stats,
+        "first_pass_candidates": bh_candidates,
+        "czrc_test_points": (
+            _annotate_test_points_with_coverage(
+                tier1_test_points, locked, external_boreholes=external
+            )
+            + _annotate_test_points_with_coverage(
+                tier2_ring_test_points, locked, external_boreholes=external
+            )
+        ),
+        "second_pass_boreholes": [
+            Borehole(
+                x=get_bh_coords(bh)[0],
+                y=get_bh_coords(bh)[1],
+                coverage_radius=get_bh_radius(bh, default=min_spacing),
+                source_pass=get_bh_source_pass(bh, default=BoreholePass.FIRST),
+                status=BoreholeStatus.from_string(
+                    bh.get("status", "proposed")
+                    if isinstance(bh, dict)
+                    else bh.status.value
+                ),
+            ).as_dict()
+            for bh in selected
+        ],
+    }
+
+
 # ═══════════════════════════════════════════════════════════════════════════
-# � CELL SPLITTING (Large Region Decomposition)
+# 🔧 CELL SPLITTING (Large Region Decomposition)
 # ═══════════════════════════════════════════════════════════════════════════
 
 
@@ -2749,42 +3010,14 @@ def solve_czrc_ilp_for_cluster(
     )
 
     # Step 3.5: Generate Tier 2 ring test points if enabled
-    t2_protection = config.get("tier2_test_point_protection", {})
-    t2_enabled = t2_protection.get("enabled", True)
-    t2_multiplier = t2_protection.get("tier2_test_spacing_multiplier", 3.0)
-    base_test_mult = config.get("test_spacing_mult", 0.2)
-
-    tier2_ring_test_points = []
+    tier2_ring_test_points = _compute_tier2_ring_test_points_with_filter(
+        unified_tier1, unified_tier2, overall_r_max, config, zones_clip_geometry
+    )
     tier2_ring_unsatisfied = []
-    if t2_enabled:
-        tier2_ring_test_points = generate_tier2_ring_test_points(
-            unified_tier1,
-            unified_tier2,
-            overall_r_max,
-            tier2_spacing_multiplier=t2_multiplier,
-            base_test_spacing_mult=base_test_mult,
-            clip_geometry=zones_clip_geometry,
+    if tier2_ring_test_points:
+        tier2_ring_unsatisfied, _ = _compute_unsatisfied_test_points(
+            tier2_ring_test_points, locked, logger, external_boreholes=external
         )
-
-        # Filter out Tier 2 test points that fall inside existing borehole coverage
-        # This prevents spawning test points in areas already covered (green areas)
-        existing_coverage = config.get("_existing_coverage")
-        print(
-            f"   🔷 [solve_czrc_ilp_for_cluster] existing_coverage={existing_coverage is not None}, tier2 count={len(tier2_ring_test_points)}"
-        )
-        if existing_coverage is not None:
-            tier2_ring_test_points = filter_tier2_by_existing_coverage(
-                tier2_ring_test_points, existing_coverage
-            )
-        else:
-            print(
-                "   ⚠️ [solve_czrc_ilp_for_cluster] NO _existing_coverage in config - Tier 2 NOT filtered!"
-            )
-
-        if tier2_ring_test_points:
-            tier2_ring_unsatisfied, _ = _compute_unsatisfied_test_points(
-                tier2_ring_test_points, locked, logger, external_boreholes=external
-            )
 
     # Combine Tier 1 and Tier 2 ring unsatisfied test points
     unsatisfied = tier1_unsatisfied + tier2_ring_unsatisfied
@@ -2824,39 +3057,7 @@ def solve_czrc_ilp_for_cluster(
     cluster_key = "+".join(sorted(pair_keys))
 
     # Generate HiGHS log file path if folder provided
-    # Uses simple Cluster{N} naming for easy correlation with HTML tooltips
-    # Full cluster composition is written as a header inside the log file
-    highs_log_file: Optional[str] = None
-    cluster_header: Optional[str] = None
-    if highs_log_folder:
-        import os
-
-        os.makedirs(highs_log_folder, exist_ok=True)
-        # Generate full composition header for the log file
-        cluster_header = _get_cluster_log_header(cluster_key)
-        # cluster_idx < 1000: cell solve within split cluster
-        # cluster_idx >= 1000: direct solve (non-split cluster)
-        if cluster_idx >= 1000:
-            # Direct solve - use simple Cluster{N} naming (N is 1-based for user display)
-            actual_cluster_num = (cluster_idx - 1000) + 1  # Convert to 1-based
-            highs_log_file = os.path.join(
-                highs_log_folder, f"second_Cluster{actual_cluster_num}.log"
-            )
-        else:
-            # Cell solve within split cluster - use Cluster{N}_Cell{M} naming
-            actual_cluster_num = (
-                cluster_idx // 100
-            ) + 1  # Extract cluster number (1-based)
-            cell_num = (cluster_idx % 100) + 1  # Extract cell number (1-based)
-            highs_log_file = os.path.join(
-                highs_log_folder,
-                f"second_Cluster{actual_cluster_num}_Cell{cell_num}.log",
-            )
-
-        # Always write cluster composition header to log file
-        with open(highs_log_file, "w") as f:
-            f.write(f"# Cluster composition: {cluster_header}\n")
-            f.write(f"# Original cluster_key: {cluster_key}\n\n")
+    highs_log_file = _setup_highs_logging(highs_log_folder, cluster_idx, cluster_key)
 
     if czrc_cache is not None:
         # Use cache: key is based on actual problem (unsatisfied test points)
@@ -2899,82 +3100,34 @@ def solve_czrc_ilp_for_cluster(
         indices, candidates, bh_candidates, min_spacing
     )
 
-    # === VALIDATION ASSERTIONS (Second Pass) ===
-    # Check that all removed boreholes were inside Tier 1 region
-    tier1_violations = 0
-    for bh in removed:
-        x, y = get_bh_coords(bh)
-        pt = Point(x, y)
-        if not unified_tier1.contains(pt):
-            tier1_violations += 1
-            log.warning(
-                f"⚠️ SECOND PASS TIER VIOLATION: Removed borehole "
-                f"({x:.1f}, {y:.1f}) is OUTSIDE Tier 1!"
-            )
-    if tier1_violations > 0:
-        log.error(
-            f"❌ SECOND PASS: {tier1_violations} boreholes removed from OUTSIDE Tier 1!"
-        )
+    # Validate that removed boreholes were inside Tier 1
+    _validate_tier1_removals(removed, unified_tier1, log)
 
     elapsed = time.perf_counter() - start_time
 
-    cluster_key = "+".join(sorted(pair_keys))
-    cluster_area_ha = unified_tier1.area / 10000.0  # m² to hectares
-    # Determine cluster display index (1-based for user display)
-    # cluster_idx >= 1000: direct solve (N = cluster_idx - 1000 + 1)
-    # cluster_idx < 1000: split solve (handled differently)
-    cluster_display_idx = (
-        (cluster_idx - 1000 + 1) if cluster_idx >= 1000 else (cluster_idx + 1)
+    # Step 7: Build stats
+    stats = _build_cluster_stats(
+        cluster_key=cluster_key,
+        pair_keys=pair_keys,
+        unified_tier1=unified_tier1,
+        unified_tier2=unified_tier2,
+        overall_r_max=overall_r_max,
+        cluster_idx=cluster_idx,
+        tier1_test_points=tier1_test_points,
+        tier2_ring_test_points=tier2_ring_test_points,
+        precovered_ct=precovered_ct,
+        external=external,
+        locked=locked,
+        unsatisfied=unsatisfied,
+        candidates=candidates,
+        bh_candidates=bh_candidates,
+        selected=selected,
+        removed=removed,
+        added=added,
+        min_spacing=min_spacing,
+        elapsed=elapsed,
+        ilp_stats=ilp_stats,
     )
-    stats = {
-        "status": "success",
-        "cluster_key": cluster_key,
-        "cluster_index": cluster_display_idx,  # 1-based index for log/tooltip correlation
-        "pair_keys": pair_keys,
-        "is_unified_cluster": len(pair_keys) > 1,
-        "overall_r_max": overall_r_max,
-        "r_max": overall_r_max,  # For tier geometry export
-        "area_ha": cluster_area_ha,  # Tier1 area in hectares for stats reporting
-        "max_spacing_m": overall_r_max,  # Max zone spacing for this cluster
-        "tier1_wkt": unified_tier1.wkt,  # For tier geometry export
-        "tier2_wkt": unified_tier2.wkt,  # For tier geometry export
-        "tier1_test_points": len(tier1_test_points),
-        "tier2_ring_test_points": len(tier2_ring_test_points),
-        "precovered_count": precovered_ct,
-        "external_coverage_bhs": len(external),  # Track external coverage sources
-        "unsatisfied_count": len(unsatisfied),
-        "candidates_count": len(candidates),
-        "selected_count": len(selected),
-        "boreholes_removed": len(removed),  # For per-cluster stats reporting
-        "boreholes_added": len(added),  # For per-cluster stats reporting
-        "solve_time": elapsed,
-        "ilp_stats": ilp_stats,
-        "first_pass_candidates": bh_candidates,
-        # CZRC test points for visualization with is_covered flag including external coverage
-        "czrc_test_points": (
-            _annotate_test_points_with_coverage(
-                tier1_test_points, locked, external_boreholes=external
-            )
-            + _annotate_test_points_with_coverage(
-                tier2_ring_test_points, locked, external_boreholes=external
-            )
-        ),
-        # Second Pass output = selected (for direct ILP, this is final; for split, Third Pass comes after)
-        "second_pass_boreholes": [
-            Borehole(
-                x=get_bh_coords(bh)[0],
-                y=get_bh_coords(bh)[1],
-                coverage_radius=get_bh_radius(bh, default=min_spacing),
-                source_pass=get_bh_source_pass(bh, default=BoreholePass.FIRST),
-                status=BoreholeStatus.from_string(
-                    bh.get("status", "proposed")
-                    if isinstance(bh, dict)
-                    else bh.status.value
-                ),
-            ).as_dict()
-            for bh in selected
-        ],
-    }
     return selected, removed, added, stats
 
 
