@@ -664,12 +664,14 @@ class CoverageService:
             # Get layer_key for grouping in UI
             layer_key = self._get_zone_layer_key(zone)
             layer_display_name = self._get_zone_display_name(zone, idx)
+            max_spacing_m = self._get_zone_spacing(zone)
 
             per_zone_stats.append(
                 {
                     "zone_name": zone_name,
                     "layer_key": layer_key,
                     "layer_display_name": layer_display_name,
+                    "max_spacing_m": max_spacing_m,
                     "total_area_m2": round(zone_area, 1),
                     "covered_area_m2": round(covered_area, 1),
                     "coverage_pct": round(coverage_pct, 1),
@@ -852,12 +854,14 @@ class CoverageService:
             # Get layer_key for grouping in UI
             layer_key = self._get_zone_layer_key(zone)
             layer_display_name = self._get_zone_display_name(zone, idx)
+            max_spacing_m = self._get_zone_spacing(zone)
 
             per_zone_stats.append(
                 {
                     "zone_name": zone_name,
                     "layer_key": layer_key,
                     "layer_display_name": layer_display_name,
+                    "max_spacing_m": max_spacing_m,
                     "total_area_m2": round(zone_area, 1),
                     "covered_area_m2": round(covered_area, 1),
                     "coverage_pct": round(coverage_pct, 1),

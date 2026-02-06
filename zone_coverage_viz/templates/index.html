@@ -384,6 +384,14 @@
             flex-shrink: 0;
         }
         
+        .coverage-stats .spacing-value {
+            font-size: 11px;
+            color: #888;
+            min-width: 40px;
+            text-align: right;
+            flex-shrink: 0;
+        }
+        
         .coverage-stats .group-children {
             margin-left: 22px;
             overflow: hidden;
@@ -1204,7 +1212,8 @@
                         displayName: displayName,
                         zones: [],
                         totalArea: 0,
-                        coveredArea: 0
+                        coveredArea: 0,
+                        maxSpacing: zone.max_spacing_m || null
                     };
                 }
                 groupedZones[layerKey].zones.push(zone);
@@ -1239,6 +1248,7 @@
                                    onclick="event.stopPropagation(); toggleGroupVisibility('${layerKey}', this.checked)">
                             <span class="group-name">${group.displayName}</span>
                             <span class="group-pct ${groupPctClass}">${groupPct}%</span>
+                            ${group.maxSpacing ? `<span class="spacing-value" title="Max borehole spacing">${group.maxSpacing}m</span>` : ''}
                         </div>
                         <div class="group-children" id="children-${layerKey}">
                 `;
@@ -1265,6 +1275,7 @@
                                 <div class="progress-fill" style="width: ${Math.min(zone.coverage_pct, 100)}%; background: ${pctColor};"></div>
                             </div>
                             <span class="pct-value ${pctClass}">${zone.coverage_pct}%</span>
+                            ${zone.max_spacing_m ? `<span class="spacing-value" title="Max borehole spacing">${zone.max_spacing_m}m</span>` : ''}
                         </div>
                     `;
                 }
