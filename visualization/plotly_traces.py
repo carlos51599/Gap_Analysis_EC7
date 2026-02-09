@@ -47,7 +47,9 @@ from shapely.geometry import Polygon
 from Gap_Analysis_EC7.config_types import BoreholeMarkerConfig, ProposedMarkerConfig
 from Gap_Analysis_EC7.models.data_models import (
     BoreholePass,
-    get_bh_coords, get_bh_position, get_bh_radius,
+    get_bh_coords,
+    get_bh_position,
+    get_bh_radius,
 )
 
 

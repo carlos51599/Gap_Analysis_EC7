@@ -55,6 +55,196 @@ except ImportError:
     # Will use PuLP fallback - slower but functional
     pass
 
+import time as time_module
+
+
+# ===========================================================================
+# 🔧 STALL DETECTION CLASS
+# ===========================================================================
+
+
+class StallDetector:
+    """
+    Manages stall detection state and callback for HiGHS MIP solver.
+
+    Monitors MIP gap improvement rate and triggers early termination when
+    solver stalls (gap improvement falls below threshold over time window).
+
+    Detection Logic:
+    1. Wait until gap drops below gap_threshold_pct
+    2. After threshold reached, wait warmup_seconds
+    3. Then compare current gap to gap from comparison_seconds ago
+    4. If improvement < min_improvement_pct → STALL DETECTED → interrupt solver
+
+    Usage:
+        detector = StallDetector(config, logger)
+        detector.attach(h)  # Attach to HiGHS solver
+        h.run()
+        detector.detach(h)  # Stop callback
+        stats = detector.get_stats()
+    """
+
+    def __init__(
+        self,
+        config: Dict[str, Any],
+        logger: Optional[logging.Logger] = None,
+    ):
+        """
+        Initialize StallDetector.
+
+        Args:
+            config: Stall detection config dict with keys:
+                enabled, gap_threshold_pct, warmup_seconds,
+                comparison_seconds, min_improvement_pct
+            logger: Optional logger for status messages
+        """
+        self.enabled = config.get("enabled", False)
+        self.gap_threshold = config.get("gap_threshold_pct", 15.0)
+        self.warmup_seconds = config.get("warmup_seconds", 15.0)
+        self.comparison_seconds = config.get("comparison_seconds", 10.0)
+        self.min_improvement = config.get("min_improvement_pct", 5.0)
+        self.logger = logger
+
+        # Mutable state for callback
+        self.state: Dict[str, Any] = {
+            "gap_times": [],  # List of (time, gap) tuples
+            "threshold_reached": False,
+            "threshold_reached_time": None,
+            "terminated": False,
+            "termination_reason": None,
+            "last_check_time": 0.0,
+            "start_time": time_module.perf_counter(),
+        }
+
+    def attach(self, h: "highspy.Highs") -> None:
+        """Attach stall detection callback to HiGHS solver."""
+        if not self.enabled:
+            return
+
+        # Reset start time for each attach
+        self.state["start_time"] = time_module.perf_counter()
+
+        h.setCallback(self._callback, None)
+        h.startCallback(highspy.cb.HighsCallbackType.kCallbackMipInterrupt)
+
+        if self.logger:
+            self.logger.info(
+                f"   📊 Stall detection: gap threshold {self.gap_threshold:.1f}%, then "
+                f"require {self.min_improvement:.1f} pt improvement over "
+                f"{self.comparison_seconds:.0f}s (after {self.warmup_seconds:.0f}s warmup)"
+            )
+
+    def detach(self, h: "highspy.Highs") -> None:
+        """Stop callback and finalize state."""
+        if not self.enabled:
+            return
+        h.stopCallback(highspy.cb.HighsCallbackType.kCallbackMipInterrupt)
+
+        # Log outcome if stall was detected
+        if self.logger and self.state["terminated"]:
+            final_time = (
+                self.state["gap_times"][-1][0] if self.state["gap_times"] else 0
+            )
+            final_gap = (
+                self.state["gap_times"][-1][1] if self.state["gap_times"] else None
+            )
+            if final_gap is not None:
+                self.logger.info(
+                    f"   ✅ Early termination via stall detection at t={final_time:.1f}s "
+                    f"(gap: {final_gap:.1f}%, samples: {len(self.state['gap_times'])})"
+                )
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Return stall detection statistics."""
+        gap_times = self.state["gap_times"]
+        return {
+            "stall_detected": self.state["terminated"],
+            "final_gap_pct": gap_times[-1][1] if gap_times else None,
+            "log_rows_processed": len(gap_times),
+            "gap_history": [g for _, g in gap_times],
+            "termination_reason": self.state["termination_reason"],
+        }
+
+    def _callback(
+        self,
+        callback_type: int,
+        message: str,
+        data_out: Any,
+        data_in: Any,
+        user_callback_data: Any,
+    ) -> None:
+        """Time-based stall detection callback with gap threshold."""
+        state = self.state
+
+        if state["terminated"]:
+            data_in.user_interrupt = True
+            return
+
+        # Only process MipInterrupt events
+        if callback_type != highspy.cb.HighsCallbackType.kCallbackMipInterrupt:
+            return
+
+        current_time = time_module.perf_counter() - state["start_time"]
+        current_gap_pct = data_out.mip_gap * 100.0
+
+        # Skip infinite gaps
+        if current_gap_pct == float("inf"):
+            return
+
+        # Sample every 1 second only
+        if current_time - state["last_check_time"] < 1.0:
+            return
+        state["last_check_time"] = current_time
+
+        # Check if gap threshold has been reached
+        if not state["threshold_reached"]:
+            if current_gap_pct <= self.gap_threshold:
+                state["threshold_reached"] = True
+                state["threshold_reached_time"] = current_time
+                if self.logger:
+                    self.logger.info(
+                        f"   📉 Gap threshold reached: {current_gap_pct:.2f}% <= "
+                        f"{self.gap_threshold:.1f}% at t={current_time:.1f}s (warmup starts now)"
+                    )
+            return  # Don't record until threshold reached
+
+        # Calculate time since threshold was reached
+        time_since_threshold = current_time - state["threshold_reached_time"]
+
+        # Skip recording during warmup
+        if time_since_threshold < self.warmup_seconds:
+            return
+
+        state["gap_times"].append((time_since_threshold, current_gap_pct))
+
+        # Find gap from comparison_seconds ago
+        comparison_time = time_since_threshold - self.comparison_seconds
+        if comparison_time < self.warmup_seconds:
+            return  # Not enough post-warmup history
+
+        old_gap = None
+        for t, g in reversed(state["gap_times"]):
+            if t <= comparison_time and g != float("inf"):
+                old_gap = g
+                break
+
+        if old_gap is None:
+            return
+
+        improvement = old_gap - current_gap_pct
+
+        if improvement < self.min_improvement:
+            # Stall detected!
+            data_in.user_interrupt = True
+            state["terminated"] = True
+            state["termination_reason"] = "stall_detected"
+            if self.logger:
+                self.logger.info(
+                    f"   🛑 Stall detected at t={current_time:.1f}s: "
+                    f"gap {current_gap_pct:.2f}% (improvement: {improvement:.2f} pts < "
+                    f"threshold: {self.min_improvement:.1f} pts over {self.comparison_seconds:.0f}s)"
+                )
+
 
 # ===========================================================================
 # 🔧 SOLVER SELECTION SECTION
@@ -539,6 +729,446 @@ def _solve_ilp_pulp_fallback(
 # ===========================================================================
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Helper Functions for _solve_ilp_highspy
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _init_highs_solver(
+    time_limit: float,
+    mip_gap: float,
+    threads: int,
+    mip_heuristic_effort: float,
+    verbose: int,
+    highs_log_file: Optional[str],
+) -> "highspy.Highs":
+    """
+    Initialize HiGHS solver with options.
+
+    Args:
+        time_limit: Maximum solve time in seconds
+        mip_gap: MIP gap tolerance
+        threads: Number of threads (should be 1 for batch processing)
+        mip_heuristic_effort: Fraction of effort for primal heuristics
+        verbose: Verbosity level (0=silent, 1=progress)
+        highs_log_file: Optional path to write HiGHS solver output
+
+    Returns:
+        Configured HiGHS solver instance
+    """
+    h = highspy.Highs()
+    h.setOptionValue("output_flag", verbose > 0)
+    h.setOptionValue("time_limit", float(time_limit))
+    h.setOptionValue("mip_rel_gap", mip_gap)
+    h.setOptionValue("threads", threads)
+    h.setOptionValue("mip_heuristic_effort", mip_heuristic_effort)
+    if highs_log_file:
+        h.setOptionValue("log_file", highs_log_file)
+    return h
+
+
+def _add_candidate_variables(h: "highspy.Highs", n_candidates: int) -> None:
+    """
+    Add binary decision variables x_j for each candidate.
+
+    Objective: minimize sum(x_j) - minimize total boreholes selected.
+    Each x_j is binary (0 or 1).
+
+    Args:
+        h: HiGHS solver instance
+        n_candidates: Number of candidate locations
+    """
+    cost = np.ones(n_candidates, dtype=np.double)
+    lower = np.zeros(n_candidates, dtype=np.double)
+    upper = np.ones(n_candidates, dtype=np.double)
+    h.addCols(n_candidates, cost, lower, upper, 0, [], [], [])
+    for j in range(n_candidates):
+        h.changeColIntegrality(j, highspy.HighsVarType.kInteger)
+
+
+def _apply_warm_start(
+    h: "highspy.Highs",
+    warm_start_indices: List[int],
+    n_candidates: int,
+    n_test_points: int,
+    coverage: Dict[int, List[int]],
+    use_full_coverage: bool,
+    logger: Optional[logging.Logger],
+) -> None:
+    """
+    Apply warm start solution to HiGHS model.
+
+    Builds a solution vector from warm start indices and sets it via setSolution().
+    For partial coverage, also sets y_i indicator values based on coverage.
+
+    Args:
+        h: HiGHS solver instance
+        warm_start_indices: Candidate indices to seed as initial solution
+        n_candidates: Number of candidate locations
+        n_test_points: Number of test points
+        coverage: Dict mapping test_point_index -> list of covering candidates
+        use_full_coverage: Whether using full coverage formulation
+        logger: Optional logger
+    """
+    warm_set = set(warm_start_indices)
+
+    col_values = []
+    # x values: 1 for warm start indices, 0 otherwise
+    for j in range(n_candidates):
+        col_values.append(1.0 if j in warm_set else 0.0)
+
+    # y values (if partial coverage): 1 if covered by warm start
+    if not use_full_coverage:
+        for i in range(n_test_points):
+            covering = coverage.get(i, [])
+            covered_by_warm = any(j in warm_set for j in covering)
+            col_values.append(1.0 if covered_by_warm else 0.0)
+
+    # Create HighsSolution and set it
+    solution = highspy.HighsSolution()
+    solution.col_value = col_values
+    h.setSolution(solution)
+
+    if logger:
+        logger.info(f"   🔥 Warm start: {len(warm_start_indices)} candidates seeded")
+
+
+# Module-level constant: HiGHS status code to name mapping
+_HIGHS_STATUS_NAMES: Dict[int, str] = {}  # Populated at first use
+
+
+def _get_highs_status_name(model_status: "highspy.HighsModelStatus") -> str:
+    """Get human-readable name for HiGHS model status."""
+    # Lazy initialization of status mapping
+    global _HIGHS_STATUS_NAMES
+    if not _HIGHS_STATUS_NAMES:
+        _HIGHS_STATUS_NAMES = {
+            highspy.HighsModelStatus.kInfeasible: "Infeasible",
+            highspy.HighsModelStatus.kUnbounded: "Unbounded",
+            highspy.HighsModelStatus.kUnboundedOrInfeasible: "UnboundedOrInfeasible",
+            highspy.HighsModelStatus.kNotset: "NotSet",
+            highspy.HighsModelStatus.kLoadError: "LoadError",
+            highspy.HighsModelStatus.kModelError: "ModelError",
+            highspy.HighsModelStatus.kPresolveError: "PresolveError",
+            highspy.HighsModelStatus.kSolveError: "SolveError",
+            highspy.HighsModelStatus.kPostsolveError: "PostsolveError",
+            highspy.HighsModelStatus.kModelEmpty: "ModelEmpty",
+            highspy.HighsModelStatus.kObjectiveBound: "ObjectiveBound",
+            highspy.HighsModelStatus.kObjectiveTarget: "ObjectiveTarget",
+            highspy.HighsModelStatus.kTimeLimit: "TimeLimit",
+            highspy.HighsModelStatus.kIterationLimit: "IterationLimit",
+            highspy.HighsModelStatus.kSolutionLimit: "SolutionLimit",
+            highspy.HighsModelStatus.kInterrupt: "Interrupt",
+            highspy.HighsModelStatus.kMemoryLimit: "MemoryLimit",
+        }
+    return _HIGHS_STATUS_NAMES.get(model_status, str(model_status))
+
+
+def _handle_solver_failure(
+    model_status: "highspy.HighsModelStatus",
+    logger: Optional[logging.Logger],
+) -> Dict[str, Any]:
+    """
+    Map HiGHS failure status to error stats dict.
+
+    Args:
+        model_status: HiGHS model status code
+        logger: Optional logger
+
+    Returns:
+        Error dictionary with method and reason
+    """
+    status_name = _get_highs_status_name(model_status)
+    if logger:
+        logger.warning(f"⚠️ ILP solver status (highspy): {status_name}")
+    return {"method": "ilp_failed", "reason": status_name}
+
+
+def _add_coverage_constraints(
+    h: "highspy.Highs",
+    coverage: Dict[int, List[int]],
+    n_candidates: int,
+    n_test_points: int,
+    min_covered: int,
+    use_full_coverage: bool,
+) -> None:
+    """
+    Add coverage constraints to HiGHS model.
+
+    For full coverage (≥99.9%): Each test point must be covered by at least one candidate.
+    For partial coverage: Add y_i indicator variables with linking constraints.
+
+    Args:
+        h: HiGHS solver instance
+        coverage: Dict mapping test_point_index -> list of covering candidate indices
+        n_candidates: Number of candidate locations (x_j variables)
+        n_test_points: Total number of test points
+        min_covered: Minimum number of test points that must be covered
+        use_full_coverage: True for full coverage formulation
+    """
+    if use_full_coverage:
+        # Full coverage: for each test point, sum(x_j covering it) >= 1
+        for i in range(n_test_points):
+            covering = coverage.get(i, [])
+            if covering:
+                h.addRow(
+                    1.0,
+                    highspy.kHighsInf,  # >= 1
+                    len(covering),
+                    np.array(covering, dtype=np.int32),
+                    np.ones(len(covering), dtype=np.double),
+                )
+    else:
+        # Partial coverage: add y_i indicator variables
+        # y_cost=0, y_bounds=[0,1], binary
+        y_cost = np.zeros(n_test_points, dtype=np.double)
+        y_lower = np.zeros(n_test_points, dtype=np.double)
+        y_upper = np.ones(n_test_points, dtype=np.double)
+        h.addCols(n_test_points, y_cost, y_lower, y_upper, 0, [], [], [])
+
+        for i in range(n_test_points):
+            h.changeColIntegrality(n_candidates + i, highspy.HighsVarType.kInteger)
+
+        # Constraint: sum(y) >= min_covered
+        y_indices = np.arange(
+            n_candidates, n_candidates + n_test_points, dtype=np.int32
+        )
+        y_coeffs = np.ones(n_test_points, dtype=np.double)
+        h.addRow(
+            float(min_covered), highspy.kHighsInf, n_test_points, y_indices, y_coeffs
+        )
+
+        # Linking constraints: y_i <= sum(x_j for j covering i)
+        for i in range(n_test_points):
+            covering = coverage.get(i, [])
+            if covering:
+                # y_i - sum(x_j) <= 0
+                indices = np.array([n_candidates + i] + list(covering), dtype=np.int32)
+                coeffs = np.array([1.0] + [-1.0] * len(covering), dtype=np.double)
+                h.addRow(-highspy.kHighsInf, 0.0, len(indices), indices, coeffs)
+            else:
+                # Uncoverable point: force y_i = 0
+                h.changeColBounds(n_candidates + i, 0.0, 0.0)
+
+
+def _add_conflict_constraints(
+    h: "highspy.Highs",
+    candidates: List[Point],
+    conflict_constraint_mode: str,
+    exclusion_factor: float,
+    max_spacing: float,
+    use_conflict_constraints: bool,
+    min_clique_size: int,
+    max_cliques: int,
+    max_conflict_pairs: int,
+    logger: Optional[logging.Logger],
+) -> Dict[str, Any]:
+    """
+    Add exclusion constraints to prevent boreholes too close together.
+
+    Supports two modes:
+    - "clique": Add clique-based constraints (more efficient)
+    - "pairwise": Add pairwise x_i + x_j <= 1 constraints
+
+    Args:
+        h: HiGHS solver instance
+        candidates: List of candidate borehole positions
+        conflict_constraint_mode: "clique" or "pairwise"
+        exclusion_factor: Fraction of max_spacing for exclusion distance
+        max_spacing: Maximum spacing parameter
+        use_conflict_constraints: Whether constraints are enabled
+        min_clique_size: Minimum clique size to add (clique mode)
+        max_cliques: Maximum cliques to add (clique mode)
+        max_conflict_pairs: Maximum pairs to add (pairwise mode)
+        logger: Optional logger
+
+    Returns:
+        Dict with conflict constraint statistics
+    """
+    conflict_stats: Dict[str, Any] = {
+        "constraint_mode": (
+            conflict_constraint_mode if use_conflict_constraints else "disabled"
+        ),
+        "enabled": use_conflict_constraints,
+    }
+
+    if not use_conflict_constraints:
+        return conflict_stats
+
+    from Gap_Analysis_EC7.solvers.optimization_geometry import (
+        _generate_conflict_pairs,
+        _generate_clique_constraints,
+    )
+
+    exclusion_dist = exclusion_factor * max_spacing
+    conflict_stats["exclusion_factor"] = exclusion_factor
+    conflict_stats["exclusion_dist_m"] = exclusion_dist
+
+    if conflict_constraint_mode == "clique":
+        cliques, clique_stats = _generate_clique_constraints(
+            candidates, exclusion_dist, min_clique_size, max_cliques, logger
+        )
+        for clique in cliques:
+            h.addRow(
+                -highspy.kHighsInf,
+                1.0,
+                len(clique),
+                np.array(clique, dtype=np.int32),
+                np.ones(len(clique), dtype=np.double),
+            )
+        conflict_stats.update(clique_stats)
+        conflict_stats["n_conflict_constraints"] = len(cliques)
+    else:
+        pairs, pairs_gen, truncated = _generate_conflict_pairs(
+            candidates, exclusion_dist, max_conflict_pairs, logger
+        )
+        for j, k in pairs:
+            h.addRow(
+                -highspy.kHighsInf,
+                1.0,
+                2,
+                np.array([j, k], dtype=np.int32),
+                np.array([1.0, 1.0], dtype=np.double),
+            )
+        conflict_stats.update(
+            {
+                "conflict_pairs_count": len(pairs),
+                "conflict_pairs_generated": pairs_gen,
+                "conflict_was_truncated": truncated,
+                "n_conflict_constraints": len(pairs),
+            }
+        )
+
+    return conflict_stats
+
+
+def _extract_highs_solution(
+    h: "highspy.Highs",
+    n_candidates: int,
+    n_test_points: int,
+    n_coverable: int,
+    use_full_coverage: bool,
+    coverage_target_pct: float,
+    stall_stats: Dict[str, Any],
+    conflict_stats: Dict[str, Any],
+    warm_start_indices: Optional[List[int]],
+    use_conflict_constraints: bool,
+    logger: Optional[logging.Logger],
+) -> Tuple[Optional[List[int]], Dict[str, Any]]:
+    """
+    Extract solution and build stats dict from solved HiGHS model.
+
+    Args:
+        h: HiGHS solver instance (after run())
+        n_candidates: Number of candidate variables
+        n_test_points: Total test points
+        n_coverable: Number of coverable test points
+        use_full_coverage: Whether full coverage formulation was used
+        coverage_target_pct: Target coverage percentage
+        stall_stats: Stall detection statistics
+        conflict_stats: Conflict constraint statistics
+        warm_start_indices: Warm start indices used (or None)
+        use_conflict_constraints: Whether conflict constraints were enabled
+        logger: Optional logger
+
+    Returns:
+        Tuple of (selected_indices, stats_dict) or (None, error_dict)
+    """
+    model_status = h.getModelStatus()
+
+    # Check if we have a feasible solution
+    has_feasible_solution = model_status in (
+        highspy.HighsModelStatus.kOptimal,
+        highspy.HighsModelStatus.kInterrupt,
+        highspy.HighsModelStatus.kTimeLimit,
+        highspy.HighsModelStatus.kSolutionLimit,
+    )
+
+    if not has_feasible_solution:
+        return None, _handle_solver_failure(model_status, logger)
+
+    sol = h.getSolution()
+    info = h.getInfo()
+
+    # Check for valid solution
+    if sol.col_value is None or len(sol.col_value) < n_candidates:
+        if logger:
+            logger.warning("⚠️ No valid solution available after early termination")
+        return None, {"method": "ilp_failed", "reason": "no_solution"}
+
+    # Extract selected candidates (x_j > 0.5)
+    selected = [j for j in range(n_candidates) if sol.col_value[j] > 0.5]
+
+    # Calculate actual coverage
+    if use_full_coverage:
+        covered_count = n_coverable
+        actual_pct = 100.0
+    else:
+        covered_count = sum(
+            1 for i in range(n_test_points) if sol.col_value[n_candidates + i] > 0.5
+        )
+        actual_pct = (covered_count / n_coverable * 100) if n_coverable else 0
+
+    # Determine solver status
+    if model_status == highspy.HighsModelStatus.kOptimal:
+        solver_status = "optimal"
+    elif model_status == highspy.HighsModelStatus.kInterrupt:
+        solver_status = "early_termination"
+    elif model_status == highspy.HighsModelStatus.kTimeLimit:
+        solver_status = "time_limit"
+    else:
+        solver_status = "feasible"
+
+    # Compute final MIP gap manually
+    final_mip_gap_pct = None
+    primal = info.objective_function_value
+    if hasattr(info, "mip_dual_bound") and primal != 0:
+        dual = info.mip_dual_bound
+        final_mip_gap_pct = abs(primal - dual) / abs(primal) * 100.0
+
+    # Update stall_stats if needed
+    if stall_stats["final_gap_pct"] is None and final_mip_gap_pct is not None:
+        stall_stats["final_gap_pct"] = final_mip_gap_pct
+        if solver_status == "optimal":
+            stall_stats["termination_reason"] = "Optimal"
+
+    stats = {
+        "method": "ilp_highspy",
+        "formulation": "full_coverage" if use_full_coverage else "partial_coverage",
+        "solver_status": solver_status,
+        "objective_value": info.objective_function_value,
+        "coverage_target_pct": coverage_target_pct,
+        "actual_coverage_pct": actual_pct,
+        "test_points_covered": covered_count,
+        "test_points_total": n_test_points,
+        "test_points_coverable": n_coverable,
+        "n_variables": (
+            n_candidates if use_full_coverage else n_candidates + n_test_points
+        ),
+        "conflict_stats": conflict_stats,
+        "conflict_constraints_enabled": use_conflict_constraints,
+        "warm_start_used": warm_start_indices is not None
+        and len(warm_start_indices) > 0,
+        "warm_start_count": len(warm_start_indices) if warm_start_indices else 0,
+        "stall_detection": stall_stats,
+        "final_mip_gap_pct": final_mip_gap_pct,
+    }
+
+    status_emoji = "✅" if solver_status == "optimal" else "⚡"
+    if logger:
+        gap_info = (
+            f" (gap: {stall_stats['final_gap_pct']:.1f}%)"
+            if stall_stats["final_gap_pct"]
+            else ""
+        )
+        logger.info(
+            f"   {status_emoji} ILP {solver_status} (highspy): {len(selected)} boreholes, "
+            f"{actual_pct:.1f}% coverage{gap_info}"
+        )
+
+    return selected, stats
+
+
 def _solve_ilp_highspy(
     test_points: List[Point],
     candidates: List[Point],
@@ -621,29 +1251,17 @@ def _solve_ilp_highspy(
     min_covered = int(n_coverable * coverage_target_pct / 100.0)
 
     # === STEP 1: Initialize HiGHS solver ===
-    h = highspy.Highs()
-    h.setOptionValue("output_flag", verbose > 0)
-    h.setOptionValue("time_limit", float(time_limit))
-    h.setOptionValue("mip_rel_gap", mip_gap)
-    h.setOptionValue("threads", threads)
-    h.setOptionValue("mip_heuristic_effort", mip_heuristic_effort)
-
-    # Write HiGHS output to log file if path provided
-    if highs_log_file:
-        h.setOptionValue("log_file", highs_log_file)
+    h = _init_highs_solver(
+        time_limit=time_limit,
+        mip_gap=mip_gap,
+        threads=threads,
+        mip_heuristic_effort=mip_heuristic_effort,
+        verbose=verbose,
+        highs_log_file=highs_log_file,
+    )
 
     # === STEP 2: Add candidate selection variables (x_j) ===
-    # minimize sum(x_j) - minimize total boreholes
-    cost = np.ones(n_candidates, dtype=np.double)
-    lower = np.zeros(n_candidates, dtype=np.double)
-    upper = np.ones(n_candidates, dtype=np.double)
-
-    # Add columns with empty constraint matrix initially
-    h.addCols(n_candidates, cost, lower, upper, 0, [], [], [])
-
-    # Make them binary (integer with 0-1 bounds)
-    for j in range(n_candidates):
-        h.changeColIntegrality(j, highspy.HighsVarType.kInteger)
+    _add_candidate_variables(h, n_candidates)
 
     if logger:
         form_type = "FULL" if use_full_coverage else "PARTIAL"
@@ -653,446 +1271,66 @@ def _solve_ilp_highspy(
         )
 
     # === STEP 3: Add coverage constraints ===
-    if use_full_coverage:
-        # Full coverage: for each test point, at least one covering candidate
-        for i in range(n_test_points):
-            covering = coverage.get(i, [])
-            if covering:
-                h.addRow(
-                    1.0,
-                    highspy.kHighsInf,  # >= 1
-                    len(covering),
-                    np.array(covering, dtype=np.int32),
-                    np.ones(len(covering), dtype=np.double),
-                )
-    else:
-        # Partial coverage: add y_i indicator variables
-        # Need to extend column count: x_0..x_{n-1}, y_0..y_{n_test_points-1}
-
-        # Add y variables with zero cost (we only minimize x)
-        y_cost = np.zeros(n_test_points, dtype=np.double)
-        y_lower = np.zeros(n_test_points, dtype=np.double)
-        y_upper = np.ones(n_test_points, dtype=np.double)
-        h.addCols(n_test_points, y_cost, y_lower, y_upper, 0, [], [], [])
-
-        # Make y variables binary
-        for i in range(n_test_points):
-            h.changeColIntegrality(n_candidates + i, highspy.HighsVarType.kInteger)
-
-        # Constraint: sum(y) >= min_covered
-        y_indices = np.arange(
-            n_candidates, n_candidates + n_test_points, dtype=np.int32
-        )
-        y_coeffs = np.ones(n_test_points, dtype=np.double)
-        h.addRow(
-            float(min_covered), highspy.kHighsInf, n_test_points, y_indices, y_coeffs
-        )
-
-        # Linking constraints: y_i <= sum(x_j for j covering i)
-        for i in range(n_test_points):
-            covering = coverage.get(i, [])
-            if covering:
-                # y_i - sum(x_j for j covering i) <= 0
-                indices = np.array([n_candidates + i] + list(covering), dtype=np.int32)
-                coeffs = np.array([1.0] + [-1.0] * len(covering), dtype=np.double)
-                h.addRow(-highspy.kHighsInf, 0.0, len(indices), indices, coeffs)
-            else:
-                # Uncoverable point: y_i = 0
-                h.changeColBounds(n_candidates + i, 0.0, 0.0)
+    _add_coverage_constraints(
+        h=h,
+        coverage=coverage,
+        n_candidates=n_candidates,
+        n_test_points=n_test_points,
+        min_covered=min_covered,
+        use_full_coverage=use_full_coverage,
+    )
 
     # === STEP 4: Add conflict constraints ===
-    conflict_stats: Dict[str, Any] = {
-        "constraint_mode": (
-            conflict_constraint_mode if use_conflict_constraints else "disabled"
-        ),
-        "enabled": use_conflict_constraints,
-    }
-
-    if use_conflict_constraints:
-        from Gap_Analysis_EC7.solvers.optimization_geometry import (
-            _generate_conflict_pairs,
-            _generate_clique_constraints,
-        )
-
-        exclusion_dist = exclusion_factor * max_spacing
-        conflict_stats["exclusion_factor"] = exclusion_factor
-        conflict_stats["exclusion_dist_m"] = exclusion_dist
-
-        if conflict_constraint_mode == "clique":
-            cliques, clique_stats = _generate_clique_constraints(
-                candidates, exclusion_dist, min_clique_size, max_cliques, logger
-            )
-            for clique in cliques:
-                # sum(x_j for j in clique) <= 1
-                h.addRow(
-                    -highspy.kHighsInf,
-                    1.0,
-                    len(clique),
-                    np.array(clique, dtype=np.int32),
-                    np.ones(len(clique), dtype=np.double),
-                )
-            conflict_stats.update(clique_stats)
-            conflict_stats["n_conflict_constraints"] = len(cliques)
-        else:
-            pairs, pairs_gen, truncated = _generate_conflict_pairs(
-                candidates, exclusion_dist, max_conflict_pairs, logger
-            )
-            for j, k in pairs:
-                # x_j + x_k <= 1
-                h.addRow(
-                    -highspy.kHighsInf,
-                    1.0,
-                    2,
-                    np.array([j, k], dtype=np.int32),
-                    np.array([1.0, 1.0], dtype=np.double),
-                )
-            conflict_stats.update(
-                {
-                    "conflict_pairs_count": len(pairs),
-                    "conflict_pairs_generated": pairs_gen,
-                    "conflict_was_truncated": truncated,
-                    "n_conflict_constraints": len(pairs),
-                }
-            )
+    conflict_stats = _add_conflict_constraints(
+        h=h,
+        candidates=candidates,
+        conflict_constraint_mode=conflict_constraint_mode,
+        exclusion_factor=exclusion_factor,
+        max_spacing=max_spacing,
+        use_conflict_constraints=use_conflict_constraints,
+        min_clique_size=min_clique_size,
+        max_cliques=max_cliques,
+        max_conflict_pairs=max_conflict_pairs,
+        logger=logger,
+    )
 
     # === STEP 5: Apply warm start ===
     if warm_start_indices:
-        warm_set = set(warm_start_indices)
-
-        # Build solution vector
-        n_total_cols = (
-            n_candidates if use_full_coverage else n_candidates + n_test_points
+        _apply_warm_start(
+            h=h,
+            warm_start_indices=warm_start_indices,
+            n_candidates=n_candidates,
+            n_test_points=n_test_points,
+            coverage=coverage,
+            use_full_coverage=use_full_coverage,
+            logger=logger,
         )
-        col_values = []
 
-        # x values: 1 for warm start indices, 0 otherwise
-        for j in range(n_candidates):
-            col_values.append(1.0 if j in warm_set else 0.0)
-
-        # y values (if partial coverage): 1 if covered by warm start
-        if not use_full_coverage:
-            for i in range(n_test_points):
-                covering = coverage.get(i, [])
-                covered_by_warm = any(j in warm_set for j in covering)
-                col_values.append(1.0 if covered_by_warm else 0.0)
-
-        # Create HighsSolution and set it
-        solution = highspy.HighsSolution()
-        solution.col_value = col_values
-        status = h.setSolution(solution)
-
-        if logger:
-            logger.info(
-                f"   🔥 Warm start: {len(warm_start_indices)} candidates seeded"
-            )
-
-    # === STEP 6: Set up stall detection callback (if enabled) ===
-    # ══════════════════════════════════════════════════════════════════════════
-    # STALL DETECTION (Log-Based)
-    # ══════════════════════════════════════════════════════════════════════════
-    # Monitors MIP gap improvement rate, not just absolute gap level.
-    #
-    # Key Insight: HiGHS has two types of progress:
-    #   1. Primal progress: Finding better feasible solutions (BestSol improves)
-    #   2. Dual progress: Proving optimality (BestBound tightens, gap decreases)
-    #
-    # The kCallbackMipImprovingSolution callback ONLY fires for primal progress.
-    # When solver stalls on proving optimality (dual progress only), no new
-    # solutions are found, so that callback never fires.
-    #
-    # Solution: Use kCallbackMipLogging which fires every time HiGHS prints
-    # a log row (controlled by mip_min_logging_interval, default 5 seconds).
-    # This captures BOTH types of progress via the mip_gap field.
-    #
-    # Detection Logic:
-    #   - Track gap at each log row (every ~5 seconds)
-    #   - After warmup_log_rows, compare current gap to comparison_window rows ago
-    #   - If improvement < min_improvement_pct gap points → STALL DETECTED
-    # ══════════════════════════════════════════════════════════════════════════
-
-    stall_enabled = stall_detection_config.get("enabled", False)
-    stall_stats = {
-        "stall_detected": False,
-        "final_gap_pct": None,
-        "log_rows_processed": 0,
-        "gap_history": [],
-        "termination_reason": None,
-    }
-
-    if stall_enabled:
-        # Extract stall detection parameters (now in seconds directly)
-        # gap_threshold_pct: only start stall detection once gap is below this
-        # warmup_seconds: skip first N seconds AFTER threshold reached
-        # comparison_seconds: compare current gap to gap from N seconds ago
-        # min_improvement_pct: require at least this many gap points improvement
-        gap_threshold = stall_detection_config.get("gap_threshold_pct", 15.0)
-        warmup_seconds = stall_detection_config.get("warmup_seconds", 15.0)
-        comparison_seconds = stall_detection_config.get("comparison_seconds", 10.0)
-        min_improvement = stall_detection_config.get("min_improvement_pct", 5.0)
-
-        # Mutable state for callback (time-based tracking)
-        import time as time_module
-
-        callback_state = {
-            "gap_times": [],  # List of (time, gap) tuples - only after threshold reached
-            "threshold_reached": False,  # True once gap drops below threshold
-            "threshold_reached_time": None,  # Time when threshold was first reached
-            "terminated": False,
-            "termination_reason": None,
-            "last_check_time": 0.0,
-            "start_time": time_module.perf_counter(),
-        }
-
-        hscb = highspy.cb
-
-        def stall_detection_callback(
-            callback_type: int,
-            message: str,
-            data_out: Any,
-            data_in: Any,
-            user_callback_data: Any,
-        ) -> None:
-            """Time-based stall detection callback with gap threshold.
-
-            Uses kCallbackMipInterrupt which respects user_interrupt.
-            Stall detection only activates once gap drops below gap_threshold_pct.
-            After threshold is reached, waits warmup_seconds then starts monitoring.
-            """
-            nonlocal callback_state
-
-            if callback_state["terminated"]:
-                data_in.user_interrupt = True  # Keep signaling interrupt
-                return
-
-            # Only process MipInterrupt events
-            if callback_type != hscb.HighsCallbackType.kCallbackMipInterrupt:
-                return
-
-            current_time = time_module.perf_counter() - callback_state["start_time"]
-            current_gap_pct = data_out.mip_gap * 100.0
-
-            # Skip infinite gaps (no dual bound computed yet)
-            if current_gap_pct == float("inf"):
-                return
-
-            # Only sample every 1 second to avoid too many entries
-            if current_time - callback_state["last_check_time"] < 1.0:
-                return
-            callback_state["last_check_time"] = current_time
-
-            # Check if gap threshold has been reached
-            if not callback_state["threshold_reached"]:
-                if current_gap_pct <= gap_threshold:
-                    callback_state["threshold_reached"] = True
-                    callback_state["threshold_reached_time"] = current_time
-                    if logger:
-                        logger.info(
-                            f"   📉 Gap threshold reached: {current_gap_pct:.2f}% <= {gap_threshold:.1f}% "
-                            f"at t={current_time:.1f}s (warmup starts now)"
-                        )
-                return  # Don't record samples until threshold is reached
-
-            # Record this gap sample (only after threshold reached)
-            time_since_threshold = (
-                current_time - callback_state["threshold_reached_time"]
-            )
-
-            # Only start recording samples AFTER warmup is complete
-            # This ensures comparison window only looks at post-warmup data
-            if time_since_threshold < warmup_seconds:
-                return  # Still in warmup, don't record or compare
-
-            callback_state["gap_times"].append((time_since_threshold, current_gap_pct))
-
-            # Find gap from comparison_seconds ago (must be after warmup)
-            comparison_time = time_since_threshold - comparison_seconds
-
-            # Need at least comparison_seconds of history after warmup
-            if comparison_time < warmup_seconds:
-                return  # Not enough post-warmup history yet
-
-            old_gap = None
-            for t, g in reversed(callback_state["gap_times"]):
-                if t <= comparison_time and g != float("inf"):
-                    old_gap = g
-                    break
-
-            if old_gap is None:
-                return  # Not enough history yet
-
-            improvement = old_gap - current_gap_pct  # Absolute gap point improvement
-
-            if improvement < min_improvement:
-                # Stall detected! Gap hasn't improved enough over time window
-                data_in.user_interrupt = True
-                callback_state["terminated"] = True
-                callback_state["termination_reason"] = "stall_detected"
-                if logger:
-                    logger.info(
-                        f"   🛑 Stall detected at t={current_time:.1f}s: "
-                        f"gap {current_gap_pct:.2f}% (improvement: {improvement:.2f} pts < "
-                        f"threshold: {min_improvement:.1f} pts over {comparison_seconds:.0f}s)"
-                    )
-
-        h.setCallback(stall_detection_callback, None)
-        # Use MipInterrupt callback - respects user_interrupt for early termination
-        h.startCallback(hscb.HighsCallbackType.kCallbackMipInterrupt)
-
-        if logger:
-            # Explain the time-based detection mechanism with gap threshold
-            logger.info(
-                f"   📊 Stall detection: gap threshold {gap_threshold:.1f}%, then "
-                f"require {min_improvement:.1f} pt improvement over {comparison_seconds:.0f}s "
-                f"(after {warmup_seconds:.0f}s warmup)"
-            )
+    # === STEP 6: Set up stall detection ===
+    stall_detector = StallDetector(stall_detection_config, logger)
+    stall_detector.attach(h)
 
     # === STEP 7: Solve ===
     h.run()
 
-    # Stop callbacks if started
-    if stall_enabled:
-        h.stopCallback(highspy.cb.HighsCallbackType.kCallbackMipInterrupt)
-        # Capture final state
-        stall_stats["stall_detected"] = callback_state["terminated"]
-        stall_stats["log_rows_processed"] = len(callback_state["gap_times"])
-        stall_stats["gap_history"] = [g for _, g in callback_state["gap_times"]]
-        stall_stats["termination_reason"] = callback_state["termination_reason"]
-        # Set final gap from history if available
-        if callback_state["gap_times"]:
-            stall_stats["final_gap_pct"] = callback_state["gap_times"][-1][1]
-
-        # Log stall detection outcome
-        if logger and stall_stats["stall_detected"]:
-            final_time = (
-                callback_state["gap_times"][-1][0] if callback_state["gap_times"] else 0
-            )
-            logger.info(
-                f"   ✅ Early termination via stall detection at t={final_time:.1f}s "
-                f"(gap: {stall_stats['final_gap_pct']:.1f}%, samples: {stall_stats['log_rows_processed']})"
-            )
+    # Stop callbacks and get stats
+    stall_detector.detach(h)
+    stall_stats = stall_detector.get_stats()
 
     # === STEP 8: Extract solution ===
-    model_status = h.getModelStatus()
-
-    # Check if we have a feasible solution (optimal, early termination, or time limit)
-    # HiGHS provides incumbent solution for these statuses
-    has_feasible_solution = model_status in (
-        highspy.HighsModelStatus.kOptimal,
-        highspy.HighsModelStatus.kInterrupt,  # Stall detection callback
-        highspy.HighsModelStatus.kTimeLimit,  # Time limit reached but has solution
-        highspy.HighsModelStatus.kSolutionLimit,  # Max improving solutions reached
+    return _extract_highs_solution(
+        h=h,
+        n_candidates=n_candidates,
+        n_test_points=n_test_points,
+        n_coverable=n_coverable,
+        use_full_coverage=use_full_coverage,
+        coverage_target_pct=coverage_target_pct,
+        stall_stats=stall_stats,
+        conflict_stats=conflict_stats,
+        warm_start_indices=warm_start_indices,
+        use_conflict_constraints=use_conflict_constraints,
+        logger=logger,
     )
-
-    if has_feasible_solution:
-        sol = h.getSolution()
-        info = h.getInfo()
-
-        # Check that we actually have a solution
-        if sol.col_value is None or len(sol.col_value) < n_candidates:
-            if logger:
-                logger.warning("⚠️ No valid solution available after early termination")
-            return None, {"method": "ilp_failed", "reason": "no_solution"}
-
-        # Extract selected candidates (x_j > 0.5)
-        selected = [j for j in range(n_candidates) if sol.col_value[j] > 0.5]
-
-        # Calculate actual coverage (percentage of COVERABLE points covered)
-        if use_full_coverage:
-            covered_count = n_coverable
-            actual_pct = 100.0
-        else:
-            covered_count = sum(
-                1 for i in range(n_test_points) if sol.col_value[n_candidates + i] > 0.5
-            )
-            actual_pct = (covered_count / n_coverable * 100) if n_coverable else 0
-
-        # Determine solver status description
-        if model_status == highspy.HighsModelStatus.kOptimal:
-            solver_status = "optimal"
-        elif model_status == highspy.HighsModelStatus.kInterrupt:
-            solver_status = "early_termination"
-        elif model_status == highspy.HighsModelStatus.kTimeLimit:
-            solver_status = "time_limit"
-        else:
-            solver_status = "feasible"
-
-        # Capture actual final MIP gap from solver (not just from stall detection callback)
-        # Compute manually from bounds since info.mip_gap may be 0 for "Optimal" status
-        final_mip_gap_pct = None
-        primal = info.objective_function_value
-        if hasattr(info, "mip_dual_bound") and primal != 0:
-            dual = info.mip_dual_bound
-            # Relative gap = |primal - dual| / |primal| * 100
-            final_mip_gap_pct = abs(primal - dual) / abs(primal) * 100.0
-
-        # Update stall_stats if callback didn't capture the final gap
-        if stall_stats["final_gap_pct"] is None and final_mip_gap_pct is not None:
-            stall_stats["final_gap_pct"] = final_mip_gap_pct
-            if solver_status == "optimal":
-                stall_stats["termination_reason"] = "Optimal"
-
-        stats = {
-            "method": "ilp_highspy",
-            "formulation": "full_coverage" if use_full_coverage else "partial_coverage",
-            "solver_status": solver_status,
-            "objective_value": info.objective_function_value,
-            "coverage_target_pct": coverage_target_pct,
-            "actual_coverage_pct": actual_pct,
-            "test_points_covered": covered_count,
-            "test_points_total": n_test_points,
-            "test_points_coverable": n_coverable,
-            "n_variables": (
-                n_candidates if use_full_coverage else n_candidates + n_test_points
-            ),
-            "conflict_stats": conflict_stats,
-            "conflict_constraints_enabled": use_conflict_constraints,
-            "warm_start_used": warm_start_indices is not None
-            and len(warm_start_indices) > 0,
-            "warm_start_count": len(warm_start_indices) if warm_start_indices else 0,
-            "stall_detection": stall_stats,
-            "final_mip_gap_pct": final_mip_gap_pct,
-        }
-
-        status_emoji = "✅" if solver_status == "optimal" else "⚡"
-        if logger:
-            gap_info = (
-                f" (gap: {stall_stats['final_gap_pct']:.1f}%)"
-                if stall_stats["final_gap_pct"]
-                else ""
-            )
-            logger.info(
-                f"   {status_emoji} ILP {solver_status} (highspy): {len(selected)} boreholes, "
-                f"{actual_pct:.1f}% coverage{gap_info}"
-            )
-
-        return selected, stats
-    else:
-        # Handle non-optimal status without feasible solution
-        status_names = {
-            highspy.HighsModelStatus.kInfeasible: "Infeasible",
-            highspy.HighsModelStatus.kUnbounded: "Unbounded",
-            highspy.HighsModelStatus.kUnboundedOrInfeasible: "UnboundedOrInfeasible",
-            highspy.HighsModelStatus.kNotset: "NotSet",
-            highspy.HighsModelStatus.kLoadError: "LoadError",
-            highspy.HighsModelStatus.kModelError: "ModelError",
-            highspy.HighsModelStatus.kPresolveError: "PresolveError",
-            highspy.HighsModelStatus.kSolveError: "SolveError",
-            highspy.HighsModelStatus.kPostsolveError: "PostsolveError",
-            highspy.HighsModelStatus.kModelEmpty: "ModelEmpty",
-            highspy.HighsModelStatus.kObjectiveBound: "ObjectiveBound",
-            highspy.HighsModelStatus.kObjectiveTarget: "ObjectiveTarget",
-            highspy.HighsModelStatus.kTimeLimit: "TimeLimit",
-            highspy.HighsModelStatus.kIterationLimit: "IterationLimit",
-            highspy.HighsModelStatus.kSolutionLimit: "SolutionLimit",
-            highspy.HighsModelStatus.kInterrupt: "Interrupt",
-            highspy.HighsModelStatus.kMemoryLimit: "MemoryLimit",
-        }
-        status_name = status_names.get(model_status, str(model_status))
-
-        if logger:
-            logger.warning(f"⚠️ ILP solver status (highspy): {status_name}")
-
-        return None, {"method": "ilp_failed", "reason": status_name}
 
 
 # ===========================================================================

@@ -58,8 +58,11 @@ from Gap_Analysis_EC7.solvers.solver_config import (
     create_precision_config,
 )
 from Gap_Analysis_EC7.models.data_models import (
-    Borehole, BoreholePass, BoreholeStatus,
-    get_bh_coords, get_bh_position,
+    Borehole,
+    BoreholePass,
+    BoreholeStatus,
+    get_bh_coords,
+    get_bh_position,
 )
 
 
