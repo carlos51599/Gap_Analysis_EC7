@@ -639,8 +639,12 @@
                 });
                 // Store zone name for later reference
                 layer.zoneName = zoneName;
-                // Prevent click from showing bounding box - instead highlight actual geometry
+                // Prevent click from showing bounding box - but allow click-through in add mode
                 layer.on('click', (e) => {
+                    if (addBoreholeMode) {
+                        // Let click bubble to map's click handler for adding boreholes
+                        return;
+                    }
                     L.DomEvent.stopPropagation(e);  // Don't propagate to map
                 });
             }
@@ -1110,8 +1114,8 @@
             // Sync coverage zones to markers (for visibility filtering)
             syncCoverageZonesToMarkers();
             
-            // Re-apply zone visibility after re-rendering
-            updateBoreholeVisibilityForZones();
+            // Re-apply zone visibility using coverageZoneIds (now synced)
+            reapplyZoneVisibilityToMarkers();
             
             updateUndoButton();
             console.log('↩️ Undo performed');
@@ -1141,8 +1145,8 @@
             // Sync coverage zones to markers (for visibility filtering)
             syncCoverageZonesToMarkers();
             
-            // Re-apply zone visibility after re-rendering
-            updateBoreholeVisibilityForZones();
+            // Re-apply zone visibility using coverageZoneIds (now synced)
+            reapplyZoneVisibilityToMarkers();
             
             // Clear undo history
             undoHistory = [];
@@ -1580,8 +1584,46 @@
         // Kept as no-op for backward compatibility with any existing calls
         async function updateBoreholeVisibilityForZones() {
             console.warn('⚠️ updateBoreholeVisibilityForZones() is deprecated. ' +
-                         'Use toggleZoneVisibility() which uses zone_ids for instant updates.');
-            // No-op - all visibility logic is now in toggleZoneVisibility()
+                         'Use reapplyZoneVisibilityToMarkers() or toggleZoneVisibility() instead.');
+            // Delegate to the proper function
+            reapplyZoneVisibilityToMarkers();
+        }
+        
+        /**
+         * Re-apply current zone visibility state to all borehole markers.
+         * Uses coverageZoneIds (SSOT) when available, falls back to zoneIds.
+         * Call after re-rendering boreholes + syncing coverage zones.
+         */
+        function reapplyZoneVisibilityToMarkers() {
+            const hiddenZones = getHiddenZoneNames();
+            if (hiddenZones.length === 0) {
+                // All zones visible - ensure all markers are shown
+                boreholeMarkers.forEach((gc) => {
+                    if (!map.hasLayer(gc.markerGroup)) {
+                        boreholesLayer.addLayer(gc.markerGroup);
+                    }
+                });
+            } else {
+                // Some zones hidden - apply visibility per mode
+                const mode = getZoneVisibilityMode();
+                boreholeMarkers.forEach((gc) => {
+                    let shouldBeVisible;
+                    if (mode === 'hide_zone_boreholes') {
+                        shouldBeVisible = isBoreholeVisibleByLocationZone(gc.zoneIds || []);
+                    } else {
+                        // clip_coverage: use coverageZoneIds when available, else zoneIds
+                        const zids = (gc.coverageZoneIds && gc.coverageZoneIds.length > 0)
+                            ? gc.coverageZoneIds : (gc.zoneIds || []);
+                        shouldBeVisible = isBoreholeVisibleByZones(zids);
+                    }
+                    if (shouldBeVisible) {
+                        if (!map.hasLayer(gc.markerGroup)) boreholesLayer.addLayer(gc.markerGroup);
+                    } else {
+                        if (map.hasLayer(gc.markerGroup)) gc.markerGroup.remove();
+                    }
+                });
+            }
+            updateBoreholeCountDisplay();
         }
         
         // Simple point-in-polygon test for GeoJSON geometry
@@ -1993,7 +2035,7 @@
                             removeCoverageByIndex(deletedIndex);
                             
                             // Re-apply zone visibility after re-rendering
-                            updateBoreholeVisibilityForZones();
+                            reapplyZoneVisibilityToMarkers();
                             
                             const t_ui_end = performance.now();
                             console.log(`    [DELETE-UI] UI update took: ${(t_ui_end - t_ui_start).toFixed(1)}ms`);
@@ -2341,7 +2383,7 @@
                     syncCoverageZonesToMarkers();
                     
                     // Re-apply zone visibility
-                    updateBoreholeVisibilityForZones();
+                    reapplyZoneVisibilityToMarkers();
                     
                     // Update count
                     updateBoreholeCountDisplay();

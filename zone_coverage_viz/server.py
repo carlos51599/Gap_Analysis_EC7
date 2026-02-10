@@ -536,6 +536,10 @@ def restore_boreholes() -> Dict[str, Any]:
     boreholes_geojson = data["boreholes"]
     data_loader.restore_state(boreholes_geojson)
 
+    # Clear coverage cache so stats recompute from restored boreholes only
+    if coverage_service is not None:
+        coverage_service.clear_cache()
+
     return jsonify({"success": True})
 
 

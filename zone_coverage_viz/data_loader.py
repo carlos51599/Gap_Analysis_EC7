@@ -449,12 +449,20 @@ class DataLoader:
             if not isinstance(zone_ids, list):
                 zone_ids = list(zone_ids) if zone_ids else []
 
+            # Resolve location_id from either column name (JSON='location_id', CSV='Location_ID')
+            # NaN protection: pd.concat can introduce NaN for mismatched columns
+            loc_id = row.get("Location_ID", None)
+            if loc_id is None or (isinstance(loc_id, float) and pd.isna(loc_id)):
+                loc_id = row.get("location_id", None)
+            if loc_id is None or (isinstance(loc_id, float) and pd.isna(loc_id)):
+                loc_id = f"PROP_{idx:03d}"
+
             feature = {
                 "type": "Feature",
                 "geometry": mapping(row.geometry),
                 "properties": {
                     "index": idx,
-                    "location_id": row.get("Location_ID", f"PROP_{idx:03d}"),
+                    "location_id": loc_id,
                     "zone_ids": zone_ids,
                 },
             }
@@ -696,11 +704,21 @@ class DataLoader:
                         if zone_name not in exclude_set:
                             containing_zones.append(zone_name)
 
-        # Create new row
+        # Detect location ID column name from existing GDF to avoid column
+        # mismatch after pd.concat (JSON uses 'location_id', CSV uses 'Location_ID')
+        loc_id_col = "location_id"  # Default for JSON-loaded data
+        if (
+            self._boreholes_gdf is not None
+            and not self._boreholes_gdf.empty
+            and "Location_ID" in self._boreholes_gdf.columns
+        ):
+            loc_id_col = "Location_ID"
+
+        # Create new row with matching column name
         new_row = gpd.GeoDataFrame(
             [
                 {
-                    "Location_ID": location_id,
+                    loc_id_col: location_id,
                     "index": new_index,
                     "zone_ids": containing_zones,
                 }
