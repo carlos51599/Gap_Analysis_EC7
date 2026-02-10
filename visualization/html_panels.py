@@ -249,6 +249,7 @@ def generate_layers_panel_html(
     has_third_pass_overlap: bool = False,
     has_third_pass_grid: bool = False,
     has_third_pass_test_points: bool = False,
+    has_per_pass: bool = False,
     panel_width: int = DEFAULT_LEFT_PANEL_WIDTH,
     vertical_gap: int = DEFAULT_PANEL_VERTICAL_GAP,
 ) -> str:
@@ -267,6 +268,7 @@ def generate_layers_panel_html(
     - Cell Overlap (cell clouds and intersection regions)
     - Third Pass Grid (hexagonal candidate grid for third pass)
     - Third Pass Test Points (test points used in cell-cell optimization)
+    - Per-Pass Snapshots (cumulative borehole state at each optimization stage)
     - Candidate grid (hexagonal grid overlay showing placement grid)
 
     Args:
@@ -284,6 +286,7 @@ def generate_layers_panel_html(
         has_third_pass_overlap: Whether third pass overlap traces (cell clouds/intersections) exist
         has_third_pass_grid: Whether third pass grid traces (cell-cell candidate grid) exist
         has_third_pass_test_points: Whether third pass test points trace is available
+        has_per_pass: Whether per-pass snapshot traces are available
         panel_width: Panel width in pixels
         vertical_gap: Vertical gap from previous panel
 
@@ -308,6 +311,7 @@ def generate_layers_panel_html(
         and not has_third_pass_overlap
         and not has_third_pass_grid
         and not has_third_pass_test_points
+        and not has_per_pass
     ):
         return ""
 
@@ -465,6 +469,37 @@ def generate_layers_panel_html(
     </label>"""
         )
 
+    # Add per-pass snapshot section (cumulative borehole state at each stage)
+    # Positioned between Third Pass and Imagery sections
+    if has_per_pass:
+        checkbox_items.append(
+            """
+    <div style="font-size: 10px; font-weight: bold; color: #666; margin: 10px 0 5px 0; border-top: 1px solid #ddd; padding-top: 8px;">
+        Per-Pass Snapshots
+    </div>"""
+        )
+        checkbox_items.append(
+            """
+    <label style="display: flex; align-items: center; cursor: pointer; margin: 5px 0;">
+        <input type="checkbox" id="perPassFirstCheckbox" style="margin-right: 8px;">
+        <span style="font-size: 11px;">First Pass</span>
+    </label>"""
+        )
+        checkbox_items.append(
+            """
+    <label style="display: flex; align-items: center; cursor: pointer; margin: 5px 0;">
+        <input type="checkbox" id="perPassSecondCheckbox" style="margin-right: 8px;">
+        <span style="font-size: 11px;">Second Pass</span>
+    </label>"""
+        )
+        checkbox_items.append(
+            """
+    <label style="display: flex; align-items: center; cursor: pointer; margin: 5px 0;">
+        <input type="checkbox" id="perPassThirdCheckbox" style="margin-right: 8px;">
+        <span style="font-size: 11px;">Third Pass</span>
+    </label>"""
+        )
+
     # Add "Imagery" subheading before Satellite/BGS layers (at bottom of panel)
     if has_satellite or has_bgs:
         checkbox_items.append(
@@ -509,6 +544,7 @@ def generate_layers_panel_html(
         has_third_pass_overlap=has_third_pass_overlap,
         has_third_pass_grid=has_third_pass_grid,
         has_third_pass_test_points=has_third_pass_test_points,
+        has_per_pass=has_per_pass,
     )
 
     checkbox_html = f"""

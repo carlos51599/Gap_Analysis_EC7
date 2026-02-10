@@ -407,6 +407,83 @@ def build_proposed_boreholes_trace(
     )
 
 
+def build_per_pass_snapshot_trace(
+    boreholes: List[Dict[str, Any]],
+    pass_label: str,
+    source_colors: Optional[Dict[str, str]] = None,
+    marker_symbol: str = "circle",
+    marker_size: int = 10,
+    visible: bool = False,
+) -> Optional[go.Scattergl]:
+    """
+    Build a marker trace for a per-pass borehole snapshot.
+
+    Each pass snapshot contains ALL boreholes at that stage (cumulative),
+    matching the per-pass CSV exports (first_pass.csv, second_pass.csv, etc.).
+    Markers are colored by each borehole's source_pass origin.
+
+    Args:
+        boreholes: List of dicts with 'x', 'y' (and optionally 'source_pass')
+        pass_label: Display name (e.g. "First Pass Snapshot")
+        source_colors: Mapping of source_pass string → hex color
+        marker_symbol: Plotly marker symbol name
+        marker_size: Marker size in px
+        visible: Initial visibility (default False = unchecked)
+
+    Returns:
+        go.Scattergl trace or None if empty
+    """
+    if not boreholes:
+        return None
+
+    # Default source_pass → color mapping (overridden by CONFIG)
+    if source_colors is None:
+        source_colors = {
+            "First Pass": "#0066FF",
+            "Second Pass": "#00CC44",
+            "Third Pass": "#FF6600",
+        }
+
+    x_coords = [bh["x"] for bh in boreholes]
+    y_coords = [bh["y"] for bh in boreholes]
+
+    # Build per-point source_pass labels and colors
+    source_passes = []
+    point_colors = []
+    for bh in boreholes:
+        sp = bh.get("source_pass", "Unknown")
+        if hasattr(sp, "value"):
+            sp = sp.value
+        sp_str = str(sp)
+        source_passes.append(sp_str)
+        point_colors.append(source_colors.get(sp_str, "#888888"))
+
+    return go.Scattergl(
+        x=x_coords,
+        y=y_coords,
+        mode="markers",
+        marker=dict(
+            size=marker_size,
+            color=point_colors,
+            symbol=marker_symbol,
+            line=dict(color="rgba(0,0,0,0.4)", width=1),
+        ),
+        customdata=source_passes,
+        hovertemplate=(
+            f"<b>{pass_label}</b><br>"
+            "Easting: %{x:,.0f}<br>"
+            "Northing: %{y:,.0f}<br>"
+            "Origin: %{customdata}<br>"
+            f"<b>Total: {len(boreholes)}</b>"
+            "<extra></extra>"
+        ),
+        name=pass_label,
+        legendgroup="per_pass",
+        showlegend=False,
+        visible=visible,
+    )
+
+
 # ===========================================================================
 # SINGLE POLYGON TRACES
 # ===========================================================================

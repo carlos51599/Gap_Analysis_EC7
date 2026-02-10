@@ -1005,6 +1005,17 @@ CONFIG: Dict[str, Any] = {
             "size": 5,  # Small markers
             "symbol": "circle",  # Circle markers
         },
+        # Per-pass snapshot layer styling (cumulative borehole state at each optimization stage)
+        # Colors are per-borehole by source_pass origin, marker shape/size applies to all
+        "per_pass_snapshots": {
+            "marker_symbol": "circle",  # Marker shape for all snapshot layers
+            "marker_size": 10,  # Marker size in px
+            "source_colors": {
+                "First Pass": "#0066FF",  # Vivid blue
+                "Second Pass": "#00CC44",  # Vivid green
+                "Third Pass": "#FF6600",  # Vivid orange
+            },
+        },
         # Figure dimensions
         "figure_width": 1400,
         "figure_height": 900,
