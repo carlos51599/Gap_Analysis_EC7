@@ -68,6 +68,7 @@ from Gap_Analysis_EC7.visualization.plotly_traces import (
     build_boreholes_trace,
     build_proposed_boreholes_trace,
     build_per_pass_snapshot_trace,
+    build_centreline_traces,
     build_single_polygon_trace,
     # Coverage zone trace builders (moved from coverage_zones.py)
     build_coverage_polygon_trace,
@@ -169,6 +170,7 @@ __all__ = [
     "build_boreholes_trace",
     "build_proposed_boreholes_trace",
     "build_per_pass_snapshot_trace",
+    "build_centreline_traces",
     "build_single_polygon_trace",
     # Coverage zone trace builders
     "build_coverage_polygon_trace",

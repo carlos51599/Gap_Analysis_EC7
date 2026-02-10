@@ -407,6 +407,100 @@ def build_proposed_boreholes_trace(
     )
 
 
+def build_centreline_traces(
+    geometries_wkt: List[str],
+    line_color: str = "#E600A9",
+    line_width: float = 3.0,
+    line_dash: str = "solid",
+    visible: bool = False,
+) -> List[go.Scattergl]:
+    """
+    Build line traces for centreline geometries.
+
+    Each WKT geometry (LineString or MultiLineString) produces one trace.
+    Uses None-separated coordinates for MultiLineString segments.
+
+    Args:
+        geometries_wkt: List of WKT strings (LineString/MultiLineString)
+        line_color: CSS color for centreline lines
+        line_width: Line width in pixels
+        line_dash: Dash style ('solid', 'dash', 'dot', 'dashdot')
+        visible: Initial visibility
+
+    Returns:
+        List of Scattergl traces (one per geometry).
+    """
+    from shapely import wkt
+
+    traces: List[go.Scattergl] = []
+
+    for geom_wkt in geometries_wkt:
+        try:
+            geom = wkt.loads(geom_wkt)
+        except Exception:
+            continue
+
+        xs: List[Optional[float]] = []
+        ys: List[Optional[float]] = []
+
+        lines = _extract_lines_from_geom(geom)
+        for line in lines:
+            coords = list(line.coords)
+            for x, y in coords:
+                xs.append(x)
+                ys.append(y)
+            # None separator between segments
+            xs.append(None)
+            ys.append(None)
+
+        if not xs:
+            continue
+
+        traces.append(
+            go.Scattergl(
+                x=xs,
+                y=ys,
+                mode="lines",
+                line=dict(color=line_color, width=line_width, dash=line_dash),
+                hoverinfo="skip",
+                name="Centreline",
+                legendgroup="centrelines",
+                showlegend=False,
+                visible=visible,
+            )
+        )
+
+    return traces
+
+
+def _extract_lines_from_geom(
+    geom: Any,
+) -> List[Any]:
+    """
+    Extract LineString components from a geometry.
+
+    Handles LineString, MultiLineString, and GeometryCollection.
+
+    Args:
+        geom: Shapely geometry object
+
+    Returns:
+        List of LineString geometries.
+    """
+    from shapely.geometry import LineString, MultiLineString, GeometryCollection
+
+    if isinstance(geom, LineString):
+        return [geom]
+    elif isinstance(geom, MultiLineString):
+        return list(geom.geoms)
+    elif isinstance(geom, GeometryCollection):
+        lines = []
+        for g in geom.geoms:
+            lines.extend(_extract_lines_from_geom(g))
+        return lines
+    return []
+
+
 def build_per_pass_snapshot_trace(
     boreholes: List[Dict[str, Any]],
     pass_label: str,

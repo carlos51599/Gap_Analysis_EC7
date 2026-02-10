@@ -1016,6 +1016,12 @@ CONFIG: Dict[str, Any] = {
                 "Third Pass": "#FF6600",  # Vivid orange
             },
         },
+        # Centreline layer styling (computed medial-axis centrelines for shapefile layers)
+        "centrelines": {
+            "line_color": "#E600A9",  # Magenta-pink for visibility
+            "line_width": 3.0,  # Line width in px
+            "line_dash": "solid",  # 'solid', 'dash', 'dot', 'dashdot'
+        },
         # Figure dimensions
         "figure_width": 1400,
         "figure_height": 900,

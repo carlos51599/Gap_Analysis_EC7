@@ -18,7 +18,7 @@ import logging
 import time
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any, Optional, Tuple, Set
+from typing import Dict, Any, List, Optional, Tuple, Set
 
 # Fix Windows console encoding for emoji support
 if sys.platform == "win32":
@@ -996,6 +996,7 @@ def _generate_html_and_summary(
     timings: Dict[str, float],
     logger: logging.Logger,
     default_filter: Optional[Dict[str, Any]] = None,
+    centreline_geometries_wkt: Optional[List[str]] = None,
 ) -> Dict:
     """Generate HTML output and log summary statistics."""
     # Step 6: Generate HTML
@@ -1016,6 +1017,7 @@ def _generate_html_and_summary(
         logger=logger,
         precomputed_coverages=precomputed_coverages,
         default_filter=default_filter,
+        centreline_geometries_wkt=centreline_geometries_wkt,
     )
     timings["6_generate_html"] = time.perf_counter() - step_start
     logger.info(f"   ⏱️ Step 6 completed in {timings['6_generate_html']:.2f}s")
@@ -1240,6 +1242,7 @@ def run_ec7_analysis() -> dict:
             timings,
             logger,
             default_filter,
+            centreline_geometries_wkt=centreline_stats.get("geometries_wkt"),
         )
 
         # Phase 5: Generate zone_coverage_data.json for zone_coverage_viz

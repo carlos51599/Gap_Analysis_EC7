@@ -62,6 +62,7 @@ def _import_compute_centreline():
 
     try:
         from Centreline_Tool.centreline import compute_centreline
+
         return compute_centreline
     except ImportError as e:
         logger.warning(f"⚠️ Could not import Centreline_Tool: {e}")
@@ -224,15 +225,17 @@ def sample_boreholes_along_centreline(
     boreholes: List[Dict[str, Any]] = []
 
     for x, y in deduped:
-        boreholes.append({
-            "x": x,
-            "y": y,
-            "coverage_radius": coverage_radius,
-            "source_pass": "First Pass",
-            "status": "locked",
-            "zone_id": zone_id,
-            "is_centreline": True,
-        })
+        boreholes.append(
+            {
+                "x": x,
+                "y": y,
+                "coverage_radius": coverage_radius,
+                "source_pass": "First Pass",
+                "status": "locked",
+                "zone_id": zone_id,
+                "is_centreline": True,
+            }
+        )
 
     if log:
         total_length = sum(l.length for l in lines)
@@ -328,11 +331,7 @@ def compute_centreline_precoverage(
             pre_covered.add(i)
 
     if log:
-        pct = (
-            len(pre_covered) / len(test_points) * 100
-            if test_points
-            else 0
-        )
+        pct = len(pre_covered) / len(test_points) * 100 if test_points else 0
         log.info(
             f"   🔒 Centreline pre-coverage: {len(pre_covered)} of "
             f"{len(test_points)} test points ({pct:.1f}%)"
@@ -373,7 +372,7 @@ def generate_centreline_boreholes(
     )
 
     enabled_layers = get_centreline_enabled_layers()
-    stats: Dict[str, Any] = {"layers": {}, "total_boreholes": 0}
+    stats: Dict[str, Any] = {"layers": {}, "total_boreholes": 0, "geometries_wkt": []}
 
     if not enabled_layers:
         if log:
@@ -413,11 +412,16 @@ def generate_centreline_boreholes(
             stats["layers"][layer_key] = {"status": "no_centrelines", "boreholes": 0}
             continue
 
+        # Store centreline geometries as WKT for visualization
+        for cl in centrelines:
+            stats["geometries_wkt"].append(cl.wkt)
+
         # Sample boreholes along each centreline at zone spacing
         layer_boreholes: List[Dict[str, Any]] = []
         for feat_idx, centreline in enumerate(centrelines):
             # Zone name follows the naming convention for unnamed layers
             from Gap_Analysis_EC7.shapefile_config import get_layer_config
+
             layer_cfg = get_layer_config(layer_key)
             display_name = layer_cfg.get("display_name", layer_key)
             zone_name = f"{display_name}_{feat_idx}"

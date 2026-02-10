@@ -2874,6 +2874,7 @@ def _generate_sidebar_panels(
     max_spacing: float,
     logger: Optional[logging.Logger] = None,
     default_filter: Optional[Dict[str, Any]] = None,
+    centreline_trace_range: Optional[Tuple[int, int]] = None,
 ) -> Tuple[str, str]:
     """Generate left and right sidebar panel HTML. Returns (left_html, right_html)."""
     # Normalize to typed config
@@ -2994,6 +2995,12 @@ def _generate_sidebar_panels(
             if has_per_pass:
                 break
 
+    # Check if centreline traces exist
+    has_centrelines = (
+        centreline_trace_range is not None
+        and centreline_trace_range[0] != centreline_trace_range[1]
+    )
+
     layers_panel_html = ""
     if (
         has_bgs
@@ -3010,6 +3017,7 @@ def _generate_sidebar_panels(
         or has_third_pass_grid
         or has_third_pass_test_points
         or has_per_pass
+        or has_centrelines
     ):
         layers_panel_html = _generate_layers_panel_html(
             bgs_layers=bgs_layers if has_bgs else None,
@@ -3029,6 +3037,8 @@ def _generate_sidebar_panels(
             has_third_pass_grid=has_third_pass_grid,
             has_third_pass_test_points=has_third_pass_test_points,
             has_per_pass=has_per_pass,
+            has_centrelines=has_centrelines,
+            centreline_trace_range=centreline_trace_range,
         )
         _log_layers_panel(
             logger, has_satellite, has_bgs, bgs_layers, has_proposed, has_hexgrid
@@ -3426,6 +3436,58 @@ def _add_secondary_shapefiles_section(
     return current_idx + traces_added
 
 
+def _add_centreline_traces_section(
+    fig: go.Figure,
+    centreline_geometries_wkt: Optional[List[str]],
+    logger: Optional[logging.Logger] = None,
+) -> Optional[Tuple[int, int]]:
+    """
+    Add centreline line traces to figure.
+
+    Centrelines are global (not per-combo) so they are added once
+    with a standalone trace range for JS toggle.
+
+    Args:
+        fig: Plotly figure to add traces to
+        centreline_geometries_wkt: List of WKT strings for centreline geometries
+        logger: Optional logger
+
+    Returns:
+        Tuple of (start_idx, end_idx) trace range, or None if no centrelines.
+    """
+    if not centreline_geometries_wkt:
+        return None
+
+    from Gap_Analysis_EC7.visualization.plotly_traces import build_centreline_traces
+
+    cl_config = CONFIG.get("visualization", {}).get("centrelines", {})
+    line_color = cl_config.get("line_color", "#E600A9")
+    line_width = cl_config.get("line_width", 3.0)
+    line_dash = cl_config.get("line_dash", "solid")
+
+    start_idx = len(fig.data)
+    traces = build_centreline_traces(
+        geometries_wkt=centreline_geometries_wkt,
+        line_color=line_color,
+        line_width=line_width,
+        line_dash=line_dash,
+        visible=False,
+    )
+    for trace in traces:
+        fig.add_trace(trace)
+    end_idx = len(fig.data)
+
+    if logger and traces:
+        logger.info(
+            f"   🛤️ Added {len(traces)} centreline traces "
+            f"(idx {start_idx}-{end_idx})"
+        )
+
+    if start_idx == end_idx:
+        return None
+    return (start_idx, end_idx)
+
+
 def _add_zone_boundaries_section(
     fig: go.Figure,
     zones_gdf: Optional[GeoDataFrame],
@@ -3570,6 +3632,7 @@ def generate_multi_layer_html(
     logger: Optional[logging.Logger] = None,
     precomputed_coverages: Optional[Dict[str, Dict[str, Any]]] = None,
     default_filter: Optional[Dict[str, Any]] = None,
+    centreline_geometries_wkt: Optional[List[str]] = None,
 ) -> go.Figure:
     """
     Generate interactive Plotly HTML for EC7 coverage visualization with toggleable layers.
@@ -3623,6 +3686,13 @@ def generate_multi_layer_html(
     substep_start = time.perf_counter()
     hexgrid_trace_range = None
     substep_times["6c3_hexagon_grid"] = time.perf_counter() - substep_start
+
+    # Step 6c4: Add centreline traces (global, not per-combo)
+    substep_start = time.perf_counter()
+    centreline_trace_range = _add_centreline_traces_section(
+        fig, centreline_geometries_wkt, logger
+    )
+    substep_times["6c4_centrelines"] = time.perf_counter() - substep_start
 
     # Step 6d: Add boreholes
     substep_start = time.perf_counter()
@@ -3680,6 +3750,7 @@ def generate_multi_layer_html(
         max_spacing,
         logger,
         default_filter,
+        centreline_trace_range=centreline_trace_range,
     )
     substep_times["6h_panels"] = time.perf_counter() - substep_start
 
