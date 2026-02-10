@@ -454,6 +454,7 @@ def precompute_all_coverages(
     depth_step: float,
     config: Union[Dict[str, Any], AppConfig],
     highs_log_folder: Optional[str] = None,
+    centreline_boreholes: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """
     Pre-compute coverage zones for all filter combinations.
@@ -552,6 +553,7 @@ def precompute_all_coverages(
         raw_config,  # Workers need raw config dict for serialization
         is_testing=is_testing,  # Zone cache only in production mode
         highs_log_folder=highs_log_folder,
+        centreline_boreholes=centreline_boreholes,
     )
 
     elapsed = time.time() - start_time
@@ -582,6 +584,7 @@ def _dispatch_parallel_coverages(
     config: Dict[str, Any],
     is_testing: bool = False,
     highs_log_folder: Optional[str] = None,
+    centreline_boreholes: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """
     Dispatch parallel jobs for all filter combinations.
@@ -707,6 +710,7 @@ def _dispatch_parallel_coverages(
                     triaxial_total_locations=txt_list,
                     triaxial_effective_locations=txe_list,
                     highs_log_folder=highs_log_folder,
+                    centreline_boreholes=centreline_boreholes,
                 )
                 for combo in combinations
             )
@@ -736,6 +740,7 @@ def _dispatch_parallel_coverages(
                     triaxial_total_locations=txt_list,
                     triaxial_effective_locations=txe_list,
                     highs_log_folder=highs_log_folder,
+                    centreline_boreholes=centreline_boreholes,
                 )
                 results_list.append(result)
         else:

@@ -246,6 +246,7 @@ def _compute_proposed_boreholes(
     max_spacing: float,
     ilp_config: Dict[str, Any],
     highs_log_folder: Optional[str] = None,
+    centreline_boreholes: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[List[Dict[str, float]], Dict[str, Any]]:
     """
     Compute proposed boreholes for gaps using solver.
@@ -259,6 +260,7 @@ def _compute_proposed_boreholes(
         max_spacing: EC7 maximum spacing in meters
         ilp_config: Full ILP solver configuration dict (from _build_solver_config)
         highs_log_folder: Optional folder path for HiGHS solver log files
+        centreline_boreholes: Optional locked centreline boreholes
 
     Returns:
         Tuple of (proposed_boreholes_list, optimization_stats_dict)
@@ -278,7 +280,9 @@ def _compute_proposed_boreholes(
         highs_log_folder=highs_log_folder,
     )
 
-    return optimize_boreholes(uncovered_gaps, config)
+    return optimize_boreholes(
+        uncovered_gaps, config, centreline_boreholes=centreline_boreholes
+    )
 
 
 def _build_result_stats(
@@ -332,6 +336,7 @@ def worker_process_filter_combination(
     triaxial_total_locations: List[str],
     triaxial_effective_locations: List[str],
     highs_log_folder: Optional[str] = None,
+    centreline_boreholes: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """
     Worker function to process a single filter combination.
@@ -414,6 +419,7 @@ def worker_process_filter_combination(
             max_spacing,
             ilp_config,
             highs_log_folder=highs_log_folder,
+            centreline_boreholes=centreline_boreholes,
         )
 
         # Consolidation pass: remove redundant boreholes (second pass)
@@ -662,6 +668,7 @@ def worker_process_filter_combination(
                             logger=None,  # Silent in worker
                             czrc_cache=czrc_cache,  # Pass cache for CZRC result caching
                             highs_log_folder=highs_log_folder,  # Pass log folder for CZRC HiGHS logs
+                            centreline_boreholes=centreline_boreholes,
                         )
 
                         # Log cache stats if enabled
