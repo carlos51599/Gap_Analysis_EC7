@@ -514,6 +514,13 @@ def generate_layers_panel_html(
         <span style="font-size: 11px;">Third Pass</span>
     </label>"""
         )
+        checkbox_items.append(
+            """
+    <label style="display: flex; align-items: center; cursor: pointer; margin: 5px 0;">
+        <input type="checkbox" id="perPassCentrelineCheckbox" style="margin-right: 8px;">
+        <span style="font-size: 11px;">Centreline BHs</span>
+    </label>"""
+        )
 
     # Add "Imagery" subheading before Satellite/BGS layers (at bottom of panel)
     if has_satellite or has_bgs:

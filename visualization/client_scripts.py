@@ -449,6 +449,7 @@ def generate_layer_toggle_scripts(
             ("perPassFirstCheckbox", "per_pass_first"),
             ("perPassSecondCheckbox", "per_pass_second"),
             ("perPassThirdCheckbox", "per_pass_third"),
+            ("perPassCentrelineCheckbox", "per_pass_centreline"),
         ]
         per_pass_blocks = []
         for checkbox_id, range_key in per_pass_entries:

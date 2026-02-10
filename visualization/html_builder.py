@@ -701,6 +701,27 @@ def _add_per_pass_snapshot_traces(
             fig.add_trace(trace)
             ranges[range_key] = (start_idx, len(fig.data))
 
+    # === CENTRELINE BH SNAPSHOT ===
+    # Filter first_pass_boreholes for is_centreline=True (locked centreline BHs)
+    first_pass = data.get("first_pass_boreholes", [])
+    centreline_bhs = [bh for bh in first_pass if bh.get("is_centreline")]
+    if centreline_bhs:
+        cl_symbol = pp_config.get("centreline_marker_symbol", "star-diamond")
+        cl_size = pp_config.get("centreline_marker_size", 12)
+        cl_color = pp_config.get("centreline_marker_color", "#00CED1")
+        trace = build_per_pass_snapshot_trace(
+            boreholes=centreline_bhs,
+            pass_label="Centreline Boreholes",
+            source_colors={"First Pass": cl_color},
+            marker_symbol=cl_symbol,
+            marker_size=cl_size,
+            visible=False,
+        )
+        if trace is not None:
+            start_idx = len(fig.data)
+            fig.add_trace(trace)
+            ranges["per_pass_centreline"] = (start_idx, len(fig.data))
+
     return ranges
 
 
@@ -2987,7 +3008,7 @@ def _generate_sidebar_panels(
     has_per_pass = False
     if coverage_trace_ranges:
         for combo_ranges in coverage_trace_ranges.values():
-            for key in ("per_pass_first", "per_pass_second", "per_pass_third"):
+            for key in ("per_pass_first", "per_pass_second", "per_pass_third", "per_pass_centreline"):
                 rng = combo_ranges.get(key, (0, 0))
                 if rng[0] != rng[1]:
                     has_per_pass = True

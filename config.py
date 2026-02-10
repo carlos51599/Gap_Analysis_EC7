@@ -141,7 +141,7 @@ CONFIG: Dict[str, Any] = {
         "enabled": True,  # Disabled for CZRC cross-worker cache testing
         # Fixed filter settings for testing (creates maximum gap scenario)
         "filter": {
-            "min_depth": 50,  # Depth >= x (creates good test gaps)
+            "min_depth": 100,  # Depth >= x (creates good test gaps)
             "require_spt": False,  # No SPT requirement
             "require_triaxial_total": False,  # No TxT requirement
             "require_triaxial_effective": False,  # No TxE requirement
@@ -1015,6 +1015,10 @@ CONFIG: Dict[str, Any] = {
                 "Second Pass": "#00CC44",  # Vivid green
                 "Third Pass": "#FF6600",  # Vivid orange
             },
+            # Centreline borehole snapshot (subset of First Pass with is_centreline=True)
+            "centreline_marker_symbol": "star-diamond",  # Distinct from other snapshots
+            "centreline_marker_size": 12,  # Slightly larger for visibility
+            "centreline_marker_color": "#00CED1",  # Dark turquoise
         },
         # Centreline layer styling (computed medial-axis centrelines for shapefile layers)
         "centrelines": {
