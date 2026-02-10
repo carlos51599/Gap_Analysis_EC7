@@ -215,8 +215,23 @@ def sample_boreholes_along_centreline(
     if not raw_points:
         return []
 
-    # === STEP 3: Deduplicate within tolerance ===
+    # === STEP 3: Deduplicate near-identical points (branch junctions) ===
     deduped = _deduplicate_points(raw_points, dedup_tolerance_m)
+
+    # === STEP 3b: Enforce minimum spacing between all kept points ===
+    # Branch junctions produce start-of-branch points that may be closer
+    # than spacing_m to an existing borehole on the parent branch.
+    # Drop any point too close to an already-accepted point.
+    # Same-line points are always >= spacing_m apart (from linspace), so
+    # this only removes cross-branch junction points that violate spacing.
+    if spacing_m > dedup_tolerance_m:
+        before_count = len(deduped)
+        deduped = _deduplicate_points(deduped, spacing_m)
+        if log and len(deduped) < before_count:
+            log.info(
+                f"   🛤️ Spacing enforcement removed {before_count - len(deduped)} "
+                f"branch-junction points (min spacing {spacing_m:.0f}m)"
+            )
 
     # === STEP 4: Create borehole dicts ===
     from Gap_Analysis_EC7.shapefile_config import make_zone_id
