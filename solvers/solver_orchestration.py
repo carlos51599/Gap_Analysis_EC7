@@ -452,8 +452,7 @@ def _filter_centreline_for_zone(
 
     buffer = zone_gap_union.buffer(zone_spacing)
     return [
-        bh for bh in centreline_boreholes
-        if buffer.contains(Point(bh["x"], bh["y"]))
+        bh for bh in centreline_boreholes if buffer.contains(Point(bh["x"], bh["y"]))
     ]
 
 
@@ -588,9 +587,7 @@ def _run_zone_decomposition(
             zone_cl_bhs = _filter_centreline_for_zone(
                 all_cl_bhs, zone_gap_union, zone_spacing
             )
-            zone_kwargs["centreline_boreholes"] = (
-                zone_cl_bhs if zone_cl_bhs else None
-            )
+            zone_kwargs["centreline_boreholes"] = zone_cl_bhs if zone_cl_bhs else None
 
             # Solve with or without caching
             if zone_cache is not None:
@@ -651,6 +648,27 @@ def _run_zone_decomposition(
                 f"   🔄 Deduped {pre_dedup_count - len(all_boreholes)} "
                 f"cross-zone centreline boreholes"
             )
+
+        # === ENSURE ALL CENTRELINE BOREHOLES ARE INCLUDED ===
+        # _filter_centreline_for_zone() drops boreholes not near any zone's
+        # gaps.  These are locked constants and must always appear in output.
+        all_cl_bhs = kwargs.get("centreline_boreholes")
+        if all_cl_bhs:
+            existing_positions = {
+                (round(bh["x"], 1), round(bh["y"], 1)) for bh in all_boreholes
+            }
+            missing_cl = [
+                bh
+                for bh in all_cl_bhs
+                if (round(bh["x"], 1), round(bh["y"], 1)) not in existing_positions
+            ]
+            if missing_cl:
+                all_boreholes.extend(missing_cl)
+                if logger:
+                    logger.info(
+                        f"   🛤️ Restored {len(missing_cl)} centreline boreholes "
+                        f"not near any zone gap (total: {len(all_boreholes)})"
+                    )
 
         # Aggregate test points from all zones for consolidation pass
         # Each test point already has required_radius; add zone name for debugging
@@ -840,21 +858,32 @@ def _run_single_solve(
         )
 
         tp_dicts = [
-            {"x": tp.x, "y": tp.y, "required_radius": max_spacing}
-            for tp in test_points
+            {"x": tp.x, "y": tp.y, "required_radius": max_spacing} for tp in test_points
         ]
         pre_covered_indices = compute_centreline_precoverage(
             tp_dicts, centreline_boreholes, log=logger
         )
         if pre_covered_indices:
             test_points = [
-                tp
-                for i, tp in enumerate(test_points)
-                if i not in pre_covered_indices
+                tp for i, tp in enumerate(test_points) if i not in pre_covered_indices
             ]
         opt_times["centreline_precoverage"] = time.perf_counter() - step_start
 
     if len(test_points) == 0:
+        # All test points covered by centreline boreholes → return them directly
+        if centreline_boreholes:
+            if logger:
+                logger.info(
+                    f"   🛤️ All {all_test_points_count} test points pre-covered by "
+                    f"{len(centreline_boreholes)} centreline boreholes"
+                )
+            return list(centreline_boreholes), {
+                "method": "centreline_precoverage",
+                "boreholes": len(centreline_boreholes),
+                "centreline_count": len(centreline_boreholes),
+                "centreline_precovered": all_test_points_count,
+                "test_points": [],
+            }
         if logger:
             logger.warning("⚠️ No test points generated - gaps may be too small")
         return [], {"method": "error", "message": "Gaps too small for test points"}
@@ -1035,6 +1064,11 @@ def _solve_component(
     highs_log_folder: Optional[str] = None,
     component_idx: Optional[int] = None,
     logger: Optional[logging.Logger] = None,
+    # Extra params forwarded from shared_params — not used in component solve
+    log_name_prefix: Optional[str] = None,
+    stall_detection_config: Optional[Dict[str, Any]] = None,
+    centreline_boreholes: Optional[List[Dict[str, Any]]] = None,
+    **_extra,
 ) -> Tuple[List[Dict[str, float]], Dict[str, Any]]:
     """
     Solve ILP for a single connected component.
