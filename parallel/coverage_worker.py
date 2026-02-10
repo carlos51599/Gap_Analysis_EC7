@@ -790,6 +790,11 @@ def worker_process_filter_combination(
                                 status=BoreholeStatus.from_string(
                                     bh.get("status", "proposed")
                                 ),
+                                is_centreline=(
+                                    bh.get("is_centreline", False)
+                                    if isinstance(bh, dict)
+                                    else getattr(bh, "is_centreline", False)
+                                ),
                             ).as_dict()
                             for bh in proposed
                         ]

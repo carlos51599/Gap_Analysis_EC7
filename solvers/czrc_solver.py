@@ -1484,7 +1484,7 @@ def _assemble_czrc_results(
     existing_bh_by_pos = {get_bh_position(bh): bh for bh in bh_candidates}
 
     # Selected = all ILP selections (as dicts for backward compatibility)
-    # Preserve source_pass for existing boreholes, use current pass for new ones
+    # Preserve source_pass and is_centreline for existing boreholes
     selected = []
     for i in indices:
         if i >= len(candidates):
@@ -1493,8 +1493,13 @@ def _assemble_czrc_results(
         existing_bh = existing_bh_by_pos.get(pos)
 
         if existing_bh:
-            # Existing borehole that was kept - preserve source_pass
+            # Existing borehole that was kept - preserve source_pass + is_centreline
             original_pass_str = existing_bh.get("source_pass", BoreholePass.FIRST.value)
+            is_cl = (
+                existing_bh.get("is_centreline", False)
+                if isinstance(existing_bh, dict)
+                else getattr(existing_bh, "is_centreline", False)
+            )
             selected.append(
                 Borehole(
                     x=candidates[i].x,
@@ -1502,6 +1507,7 @@ def _assemble_czrc_results(
                     coverage_radius=min_spacing,
                     source_pass=BoreholePass.from_string(str(original_pass_str)),
                     status=BoreholeStatus.PROPOSED,
+                    is_centreline=is_cl,
                 ).as_dict()
             )
         else:
@@ -1699,6 +1705,11 @@ def _build_cluster_stats(
                     bh.get("status", "proposed")
                     if isinstance(bh, dict)
                     else bh.status.value
+                ),
+                is_centreline=(
+                    bh.get("is_centreline", False)
+                    if isinstance(bh, dict)
+                    else getattr(bh, "is_centreline", False)
                 ),
             ).as_dict()
             for bh in selected
@@ -2140,6 +2151,12 @@ def check_and_split_large_cluster(
         pos = get_bh_position(bh)
         if pos not in removed_positions_for_output and pos not in seen_output_positions:
             x, y = get_bh_coords(bh)
+            # Preserve is_centreline so Third Pass locks centreline BHs
+            is_cl = (
+                bh.get("is_centreline", False)
+                if isinstance(bh, dict)
+                else getattr(bh, "is_centreline", False)
+            )
             true_second_pass_output.append(
                 Borehole(
                     x=x,
@@ -2147,6 +2164,7 @@ def check_and_split_large_cluster(
                     coverage_radius=get_bh_radius(bh, default=100.0),
                     source_pass=get_bh_source_pass(bh, default=BoreholePass.FIRST),
                     status=BoreholeStatus.PROPOSED,
+                    is_centreline=is_cl,
                 ).as_dict()
             )
             seen_output_positions.add(pos)
@@ -2615,8 +2633,9 @@ def solve_cell_cell_czrc(
         existing_bh = existing_bh_by_pos.get(pos)
 
         if existing_bh:
-            # This is an existing borehole that was kept - preserve source_pass
+            # This is an existing borehole that was kept - preserve source_pass and is_centreline
             original_pass_str = existing_bh.get("source_pass", BoreholePass.FIRST.value)
+            is_cl = existing_bh.get("is_centreline", False) if isinstance(existing_bh, dict) else getattr(existing_bh, "is_centreline", False)
             selected.append(
                 Borehole(
                     x=candidates[i].x,
@@ -2624,6 +2643,7 @@ def solve_cell_cell_czrc(
                     coverage_radius=spacing,
                     source_pass=BoreholePass.from_string(str(original_pass_str)),
                     status=BoreholeStatus.PROPOSED,
+                    is_centreline=is_cl,
                 ).as_dict()
             )
         else:
@@ -3643,6 +3663,11 @@ def run_czrc_optimization(
         pos = get_bh_position(bh)
         if pos not in second_pass_removed_positions_v1:
             x, y = get_bh_coords(bh)
+            is_cl = (
+                bh.get("is_centreline", False)
+                if isinstance(bh, dict)
+                else getattr(bh, "is_centreline", False)
+            )
             computed_second_pass.append(
                 Borehole(
                     x=x,
@@ -3650,6 +3675,7 @@ def run_czrc_optimization(
                     coverage_radius=get_bh_radius(bh, default=100.0),
                     source_pass=get_bh_source_pass(bh, default=BoreholePass.FIRST),
                     status=BoreholeStatus.PROPOSED,
+                    is_centreline=is_cl,
                 ).as_dict()
             )
 
