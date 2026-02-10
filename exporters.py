@@ -353,6 +353,8 @@ def _write_borehole_csv(
                 "Northing",
                 "Coverage_Radius",
                 "Source_Pass",
+                "Status",
+                "Is_Centreline",
             ]
         )
         df.to_csv(csv_path, index=False)
@@ -369,6 +371,8 @@ def _write_borehole_csv(
                 "Northing": round(validated.y, 2),
                 "Coverage_Radius": round(validated.coverage_radius, 1),
                 "Source_Pass": validated.source_pass.value,
+                "Status": validated.status.value,
+                "Is_Centreline": validated.is_centreline,
             }
         )
 
