@@ -40,6 +40,7 @@ For Navigation: Use VS Code outline (Ctrl+Shift+O)
 """
 
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
+from dataclasses import dataclass, field
 import logging
 import math
 import time
@@ -3132,7 +3133,263 @@ def solve_czrc_ilp_for_cluster(
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 🚀 MAIN ENTRY POINT
+# � CZRC ENTRY POINT HELPERS
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _build_zones_clip_geometry(
+    czrc_data: Dict[str, Any],
+) -> Optional[BaseGeometry]:
+    """
+    Build zones clip geometry for Tier 2 test point clipping.
+
+    Prioritizes raw zone geometries (actual boundaries) over coverage clouds
+    (which extend beyond zone boundaries).
+
+    Args:
+        czrc_data: CZRC geometry data containing zone_geometries or coverage_clouds
+
+    Returns:
+        Union of zone geometries, or None if not available.
+    """
+    zone_geometries = czrc_data.get("zone_geometries", {})
+    if zone_geometries:
+        return unary_union(list(zone_geometries.values()))
+
+    # Fallback to coverage clouds (legacy compatibility)
+    coverage_clouds = czrc_data.get("coverage_clouds", {})
+    coverage_clouds_wkt = czrc_data.get("coverage_clouds_wkt", {})
+    if coverage_clouds:
+        return unary_union(list(coverage_clouds.values()))
+    elif coverage_clouds_wkt:
+        cloud_geoms = [wkt.loads(w) for w in coverage_clouds_wkt.values()]
+        return unary_union(cloud_geoms)
+
+    return None
+
+
+def _parse_existing_coverage(
+    czrc_data: Dict[str, Any],
+) -> Optional[BaseGeometry]:
+    """
+    Parse existing borehole coverage for Tier 2 filtering.
+
+    Prevents Tier 2 test points from spawning in already-covered areas (green).
+
+    Args:
+        czrc_data: CZRC geometry data containing covered_union_wkt
+
+    Returns:
+        Existing coverage geometry, or None if not available.
+    """
+    covered_union_wkt = czrc_data.get("covered_union_wkt")
+    if not covered_union_wkt:
+        print(
+            "   🔷 Tier 2 filter: no covered_union_wkt in czrc_data "
+            "(Tier 2 points won't be filtered by existing coverage)"
+        )
+        return None
+
+    try:
+        existing_coverage = wkt.loads(covered_union_wkt)
+        print(
+            f"   🔷 Tier 2 filter: parsed existing coverage "
+            f"(area={existing_coverage.area/10000:.1f} ha)"
+        )
+        return existing_coverage
+    except Exception as e:
+        print(f"   ⚠️ Tier 2 filter: failed to parse covered_union_wkt: {e}")
+        return None
+
+
+def _filter_viz_data(
+    all_removed: List[Dict[str, Any]],
+    all_added: List[Dict[str, Any]],
+    all_third_pass_removed: List[Dict[str, Any]],
+    all_third_pass_added: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """
+    Filter removed/added for visualization, excluding Third Pass data.
+
+    BUG FIX: all_removed/all_added contain BOTH Second Pass AND Third Pass changes
+    because check_and_split_large_cluster() extends deduped_removed/deduped_added
+    with Third Pass cell-cell CZRC results. This causes Third Pass boreholes to
+    appear in the "Second Pass" visualization layer.
+
+    Returns:
+        Tuple of (second_pass_only_removed, second_pass_only_added)
+    """
+    third_pass_removed_pos = {get_bh_position(bh) for bh in all_third_pass_removed}
+    third_pass_added_pos = {get_bh_position(bh) for bh in all_third_pass_added}
+
+    second_pass_only_removed = [
+        bh for bh in all_removed
+        if get_bh_position(bh) not in third_pass_removed_pos
+    ]
+    second_pass_only_added = [
+        bh for bh in all_added
+        if get_bh_position(bh) not in third_pass_added_pos
+    ]
+
+    return second_pass_only_removed, second_pass_only_added
+
+
+@dataclass
+class CZRCAccumulators:
+    """
+    Accumulator state for CZRC optimization run.
+    
+    Groups the 18+ accumulator variables used in run_czrc_optimization
+    into a single dataclass for cleaner parameter passing to helper functions.
+    """
+    
+    # Core results
+    all_cluster_stats: Dict[str, Any] = field(default_factory=dict)
+    all_removed: List[Dict[str, Any]] = field(default_factory=list)
+    all_added: List[Dict[str, Any]] = field(default_factory=list)
+    boreholes_to_add: List[Dict[str, Any]] = field(default_factory=list)
+    
+    # First/Second pass candidates
+    all_first_pass_candidates: List[Dict[str, Any]] = field(default_factory=list)
+    all_czrc_test_points: List[Dict[str, Any]] = field(default_factory=list)
+    all_second_pass_boreholes: List[Dict[str, Any]] = field(default_factory=list)
+    
+    # Third pass data
+    all_third_pass_removed: List[Dict[str, Any]] = field(default_factory=list)
+    all_third_pass_added: List[Dict[str, Any]] = field(default_factory=list)
+    all_third_pass_test_points: List[Dict[str, Any]] = field(default_factory=list)
+    all_third_pass_existing: List[Dict[str, Any]] = field(default_factory=list)
+    
+    # Visualization data
+    all_cell_wkts: List[str] = field(default_factory=list)
+    all_cell_clouds_wkt: Dict[str, str] = field(default_factory=dict)
+    all_cell_intersections_wkt: Dict[str, str] = field(default_factory=dict)
+    all_tier_geometries: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    max_third_pass_spacing: float = 0.0
+    
+    # Deduplication sets (for position tracking)
+    seen_candidates: set = field(default_factory=set)
+    seen_test_points: set = field(default_factory=set)
+    seen_second_pass: set = field(default_factory=set)
+    seen_third_pass_test_points: set = field(default_factory=set)
+    seen_third_pass_existing: set = field(default_factory=set)
+    
+    # Summary tracking
+    cluster_summaries: List[Dict[str, Any]] = field(default_factory=list)
+    cluster_idx: int = 0  # For unique log file naming
+
+
+def _resolve_multi_cluster_conflicts(
+    boreholes_to_add: List[Dict[str, Any]],
+    all_removed: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Handle multi-cluster overlap case.
+
+    BUG FIX: When a borehole spans multiple clusters, it can be:
+    - Selected by Cluster A's ILP -> in boreholes_to_add
+    - Not selected by Cluster B's ILP -> in all_removed
+
+    Same borehole ends up in BOTH lists. The removed borehole gets re-added via
+    boreholes_to_add, causing it to appear in Proposed Boreholes (blue markers)
+    even though it should be removed (red markers in Second Pass are correct).
+
+    Rule: If ANY cluster removes a borehole, it should NOT be re-added.
+
+    Args:
+        boreholes_to_add: Boreholes selected by at least one cluster
+        all_removed: Boreholes removed by at least one cluster
+
+    Returns:
+        Filtered boreholes_to_add list with conflicts removed.
+    """
+    removed_positions = {get_bh_position(bh) for bh in all_removed}
+    filtered = [
+        bh for bh in boreholes_to_add
+        if get_bh_position(bh) not in removed_positions
+    ]
+
+    conflicting_count = len(boreholes_to_add) - len(filtered)
+    if conflicting_count > 0:
+        print(
+            f"   🔧 Multi-cluster overlap: {conflicting_count} boreholes removed by one cluster, "
+            f"selected by another → removing (removed wins over re-add)"
+        )
+
+    return filtered
+
+
+def _validate_third_pass_removals(
+    all_third_pass_removed: List[Dict[str, Any]],
+    all_tier_geometries: Dict[str, Dict[str, Any]],
+    log: logging.Logger,
+) -> set:
+    """
+    Validate Third Pass removals against tier geometries.
+
+    BUG FIX: Boreholes in SP Tier 1 but OUTSIDE TP Tier 1 were being incorrectly
+    removed because they shared coordinates with legitimate TP removals.
+
+    This function builds a union of all Third Pass Tier 1 geometries and validates
+    that each removal is inside Tier 1.
+
+    Args:
+        all_third_pass_removed: List of boreholes marked for Third Pass removal
+        all_tier_geometries: Dict of tier geometry data keyed by pair_key
+        log: Logger for warnings
+
+    Returns:
+        Set of validated removal positions (only removals inside TP Tier 1).
+    """
+    third_pass_removed_positions: set = set()
+
+    if not all_third_pass_removed or not all_tier_geometries:
+        return third_pass_removed_positions
+
+    # Build union of all Third Pass Tier 1 geometries for validation
+    tp_tier1_polys = []
+    for pair_key, tier_data in all_tier_geometries.items():
+        tier1_wkt_str = tier_data.get("tier1_wkt")
+        if tier1_wkt_str:
+            try:
+                tier1_geom = wkt.loads(tier1_wkt_str)
+                tp_tier1_polys.append(tier1_geom)
+            except Exception:
+                pass
+
+    tp_tier1_union = unary_union(tp_tier1_polys) if tp_tier1_polys else None
+
+    # Validate each removal is inside Third Pass Tier 1
+    validated_count = 0
+    skipped_count = 0
+    for bh in all_third_pass_removed:
+        pos = get_bh_position(bh)
+        if tp_tier1_union:
+            pt = Point(pos[0], pos[1])
+            if tp_tier1_union.contains(pt):
+                third_pass_removed_positions.add(pos)
+                validated_count += 1
+            else:
+                skipped_count += 1
+                log.debug(
+                    f"Skipped invalid TP removal at ({pos[0]:.1f}, {pos[1]:.1f}) - outside TP Tier 1"
+                )
+        else:
+            # No tier geometries to validate against - include all
+            third_pass_removed_positions.add(pos)
+            validated_count += 1
+
+    if skipped_count > 0:
+        log.warning(
+            f"Blocked {skipped_count} invalid Third Pass removals (outside TP Tier 1). "
+            f"Validated: {validated_count}"
+        )
+
+    return third_pass_removed_positions
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# �🚀 MAIN ENTRY POINT
 # ═══════════════════════════════════════════════════════════════════════════
 
 
@@ -3176,41 +3433,11 @@ def run_czrc_optimization(
     if not pairwise_wkts:
         return first_pass_boreholes, {"status": "skipped", "reason": "no_pairwise"}
 
-    # Build zones clip geometry from raw zone geometries for Tier 2 test point clipping
-    # Use raw zone geometries (not buffered coverage clouds) to ensure test points
-    # stay within actual zone boundaries
-    zone_geometries = czrc_data.get("zone_geometries", {})
-    zones_clip_geometry: Optional[BaseGeometry] = None
-    if zone_geometries:
-        # Use raw zone geometry objects (preferred - actual zone boundaries)
-        zones_clip_geometry = unary_union(list(zone_geometries.values()))
-    else:
-        # Fallback to coverage clouds only if zone_geometries not available
-        # (legacy compatibility - coverage clouds extend beyond zone boundaries)
-        coverage_clouds = czrc_data.get("coverage_clouds", {})
-        coverage_clouds_wkt = czrc_data.get("coverage_clouds_wkt", {})
-        if coverage_clouds:
-            zones_clip_geometry = unary_union(list(coverage_clouds.values()))
-        elif coverage_clouds_wkt:
-            cloud_geoms = [wkt.loads(w) for w in coverage_clouds_wkt.values()]
-            zones_clip_geometry = unary_union(cloud_geoms)
+    # Build zones clip geometry for Tier 2 test point clipping
+    zones_clip_geometry = _build_zones_clip_geometry(czrc_data)
 
-    # Parse existing borehole coverage for Tier 2 test point filtering
-    # This prevents Tier 2 test points from spawning in already-covered areas (green)
-    covered_union_wkt = czrc_data.get("covered_union_wkt")
-    existing_coverage: Optional[BaseGeometry] = None
-    if covered_union_wkt:
-        try:
-            existing_coverage = wkt.loads(covered_union_wkt)
-            print(
-                f"   🔷 Tier 2 filter: parsed existing coverage (area={existing_coverage.area/10000:.1f} ha)"
-            )
-        except Exception as e:
-            print(f"   ⚠️ Tier 2 filter: failed to parse covered_union_wkt: {e}")
-    else:
-        print(
-            "   🔷 Tier 2 filter: no covered_union_wkt in czrc_data (Tier 2 points won't be filtered by existing coverage)"
-        )
+    # Parse existing borehole coverage for Tier 2 filtering
+    existing_coverage = _parse_existing_coverage(czrc_data)
 
     # Store in config for access in downstream functions
     config = dict(config)  # Shallow copy to avoid mutating original
@@ -3429,96 +3656,20 @@ def run_czrc_optimization(
     # Replace the aggregated second pass with the computed one
     all_second_pass_boreholes = computed_second_pass
 
-    # ═══════════════════════════════════════════════════════════════════════════
-    # FIX: Handle multi-cluster overlap case
-    # ═══════════════════════════════════════════════════════════════════════════
-    # When a borehole spans multiple clusters, it can be:
-    #   - Selected by Cluster A's ILP → in boreholes_to_add
-    #   - Not selected by Cluster B's ILP → in all_removed
-    # BUG: Same borehole in BOTH lists. The removed borehole gets re-added via
-    # boreholes_to_add, causing it to appear in Proposed Boreholes (blue markers)
-    # even though it should be removed (red markers in Second Pass are correct).
-    #
-    # CORRECT FIX: Filter boreholes_to_add to exclude any that were removed.
-    # If ANY cluster removes a borehole, it should NOT be re-added.
-    # The red markers (all_removed) are correct - don't touch them.
-    removed_positions_for_filter = {get_bh_position(bh) for bh in all_removed}
-    filtered_to_add = [
-        bh
-        for bh in boreholes_to_add
-        if get_bh_position(bh) not in removed_positions_for_filter
-    ]
-
-    # Report conflict resolution
-    conflicting_count = len(boreholes_to_add) - len(filtered_to_add)
-    if conflicting_count > 0:
-        print(
-            f"   🔧 Multi-cluster overlap: {conflicting_count} boreholes removed by one cluster, "
-            f"selected by another → removing (removed wins over re-add)"
-        )
-    boreholes_to_add = filtered_to_add
+    # Handle multi-cluster overlap case (removed wins over re-add)
+    boreholes_to_add = _resolve_multi_cluster_conflicts(boreholes_to_add, all_removed)
 
     # ═══════════════════════════════════════════════════════════════════════════
     # FIX: Separate Second Pass and Third Pass removals
     # ═══════════════════════════════════════════════════════════════════════════
-    # BUG: Previously all_removed contained BOTH Second Pass and Third Pass removals.
-    # The final output was computed as: first_pass - all_removed + additions
-    # This incorrectly applied Third Pass removals to First Pass boreholes.
-    #
-    # CORRECT FLOW:
-    # 1. Second Pass output = First Pass - Second Pass removals + Second Pass additions
-    # 2. Third Pass output = Second Pass output - Third Pass removals + Third Pass additions
-    #
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Validate Third Pass removals against tier geometries
+    # ═══════════════════════════════════════════════════════════════════════════
     # Third Pass removals are only valid for boreholes that were in Second Pass Tier 1.
     # Boreholes that were in Third Pass Tier 2 only should NOT be removed!
-
-    # Build set of Third Pass removed positions
-    # FIX: Validate each removal is inside a Third Pass Tier 1 before including
-    # Bug found: Boreholes in SP Tier 1 but OUTSIDE TP Tier 1 were being incorrectly
-    # removed because they shared coordinates with legitimate TP removals.
-    third_pass_removed_positions: set = set()
-    if all_third_pass_removed and all_tier_geometries:
-        # Build union of all Third Pass Tier 1 geometries for validation
-        tp_tier1_polys = []
-        for pair_key, tier_data in all_tier_geometries.items():
-            tier1_wkt = tier_data.get("tier1_wkt")
-            if tier1_wkt:
-                try:
-                    tier1_geom = wkt.loads(tier1_wkt)
-                    tp_tier1_polys.append(tier1_geom)
-                except Exception:
-                    pass
-
-        tp_tier1_union = unary_union(tp_tier1_polys) if tp_tier1_polys else None
-
-        # Validate each removal is inside Third Pass Tier 1
-        validated_count = 0
-        skipped_count = 0
-        for bh in all_third_pass_removed:
-            pos = get_bh_position(bh)
-            if tp_tier1_union:
-                pt = Point(pos[0], pos[1])
-                if tp_tier1_union.contains(pt):
-                    third_pass_removed_positions.add(pos)
-                    validated_count += 1
-                else:
-                    skipped_count += 1
-                    log.debug(
-                        f"⚠️ Skipped invalid TP removal at ({pos[0]:.1f}, {pos[1]:.1f}) - outside TP Tier 1"
-                    )
-            else:
-                # No tier geometries to validate against - include all
-                third_pass_removed_positions.add(pos)
-                validated_count += 1
-
-        if skipped_count > 0:
-            log.warning(
-                f"⚠️ Blocked {skipped_count} invalid Third Pass removals (outside TP Tier 1). "
-                f"Validated: {validated_count}"
-            )
-    else:
-        # No Third Pass removals or no tier geometries - use empty set
-        third_pass_removed_positions = set()
+    third_pass_removed_positions = _validate_third_pass_removals(
+        all_third_pass_removed, all_tier_geometries, log
+    )
 
     # Second Pass removed = all_removed MINUS Third Pass removed
     second_pass_removed_positions = {
@@ -3571,33 +3722,10 @@ def run_czrc_optimization(
 
     elapsed = time.perf_counter() - start_time
 
-    # ═══════════════════════════════════════════════════════════════════════════
-    # FIX: Filter removed_boreholes/added_boreholes for visualization
-    # ═══════════════════════════════════════════════════════════════════════════
-    # BUG: all_removed/all_added contain BOTH Second Pass AND Third Pass changes
-    # because check_and_split_large_cluster() extends deduped_removed/deduped_added
-    # with Third Pass cell-cell CZRC results. This causes Third Pass boreholes to
-    # appear in the "Second Pass" visualization layer, including:
-    # - Removals showing in Second Pass Tier 2 areas (which is impossible for SP)
-    # - Boreholes with source_pass="Third Pass" appearing in the SP layer
-    #
-    # FIX: Filter out Third Pass changes from the visualization data.
-    # The Third Pass data is already correctly stored in separate keys
-    # (third_pass_removed / third_pass_added).
-    third_pass_removed_pos_for_viz = {
-        get_bh_position(bh) for bh in all_third_pass_removed
-    }
-    third_pass_added_pos_for_viz = {get_bh_position(bh) for bh in all_third_pass_added}
-    second_pass_only_removed = [
-        bh
-        for bh in all_removed
-        if get_bh_position(bh) not in third_pass_removed_pos_for_viz
-    ]
-    second_pass_only_added = [
-        bh
-        for bh in all_added
-        if get_bh_position(bh) not in third_pass_added_pos_for_viz
-    ]
+    # Filter removed/added for visualization (exclude Third Pass data)
+    second_pass_only_removed, second_pass_only_added = _filter_viz_data(
+        all_removed, all_added, all_third_pass_removed, all_third_pass_added
+    )
 
     # Count unified clusters (clusters with more than one pair)
     unified_cluster_count = sum(1 for c in clusters if len(c["pair_keys"]) > 1)
