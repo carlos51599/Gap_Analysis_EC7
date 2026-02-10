@@ -40,14 +40,29 @@ For Navigation: Use VS Code outline (Ctrl+Shift+O)
 """
 
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
+from dataclasses import dataclass, field
 import logging
 import math
 import time
 
 import numpy as np
 from shapely import wkt
+from shapely.errors import GEOSException
 from shapely.geometry import Point, Polygon, MultiPolygon, MultiPoint
+
+# Import typed data models for borehole provenance tracking
+from Gap_Analysis_EC7.models.data_models import (
+    Borehole,
+    BoreholePass,
+    BoreholeStatus,
+    get_bh_coords,
+    get_bh_position,
+    get_bh_radius,
+    get_bh_source_pass,
+)
 from shapely.geometry.base import BaseGeometry
+
+from Gap_Analysis_EC7.solvers.czrc_geometry import parse_pair_key
 from shapely.ops import unary_union, voronoi_diagram
 from sklearn.cluster import KMeans
 
@@ -76,9 +91,13 @@ def _sanitize_log_name(name: str, max_zones: int = 5) -> Tuple[str, Optional[str
     Replaces problematic characters with underscores, abbreviates zone names
     to first 2 letters, and truncates if needed. Zone names are joined with
     their numbers (em2), underscores only between different zones/cells (em2_hi1).
-    
+
     For clusters with more than max_zones zones, returns a simplified name
     like "8zones" and the full abbreviated name for logging in the file header.
+
+    NOTE: This function is DEPRECATED for log naming. Use simple cluster indices
+    (Cluster1, Cluster2, etc.) for log filenames instead. The composition is
+    written as a header inside the log file for reference.
 
     Args:
         name: Raw name (e.g., "Embankment_0+Embankment_1")
@@ -104,7 +123,7 @@ def _sanitize_log_name(name: str, max_zones: int = 5) -> Tuple[str, Optional[str
     while i < len(parts):
         part = parts[i]
         part_lower = part.lower()
-        
+
         # First check: Is this "Cell" followed by a number? → convert to c#
         if part_lower == "cell" and i + 1 < len(parts) and parts[i + 1].isdigit():
             zone_tokens.append(f"c{parts[i + 1]}")
@@ -131,16 +150,89 @@ def _sanitize_log_name(name: str, max_zones: int = 5) -> Tuple[str, Optional[str
             zone_tokens.append(part[:2].lower())
             zone_count += 1
             i += 1
-    
+
     # Full abbreviated name
     full_name = "_".join(zone_tokens)
-    
+
     # If too many zones, use simplified count-based name
     if zone_count > max_zones:
         short_name = f"{zone_count}zones"
         return short_name, full_name
-    
+
     return full_name if full_name else "unnamed", None
+
+
+def _get_cluster_log_header(cluster_key: str) -> str:
+    """
+    Generate the full composition header for a cluster log file.
+
+    Uses _sanitize_log_name to abbreviate zone names while preserving
+    the full structure for reference in log headers.
+
+    Args:
+        cluster_key: Original cluster_key (e.g., "Embankment_1_Embankment_2+...")
+
+    Returns:
+        Abbreviated composition string (e.g., "em1_em2_em1_hi2_em2_hi2")
+    """
+    safe_name, full_name = _sanitize_log_name(cluster_key)
+    # Return the full abbreviated name if truncated, otherwise the safe name
+    return full_name if full_name else safe_name
+
+
+def _setup_highs_logging(
+    highs_log_folder: Optional[str],
+    cluster_idx: int,
+    cluster_key: str,
+) -> Optional[str]:
+    """
+    Set up HiGHS solver log file for a cluster solve.
+
+    Creates the log folder if needed, generates an appropriate log file path
+    based on cluster index, and writes a header with cluster composition.
+
+    Args:
+        highs_log_folder: Optional folder path for log files. If None, no logging.
+        cluster_idx: Cluster index for naming. Encoding:
+            - >= 1000: Direct solve (non-split cluster), display as Cluster{N}
+            - < 1000: Split cluster cell, display as Cluster{N}_Cell{M}
+        cluster_key: Original cluster key for header (e.g., "Zone1_Zone2+Zone2_Zone3")
+
+    Returns:
+        Path to log file, or None if logging disabled.
+    """
+    if not highs_log_folder:
+        return None
+
+    import os
+
+    os.makedirs(highs_log_folder, exist_ok=True)
+
+    # Generate full composition header for the log file
+    cluster_header = _get_cluster_log_header(cluster_key)
+
+    # Determine log file path based on cluster index encoding
+    if cluster_idx >= 1000:
+        # Direct solve - use simple Cluster{N} naming (N is 1-based for display)
+        actual_cluster_num = (cluster_idx - 1000) + 1
+        highs_log_file = os.path.join(
+            highs_log_folder, f"second_Cluster{actual_cluster_num}.log"
+        )
+    else:
+        # Cell solve within split cluster - use Cluster{N}_Cell{M} naming
+        actual_cluster_num = (cluster_idx // 100) + 1
+        cell_num = (cluster_idx % 100) + 1
+        highs_log_file = os.path.join(
+            highs_log_folder,
+            f"second_Cluster{actual_cluster_num}_Cell{cell_num}.log",
+        )
+
+    # Write cluster composition header to log file
+    with open(highs_log_file, "w") as f:
+        f.write(f"# Cluster composition: {cluster_header}\n")
+        f.write(f"# Original cluster_key: {cluster_key}\n\n")
+
+    return highs_log_file
 
 
 def _get_czrc_stall_detection_config(czrc_ilp_config: Dict[str, Any]) -> Dict[str, Any]:
@@ -207,6 +299,204 @@ def _get_cross_zone_exclusion_method(config: Dict[str, Any]) -> str:
     # Fall back to global ilp_solver setting
     ilp_solver_config = CONFIG.get("ilp_solver", {})
     return ilp_solver_config.get("cross_zone_exclusion_method", "average")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 🔍 DIAGNOSTIC: TIER VIOLATION VALIDATION
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _build_tier1_union(
+    tier_geometries: Dict[str, Dict[str, Any]],
+) -> Optional[BaseGeometry]:
+    """Build a union of all Tier 1 regions from tier_geometries dict."""
+    tier1_polys = []
+    for _, geoms in tier_geometries.items():
+        tier1_wkt = geoms.get("tier1_wkt")
+        if tier1_wkt:
+            try:
+                tier1_poly = wkt.loads(tier1_wkt)
+                if tier1_poly.is_valid and not tier1_poly.is_empty:
+                    tier1_polys.append(tier1_poly)
+            except (GEOSException, ValueError):
+                pass
+    return unary_union(tier1_polys) if tier1_polys else None
+
+
+def _validate_removed_in_tier1(
+    removed_boreholes: List[Dict[str, Any]],
+    tier_geometries: Dict[str, Dict[str, Any]],
+    logger: Optional[logging.Logger] = None,
+    current_cluster_key: Optional[str] = None,
+) -> int:
+    """
+    Validate that all removed boreholes were inside Tier 1 and from same cluster.
+
+    Returns number of violations found (0 = all boreholes properly validated).
+    """
+    if not removed_boreholes or not tier_geometries:
+        return 0
+
+    log = logger or logging.getLogger(__name__)
+    tier1_union = _build_tier1_union(tier_geometries)
+    if tier1_union is None:
+        return 0
+
+    tier_violations = 0
+    cross_cluster_violations = 0
+
+    for bh in removed_boreholes:
+        # Duck-typed: works with Dict or Borehole
+        x, y = get_bh_coords(bh)
+        pt = Point(x, y)
+
+        # Check 1: Is it inside ANY Tier 1?
+        if not tier1_union.contains(pt):
+            tier_violations += 1
+            log.warning(
+                "🚨 TIER VIOLATION: Removed borehole (%.1f, %.1f) is OUTSIDE Tier 1!",
+                x,
+                y,
+            )
+
+        # Check 2: Is it from the CURRENT cluster? (compare full cluster_key strings)
+        if current_cluster_key is not None:
+            origin_cluster = bh.get("origin_cluster") if isinstance(bh, dict) else None
+            if origin_cluster is not None and origin_cluster != current_cluster_key:
+                cross_cluster_violations += 1
+                log.warning(
+                    "🔴 CROSS-CLUSTER VIOLATION: Borehole (%.1f, %.1f) from '%s' "
+                    "removed by '%s'!",
+                    x,
+                    y,
+                    origin_cluster,
+                    current_cluster_key,
+                )
+
+    if tier_violations > 0:
+        log.error(
+            "❌ TIER VIOLATIONS: %d boreholes removed from OUTSIDE Tier 1!",
+            tier_violations,
+        )
+
+    if cross_cluster_violations > 0:
+        log.error(
+            "❌ CROSS-CLUSTER CONTAMINATION: %d boreholes from wrong cluster!",
+            cross_cluster_violations,
+        )
+
+    return tier_violations + cross_cluster_violations
+
+
+def _validate_provenance(
+    removed_boreholes: List[Dict[str, Any]],
+    current_cluster_key: Optional[str],
+    logger: Optional[logging.Logger] = None,
+) -> int:
+    """
+    Validate that removed boreholes came from the expected cluster.
+
+    Detects cross-cluster contamination where boreholes from one cluster
+    are incorrectly processed/removed by another cluster.
+
+    Args:
+        removed_boreholes: List of borehole dicts that were marked for removal
+        current_cluster_key: The cluster key currently being processed (pair_keys joined)
+        logger: Optional logger for warnings
+
+    Returns:
+        Number of cross-cluster removals found (0 = all boreholes from same cluster)
+    """
+    if not removed_boreholes or not current_cluster_key:
+        return 0
+
+    log = logger or logging.getLogger(__name__)
+
+    cross_cluster_count = 0
+    for bh in removed_boreholes:
+        # Duck-typed: works with Dict or Borehole
+        x, y = get_bh_coords(bh)
+        origin = bh.get("origin_cluster") if isinstance(bh, dict) else None
+        # Compare cluster_key strings directly (both are pair_keys joined)
+        if origin is not None and origin != current_cluster_key:
+            cross_cluster_count += 1
+            log.warning(
+                "⚠️ CROSS-CLUSTER: Borehole (%.1f, %.1f) from '%s' processed by '%s'",
+                x,
+                y,
+                origin,
+                current_cluster_key,
+            )
+
+    if cross_cluster_count > 0:
+        log.warning(
+            "⚠️ PROVENANCE WARNING: %d boreholes processed by wrong cluster!",
+            cross_cluster_count,
+        )
+
+    return cross_cluster_count
+
+
+def _print_cluster_processing_summary(
+    cluster_summaries: List[Dict[str, Any]],
+    logger: Optional[logging.Logger] = None,
+) -> None:
+    """
+    Print a summary table of cluster processing for diagnostic visibility.
+
+    Shows which clusters were split (Third Pass applied), how many pairs
+    were processed, and borehole counts. Flags clusters that were NOT
+    split when expected.
+
+    Args:
+        cluster_summaries: List of dicts with cluster processing stats
+        logger: Optional logger
+    """
+    if not cluster_summaries:
+        return
+
+    log = logger or logging.getLogger(__name__)
+
+    # Build summary table
+    log.info("")
+    log.info(
+        "   ╔════════════════════════════════════════════════════════════════════╗"
+    )
+    log.info(
+        "   ║              CLUSTER PROCESSING SUMMARY                            ║"
+    )
+    log.info("   ╠═════════╦═════════╦═══════════════╦════════════╦══════════════════╣")
+    log.info("   ║ Cluster ║ Split?  ║ 3rd Pass Pairs║ BHs In     ║ BHs Removed      ║")
+    log.info("   ╠═════════╬═════════╬═══════════════╬════════════╬══════════════════╣")
+
+    warnings = []
+    for cs in cluster_summaries:
+        split_str = "YES" if cs["was_split"] else "NO"
+        pairs_str = str(cs["third_pass_pairs"]) if cs["was_split"] else "-"
+        bhs_in_str = str(cs["bhs_in"])
+        bhs_removed_str = str(cs["bhs_removed"])
+        if cs["was_split"] and cs["third_pass_removed"] > 0:
+            bhs_removed_str += f" (+{cs['third_pass_removed']} 3rd)"
+
+        # Flag clusters that weren't split
+        flag = ""
+        if not cs["was_split"] and cs["bhs_in"] > 0:
+            flag = " ⚠️"
+            warnings.append(cs["cluster_num"])
+
+        log.info(
+            f"   ║ {cs['cluster_num']:>7} ║ {split_str:>7} ║ {pairs_str:>13} ║ "
+            f"{bhs_in_str:>10} ║ {bhs_removed_str:>16} ║{flag}"
+        )
+
+    log.info("   ╚═════════╩═════════╩═══════════════╩════════════╩══════════════════╝")
+
+    if warnings:
+        log.warning(
+            f"   ⚠️ Clusters {warnings} were NOT split - their boreholes are NOT "
+            f"processed by Third Pass and may cause tier violations!"
+        )
+    log.info("")
 
 
 def _aggregate_zone_spacings(
@@ -276,19 +566,8 @@ def compute_czrc_tiers(
     Returns:
         Tuple of (tier1_region, tier2_region, r_max)
     """
-    # Parse zone names from pair_key
-    # Handle two formats:
-    #   1. Zone-zone pairs: "Embankment_Highways" → ["Embankment", "Highways"]
-    #   2. Cell-cell pairs: "Cell_0_Cell_1" → ["Cell_0", "Cell_1"]
-    # BUG FIX: Simple split("_") breaks Cell_i_Cell_j format into
-    # ["Cell", "0", "Cell", "1"] which doesn't match zone_spacings keys.
-    parts = pair_key.split("_")
-    if len(parts) == 4 and parts[0] == "Cell" and parts[2] == "Cell":
-        # Cell-cell format: "Cell_0_Cell_1" → ["Cell_0", "Cell_1"]
-        zones = [f"Cell_{parts[1]}", f"Cell_{parts[3]}"]
-    else:
-        # Zone-zone format: "Embankment_Highways" → ["Embankment", "Highways"]
-        zones = parts
+    # Parse zone names from pair_key (handles || delimiter and legacy underscore format)
+    zones = parse_pair_key(pair_key, zone_spacings)
 
     # Get maximum spacing from zones in this pair (default 100m if not found)
     r_values = [zone_spacings.get(z, 100.0) for z in zones]
@@ -436,6 +715,66 @@ def filter_tier2_by_existing_coverage(
     return filtered
 
 
+def _compute_tier2_ring_test_points_with_filter(
+    tier1_region: BaseGeometry,
+    tier2_region: BaseGeometry,
+    r_max: float,
+    config: Dict[str, Any],
+    zones_clip_geometry: Optional[BaseGeometry],
+) -> List[Dict[str, Any]]:
+    """
+    Generate Tier 2 ring test points with config-driven filtering.
+
+    Combines test point generation, existing coverage filtering, and
+    config-based enable/disable logic into a single orchestration call.
+
+    Args:
+        tier1_region: Tier 1 boundary geometry
+        tier2_region: Tier 2 boundary geometry
+        r_max: Maximum coverage radius
+        config: CZRC config dict with tier2_test_point_protection settings
+        zones_clip_geometry: Optional geometry to clip test points to
+
+    Returns:
+        List of Tier 2 ring test points (empty if disabled or no points)
+    """
+    t2_protection = config.get("tier2_test_point_protection", {})
+    if not t2_protection.get("enabled", True):
+        return []
+
+    t2_multiplier = t2_protection.get("tier2_test_spacing_multiplier", 3.0)
+    base_test_mult = config.get("test_spacing_mult", 0.2)
+
+    tier2_ring_test_points = generate_tier2_ring_test_points(
+        tier1_region,
+        tier2_region,
+        r_max,
+        tier2_spacing_multiplier=t2_multiplier,
+        base_test_spacing_mult=base_test_mult,
+        clip_geometry=zones_clip_geometry,
+    )
+
+    if not tier2_ring_test_points:
+        return []
+
+    # Filter out points inside existing borehole coverage
+    existing_coverage = config.get("_existing_coverage")
+    print(
+        f"   🔷 [_compute_tier2_ring] existing_coverage={existing_coverage is not None}, "
+        f"tier2 count={len(tier2_ring_test_points)}"
+    )
+    if existing_coverage is not None:
+        tier2_ring_test_points = filter_tier2_by_existing_coverage(
+            tier2_ring_test_points, existing_coverage
+        )
+    else:
+        print(
+            "   ⚠️ [_compute_tier2_ring] NO _existing_coverage in config - Tier 2 NOT filtered!"
+        )
+
+    return tier2_ring_test_points
+
+
 def classify_first_pass_boreholes(
     first_pass_boreholes: List[Dict[str, Any]],
     tier1_region: BaseGeometry,
@@ -481,7 +820,9 @@ def classify_first_pass_boreholes(
     locked = []
 
     for bh in first_pass_boreholes:
-        pt = Point(bh["x"], bh["y"])
+        # Duck-typed: works with Dict or Borehole
+        x, y = get_bh_coords(bh)
+        pt = Point(x, y)
         # IMPORTANT: Check Tier 1 FIRST (since Tier 2 contains Tier 1)
         if tier1_region.contains(pt):
             candidates.append(bh)
@@ -497,14 +838,16 @@ def classify_first_pass_boreholes(
         external_zone = tier2_buffer.difference(tier2_region)
 
         # Track positions already in candidates/locked to avoid duplicates
-        known_positions = {(bh["x"], bh["y"]) for bh in candidates}
-        known_positions.update((bh["x"], bh["y"]) for bh in locked)
+        # Use get_bh_position for normalized comparison (6-decimal rounding)
+        known_positions = {get_bh_position(bh) for bh in candidates}
+        known_positions.update(get_bh_position(bh) for bh in locked)
 
         for bh in all_boreholes:
-            pos = (bh["x"], bh["y"])
+            pos = get_bh_position(bh)
             if pos in known_positions:
                 continue  # Already classified
-            pt = Point(bh["x"], bh["y"])
+            x, y = get_bh_coords(bh)
+            pt = Point(x, y)
             if external_zone.contains(pt):
                 external.append(bh)
                 known_positions.add(pos)  # Prevent re-adding
@@ -542,7 +885,7 @@ def _compute_tier1_for_pair(
     except (ValueError, TypeError):
         return None, 0.0
 
-    zones = pair_key.split("_")
+    zones = parse_pair_key(pair_key, zone_spacings)
     r_values = [zone_spacings.get(z, 100.0) for z in zones]
     r_max = max(r_values) if r_values else 100.0
     tier1_region = czrc_region.buffer(tier1_mult * r_max)
@@ -694,7 +1037,8 @@ def _prepare_candidates_for_ilp(
 
     # Add first-pass Tier 1 boreholes as candidates
     for bh in bh_candidates:
-        grid_candidates.append(Point(bh["x"], bh["y"]))
+        x, y = get_bh_coords(bh)
+        grid_candidates.append(Point(x, y))
 
     # REUSED: _dedupe_candidates() - remove duplicates keeping largest radius
     candidate_radii = [min_zone_spacing] * len(grid_candidates)
@@ -1057,7 +1401,7 @@ def solve_czrc_ilp_for_pair(
         )
 
     # Step 6: Prepare candidates
-    zones = pair_key.split("_")
+    zones = parse_pair_key(pair_key, zone_spacings)
     # Use cross_zone_exclusion_method from config to aggregate spacings
     exclusion_method = _get_cross_zone_exclusion_method(config)
     min_spacing = _aggregate_zone_spacings(zone_spacings, zones, exclusion_method)
@@ -1107,43 +1451,259 @@ def _assemble_czrc_results(
     candidates: List[Point],
     bh_candidates: List[Dict[str, Any]],
     min_spacing: float,
+    source_pass: BoreholePass = BoreholePass.SECOND,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
-    """Assemble selected/removed/added boreholes from ILP results."""
+    """Assemble selected/removed/added boreholes from ILP results.
+
+    Uses typed Borehole dataclass internally to ensure source_pass is always set,
+    then converts to dict for backward compatibility with rest of codebase.
+
+    Args:
+        indices: ILP solution indices (selected candidates)
+        candidates: All candidate positions as Points
+        bh_candidates: Tier 1 boreholes that may be removed
+        min_spacing: Coverage radius for new boreholes
+        source_pass: Pass identifier for ADDED boreholes only
+            (BoreholePass.SECOND or BoreholePass.THIRD)
+            NOTE: Removed boreholes keep their ORIGINAL source_pass
+
+    Returns:
+        Tuple of (selected, removed, added) borehole dicts with source_pass.
+    """
     selected_set = {
         (candidates[i].x, candidates[i].y) for i in indices if i < len(candidates)
     }
-    tier1_bh_set = {(bh["x"], bh["y"]) for bh in bh_candidates}
+    # Use duck-typed accessor for position normalization
+    tier1_bh_set = {get_bh_position(bh) for bh in bh_candidates}
 
-    # Selected = all ILP selections
-    selected = [
-        {"x": candidates[i].x, "y": candidates[i].y, "coverage_radius": min_spacing}
-        for i in indices
-        if i < len(candidates)
-    ]
-    # Removed = Tier 1 first-pass NOT selected
-    removed = [
-        {
-            "x": bh["x"],
-            "y": bh["y"],
-            "coverage_radius": bh.get("coverage_radius", min_spacing),
-        }
-        for bh in bh_candidates
-        if (bh["x"], bh["y"]) not in selected_set
-    ]
-    # Added = Selected NOT in first-pass Tier 1
-    added = [
-        {"x": candidates[i].x, "y": candidates[i].y, "coverage_radius": min_spacing}
-        for i in indices
-        if i < len(candidates)
-        and (candidates[i].x, candidates[i].y) not in tier1_bh_set
-    ]
+    # Build a lookup for existing borehole metadata by position
+    existing_bh_by_pos = {get_bh_position(bh): bh for bh in bh_candidates}
+
+    # Selected = all ILP selections (as dicts for backward compatibility)
+    # Preserve source_pass for existing boreholes, use current pass for new ones
+    selected = []
+    for i in indices:
+        if i >= len(candidates):
+            continue
+        pos = (round(candidates[i].x, 6), round(candidates[i].y, 6))
+        existing_bh = existing_bh_by_pos.get(pos)
+
+        if existing_bh:
+            # Existing borehole that was kept - preserve source_pass
+            original_pass_str = existing_bh.get("source_pass", BoreholePass.FIRST.value)
+            selected.append(
+                Borehole(
+                    x=candidates[i].x,
+                    y=candidates[i].y,
+                    coverage_radius=min_spacing,
+                    source_pass=BoreholePass.from_string(str(original_pass_str)),
+                    status=BoreholeStatus.PROPOSED,
+                ).as_dict()
+            )
+        else:
+            # New position from candidate grid - current pass added it
+            selected.append(
+                Borehole(
+                    x=candidates[i].x,
+                    y=candidates[i].y,
+                    coverage_radius=min_spacing,
+                    source_pass=source_pass,
+                    status=BoreholeStatus.ADDED,
+                ).as_dict()
+            )
+
+    # Removed = Tier 1 boreholes NOT selected
+    # CRITICAL: Preserve ORIGINAL source_pass (the pass that created them)
+    removed = []
+    for bh in bh_candidates:
+        x, y = get_bh_coords(bh)
+        if (x, y) not in selected_set:
+            # Use duck-typed accessor for source_pass
+            original_pass = get_bh_source_pass(bh, default=BoreholePass.FIRST)
+
+            # Create Borehole with original source_pass and REMOVED status
+            removed_bh = Borehole(
+                x=x,
+                y=y,
+                coverage_radius=(
+                    bh.get("coverage_radius", min_spacing)
+                    if isinstance(bh, dict)
+                    else bh.coverage_radius
+                ),
+                source_pass=original_pass,  # Keep original, not current pass!
+                status=BoreholeStatus.REMOVED,
+            )
+            removed.append(removed_bh.as_dict())
+
+    # Added = Selected NOT in previous pass Tier 1
+    # source_pass = current pass (these boreholes were CREATED by this pass)
+    added = []
+    for i in indices:
+        if i < len(candidates):
+            pos = (candidates[i].x, candidates[i].y)
+            if pos not in tier1_bh_set:
+                added_bh = Borehole(
+                    x=candidates[i].x,
+                    y=candidates[i].y,
+                    coverage_radius=min_spacing,
+                    source_pass=source_pass,  # Current pass created this
+                    status=BoreholeStatus.ADDED,
+                )
+                added.append(added_bh.as_dict())
+
     # Filter coincident pairs
     removed, added = _filter_coincident_pairs(removed, added)
     return selected, removed, added
 
 
+def _validate_tier1_removals(
+    removed: List[Dict[str, Any]],
+    tier1_geom: BaseGeometry,
+    logger: logging.Logger,
+) -> int:
+    """
+    Validate that all removed boreholes were inside the Tier 1 region.
+
+    Logs warnings for each violation and an error summary if any found.
+    This is a sanity check to catch CZRC bugs where boreholes outside
+    the optimization region are incorrectly marked as removed.
+
+    Args:
+        removed: List of removed borehole dicts
+        tier1_geom: Tier 1 boundary geometry
+        logger: Logger for warnings/errors
+
+    Returns:
+        Count of tier violations found
+    """
+    tier1_violations = 0
+    for bh in removed:
+        x, y = get_bh_coords(bh)
+        pt = Point(x, y)
+        if not tier1_geom.contains(pt):
+            tier1_violations += 1
+            logger.warning(
+                f"⚠️ SECOND PASS TIER VIOLATION: Removed borehole "
+                f"({x:.1f}, {y:.1f}) is OUTSIDE Tier 1!"
+            )
+    if tier1_violations > 0:
+        logger.error(
+            f"❌ SECOND PASS: {tier1_violations} boreholes removed from OUTSIDE Tier 1!"
+        )
+    return tier1_violations
+
+
+def _build_cluster_stats(
+    cluster_key: str,
+    pair_keys: List[str],
+    unified_tier1: BaseGeometry,
+    unified_tier2: BaseGeometry,
+    overall_r_max: float,
+    cluster_idx: int,
+    tier1_test_points: List[Dict[str, Any]],
+    tier2_ring_test_points: List[Dict[str, Any]],
+    precovered_ct: int,
+    external: List[Dict[str, Any]],
+    locked: List[Dict[str, Any]],
+    unsatisfied: List[Dict[str, Any]],
+    candidates: List[Any],
+    bh_candidates: List[Dict[str, Any]],
+    selected: List[Dict[str, Any]],
+    removed: List[Dict[str, Any]],
+    added: List[Dict[str, Any]],
+    min_spacing: float,
+    elapsed: float,
+    ilp_stats: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Build comprehensive stats dictionary for cluster solve result.
+
+    Centralizes stats construction to simplify main function and ensure
+    consistent output format.
+
+    Args:
+        cluster_key: Cluster key string (e.g., "Zone1_Zone2+Zone2_Zone3")
+        pair_keys: List of constituent pair keys
+        unified_tier1: Tier 1 geometry
+        unified_tier2: Tier 2 geometry
+        overall_r_max: Maximum coverage radius
+        cluster_idx: Cluster index for display numbering
+        tier1_test_points: All Tier 1 test points
+        tier2_ring_test_points: All Tier 2 ring test points
+        precovered_ct: Count of precovered test points
+        external: External boreholes providing coverage
+        locked: Locked boreholes
+        unsatisfied: Unsatisfied test points sent to ILP
+        candidates: ILP candidate positions
+        bh_candidates: First-pass borehole candidates
+        selected: Selected boreholes from ILP
+        removed: Removed boreholes
+        added: Added boreholes
+        min_spacing: Coverage radius used
+        elapsed: Solve time in seconds
+        ilp_stats: ILP solver statistics
+
+    Returns:
+        Stats dictionary for cluster solve result
+    """
+    cluster_area_ha = unified_tier1.area / 10000.0  # m² to hectares
+
+    # Determine cluster display index (1-based for user display)
+    cluster_display_idx = (
+        (cluster_idx - 1000 + 1) if cluster_idx >= 1000 else (cluster_idx + 1)
+    )
+
+    return {
+        "status": "success",
+        "cluster_key": cluster_key,
+        "cluster_index": cluster_display_idx,
+        "pair_keys": pair_keys,
+        "is_unified_cluster": len(pair_keys) > 1,
+        "overall_r_max": overall_r_max,
+        "r_max": overall_r_max,
+        "area_ha": cluster_area_ha,
+        "max_spacing_m": overall_r_max,
+        "tier1_wkt": unified_tier1.wkt,
+        "tier2_wkt": unified_tier2.wkt,
+        "tier1_test_points": len(tier1_test_points),
+        "tier2_ring_test_points": len(tier2_ring_test_points),
+        "precovered_count": precovered_ct,
+        "external_coverage_bhs": len(external),
+        "unsatisfied_count": len(unsatisfied),
+        "candidates_count": len(candidates),
+        "selected_count": len(selected),
+        "boreholes_removed": len(removed),
+        "boreholes_added": len(added),
+        "solve_time": elapsed,
+        "ilp_stats": ilp_stats,
+        "first_pass_candidates": bh_candidates,
+        "czrc_test_points": (
+            _annotate_test_points_with_coverage(
+                tier1_test_points, locked, external_boreholes=external
+            )
+            + _annotate_test_points_with_coverage(
+                tier2_ring_test_points, locked, external_boreholes=external
+            )
+        ),
+        "second_pass_boreholes": [
+            Borehole(
+                x=get_bh_coords(bh)[0],
+                y=get_bh_coords(bh)[1],
+                coverage_radius=get_bh_radius(bh, default=min_spacing),
+                source_pass=get_bh_source_pass(bh, default=BoreholePass.FIRST),
+                status=BoreholeStatus.from_string(
+                    bh.get("status", "proposed")
+                    if isinstance(bh, dict)
+                    else bh.status.value
+                ),
+            ).as_dict()
+            for bh in selected
+        ],
+    }
+
+
 # ═══════════════════════════════════════════════════════════════════════════
-# � CELL SPLITTING (Large Region Decomposition)
+# 🔧 CELL SPLITTING (Large Region Decomposition)
 # ═══════════════════════════════════════════════════════════════════════════
 
 
@@ -1435,6 +1995,9 @@ def check_and_split_large_cluster(
     log = logger or _logger
     method = cell_config.get("method", "kmeans_voronoi")
 
+    # === PROVENANCE TRACKING: Build cluster key for borehole origin tracking ===
+    cluster_key = "+".join(sorted(cluster["pair_keys"]))
+
     if method == "kmeans_voronoi":
         # Need candidate positions for K-means
         # Generate sample grid at candidate spacing to get density distribution
@@ -1509,7 +2072,7 @@ def check_and_split_large_cluster(
 
         # Deduplicate results across cells
         for bh in selected:
-            pos = (bh["x"], bh["y"])
+            pos = get_bh_position(bh)
             if pos not in seen_positions:
                 all_selected.append(bh)
                 seen_positions.add(pos)
@@ -1522,7 +2085,7 @@ def check_and_split_large_cluster(
     removed_positions = set()
     deduped_removed = []
     for bh in all_removed:
-        pos = (bh["x"], bh["y"])
+        pos = get_bh_position(bh)
         if pos not in removed_positions:
             deduped_removed.append(bh)
             removed_positions.add(pos)
@@ -1531,7 +2094,7 @@ def check_and_split_large_cluster(
     added_positions = set()
     deduped_added = []
     for bh in all_added:
-        pos = (bh["x"], bh["y"])
+        pos = get_bh_position(bh)
         if pos not in added_positions:
             deduped_added.append(bh)
             added_positions.add(pos)
@@ -1542,7 +2105,7 @@ def check_and_split_large_cluster(
     seen_candidates: set = set()
     for cs in cell_stats:
         for bh in cs.get("first_pass_candidates", []):
-            pos = (bh["x"], bh["y"])
+            pos = get_bh_position(bh)
             if pos not in seen_candidates:
                 all_first_pass_candidates.append(bh)
                 seen_candidates.add(pos)
@@ -1552,7 +2115,7 @@ def check_and_split_large_cluster(
     seen_test_points_for_viz: set = set()
     for cs in cell_stats:
         for tp in cs.get("czrc_test_points", []):
-            pos = (tp["x"], tp["y"])
+            pos = get_bh_position(tp)
             if pos not in seen_test_points_for_viz:
                 all_czrc_test_points.append(tp)
                 seen_test_points_for_viz.add(pos)
@@ -1562,7 +2125,7 @@ def check_and_split_large_cluster(
     # Tier 1 and selected by its ILP. Boreholes that were always in Tier 2 (locked)
     # across all cells never appear in all_selected, but they DID survive Second Pass!
     # The correct Second Pass output is: first_pass_boreholes - removed + added
-    removed_positions_for_output = {(bh["x"], bh["y"]) for bh in deduped_removed}
+    removed_positions_for_output = {get_bh_position(bh) for bh in deduped_removed}
 
     # Start with all First Pass boreholes that weren't removed
     true_second_pass_output: List[Dict[str, Any]] = []
@@ -1570,27 +2133,37 @@ def check_and_split_large_cluster(
 
     # Keep First Pass survivors (not removed)
     for bh in first_pass_boreholes:
-        pos = (bh["x"], bh["y"])
+        pos = get_bh_position(bh)
         if pos not in removed_positions_for_output and pos not in seen_output_positions:
+            x, y = get_bh_coords(bh)
             true_second_pass_output.append(
-                {
-                    "x": bh["x"],
-                    "y": bh["y"],
-                    "coverage_radius": bh.get("coverage_radius", 100.0),
-                }
+                Borehole(
+                    x=x,
+                    y=y,
+                    coverage_radius=get_bh_radius(bh, default=100.0),
+                    source_pass=get_bh_source_pass(bh, default=BoreholePass.FIRST),
+                    status=BoreholeStatus.PROPOSED,
+                ).as_dict()
             )
             seen_output_positions.add(pos)
 
     # Add Second Pass additions
     for bh in deduped_added:
-        pos = (bh["x"], bh["y"])
+        pos = get_bh_position(bh)
         if pos not in seen_output_positions:
+            x, y = get_bh_coords(bh)
             true_second_pass_output.append(
-                {
-                    "x": bh["x"],
-                    "y": bh["y"],
-                    "coverage_radius": bh.get("coverage_radius", 100.0),
-                }
+                Borehole(
+                    x=x,
+                    y=y,
+                    coverage_radius=get_bh_radius(bh, default=100.0),
+                    source_pass=get_bh_source_pass(bh, default=BoreholePass.SECOND),
+                    status=BoreholeStatus.from_string(
+                        bh.get("status", "added")
+                        if isinstance(bh, dict)
+                        else bh.status.value
+                    ),
+                ).as_dict()
             )
             seen_output_positions.add(pos)
 
@@ -1664,7 +2237,7 @@ def check_and_split_large_cluster(
             final_removed_positions: set = set()
             final_deduped_removed: List[Dict[str, Any]] = []
             for bh in deduped_removed:
-                pos = (bh["x"], bh["y"])
+                pos = get_bh_position(bh)
                 if pos not in final_removed_positions:
                     final_deduped_removed.append(bh)
                     final_removed_positions.add(pos)
@@ -1686,6 +2259,9 @@ def check_and_split_large_cluster(
         {
             "status": "success",
             "cluster_key": cluster_key,
+            "cluster_index": cluster_idx
+            + 1,  # 1-based index for log/tooltip correlation
+            "pair_keys": cluster["pair_keys"],  # For Second Pass Grid Tier 2 tooltips
             "was_split": True,
             "original_area_m2": cluster_area,
             "area_ha": cluster_area_ha,  # Tier1 area in hectares for stats reporting
@@ -1986,26 +2562,77 @@ def solve_cell_cell_czrc(
     selected_positions = {(candidates[i].x, candidates[i].y) for i in selected_set}
 
     # Candidate positions from first-pass
-    candidate_positions = {(bh["x"], bh["y"]) for bh in bh_candidates}
+    candidate_positions = {get_bh_position(bh) for bh in bh_candidates}
 
-    # Removed = first-pass candidates NOT in selected
-    removed = [
-        bh for bh in bh_candidates if (bh["x"], bh["y"]) not in selected_positions
-    ]
+    # Removed = candidates NOT in selected
+    # CRITICAL: Preserve ORIGINAL source_pass (the pass that created them)
+    # In Third Pass, bh_candidates could be from FP or SP
+    removed = []
+    for bh in bh_candidates:
+        x, y = get_bh_coords(bh)
+        if (x, y) not in selected_positions:
+            # Parse original source_pass from input borehole
+            original_pass = get_bh_source_pass(bh, default=BoreholePass.FIRST)
 
-    # Added = selected positions NOT from first-pass
+            # Create Borehole with original source_pass and REMOVED status
+            removed_bh = Borehole(
+                x=x,
+                y=y,
+                coverage_radius=get_bh_radius(bh, default=spacing),
+                source_pass=original_pass,  # Keep original, not Third Pass!
+                status=BoreholeStatus.REMOVED,
+            )
+            removed.append(removed_bh.as_dict())
+
+    # Added = selected positions NOT from previous pass
+    # These are NEW boreholes created by Third Pass
     added = []
     for i in selected_set:
         pos = (candidates[i].x, candidates[i].y)
         if pos not in candidate_positions:
-            added.append({"x": pos[0], "y": pos[1], "coverage_radius": spacing})
+            added_bh = Borehole(
+                x=pos[0],
+                y=pos[1],
+                coverage_radius=spacing,
+                source_pass=BoreholePass.THIRD,  # Created by Third Pass
+                status=BoreholeStatus.ADDED,
+            )
+            added.append(added_bh.as_dict())
 
     # Build final selected list: locked (Tier 2) + selected from ILP
+    # Track source_pass for each: existing boreholes keep original, new ones get THIRD
     selected = list(locked)
+
+    # Build a lookup for existing borehole metadata by position
+    existing_bh_by_pos = {get_bh_position(bh): bh for bh in bh_candidates}
+
     for i in selected_set:
-        selected.append(
-            {"x": candidates[i].x, "y": candidates[i].y, "coverage_radius": spacing}
-        )
+        pos = (round(candidates[i].x, 6), round(candidates[i].y, 6))
+        existing_bh = existing_bh_by_pos.get(pos)
+
+        if existing_bh:
+            # This is an existing borehole that was kept - preserve source_pass
+            original_pass_str = existing_bh.get("source_pass", BoreholePass.FIRST.value)
+            selected.append(
+                Borehole(
+                    x=candidates[i].x,
+                    y=candidates[i].y,
+                    coverage_radius=spacing,
+                    source_pass=BoreholePass.from_string(str(original_pass_str)),
+                    status=BoreholeStatus.PROPOSED,
+                ).as_dict()
+            )
+        else:
+            # This is a new position from the candidate grid - Third Pass added it
+            selected.append(
+                Borehole(
+                    x=candidates[i].x,
+                    y=candidates[i].y,
+                    coverage_radius=spacing,
+                    source_pass=BoreholePass.THIRD,
+                    status=BoreholeStatus.ADDED,
+                ).as_dict()
+            )
 
     elapsed = time.perf_counter() - start_time
 
@@ -2150,28 +2777,28 @@ def run_cell_czrc_pass(
 
     for pair_idx, (cell_i, cell_j, czrc_region) in enumerate(adjacencies):
         # Generate HiGHS log file path for this cell-cell pair
+        # Uses simple Cluster{N}_Cell{A}_Cell{B} naming for easy correlation with HTML tooltips
+        # Full cluster composition is written as a header inside the log file
         highs_log_file = None
         cluster_header = None
         if highs_log_folder:
             os.makedirs(highs_log_folder, exist_ok=True)
-            # Use cluster_key for meaningful log filename if available
+            # Generate full composition header for the log file
             if cluster_key:
-                safe_cluster_name, full_name = _sanitize_log_name(cluster_key)
-                cluster_header = full_name  # Will be None if not truncated
-                highs_log_file = os.path.join(
-                    highs_log_folder,
-                    f"third_{safe_cluster_name}_c{cell_i}_c{cell_j}.log",
-                )
-            else:
-                # Fallback to numeric naming
-                highs_log_file = os.path.join(
-                    highs_log_folder,
-                    f"third_c{cluster_idx + 1:02d}_c{cell_i}_c{cell_j}.log",
-                )
-        
-        # Write cluster composition header to log file if using simplified name
+                cluster_header = _get_cluster_log_header(cluster_key)
+            # Cell indices are 1-based for user display
+            cell_i_display = cell_i + 1
+            cell_j_display = cell_j + 1
+            # cluster_idx is 0-based, convert to 1-based for display
+            cluster_num = cluster_idx + 1
+            highs_log_file = os.path.join(
+                highs_log_folder,
+                f"third_Cluster{cluster_num}_Cell{cell_i_display}_Cell{cell_j_display}.log",
+            )
+
+        # Always write cluster composition header to log file
         if highs_log_file and cluster_header:
-            with open(highs_log_file, 'w') as f:
+            with open(highs_log_file, "w") as f:
                 f.write(f"# Cluster composition: {cluster_header}\n")
                 f.write(f"# Original cluster_key: {cluster_key}\n\n")
 
@@ -2198,11 +2825,11 @@ def run_cell_czrc_pass(
             # boreholes from this pair's Tier1+Tier2), we need to:
             # 1. Remove the 'removed' boreholes from current_boreholes
             # 2. Add the 'added' boreholes to current_boreholes
-            removed_positions = {(bh["x"], bh["y"]) for bh in removed}
+            removed_positions = {get_bh_position(bh) for bh in removed}
             current_boreholes = [
                 bh
                 for bh in current_boreholes
-                if (bh["x"], bh["y"]) not in removed_positions
+                if get_bh_position(bh) not in removed_positions
             ]
             current_boreholes.extend(added)
             all_removed.extend(removed)
@@ -2218,7 +2845,7 @@ def run_cell_czrc_pass(
     removed_positions: set = set()
     deduped_removed: List[Dict[str, Any]] = []
     for bh in all_removed:
-        pos = (bh["x"], bh["y"])
+        pos = get_bh_position(bh)
         if pos not in removed_positions:
             deduped_removed.append(bh)
             removed_positions.add(pos)
@@ -2229,13 +2856,13 @@ def run_cell_czrc_pass(
     for ps in pair_stats:
         # Tier 1 test points (from first pass, filtered to Third Pass Tier 1 area)
         for tp in ps.get("viz_tier1_test_points", []):
-            pos = (tp["x"], tp["y"])
+            pos = get_bh_position(tp)
             if pos not in seen_test_point_positions:
                 all_third_pass_test_points.append(tp)
                 seen_test_point_positions.add(pos)
         # Tier 2 ring test points (freshly generated for Third Pass)
         for tp in ps.get("viz_tier2_ring_test_points", []):
-            pos = (tp["x"], tp["y"])
+            pos = get_bh_position(tp)
             if pos not in seen_test_point_positions:
                 all_third_pass_test_points.append(tp)
                 seen_test_point_positions.add(pos)
@@ -2245,7 +2872,7 @@ def run_cell_czrc_pass(
     seen_existing_positions: set = set()
     for ps in pair_stats:
         for bh in ps.get("viz_existing_boreholes", []):
-            pos = (bh["x"], bh["y"])
+            pos = get_bh_position(bh)
             if pos not in seen_existing_positions:
                 all_existing_boreholes.append(bh)
                 seen_existing_positions.add(pos)
@@ -2263,11 +2890,26 @@ def run_cell_czrc_pass(
                 "r_max": ps.get("r_max", 100.0),
             }
 
+    # === VALIDATION ASSERTIONS ===
+    # Extract cluster ID for cross-cluster validation
+    # Check that all removed boreholes were inside Tier 1 AND from same cluster
+    tier1_violations = _validate_removed_in_tier1(
+        deduped_removed, tier_geometries, log, cluster_key
+    )
+
+    # Check for cross-cluster contamination (boreholes from other clusters)
+    provenance_warnings = _validate_provenance(deduped_removed, cluster_key, log)
+
     elapsed = time.perf_counter() - start_time
 
+    violation_msg = ""
+    if tier1_violations > 0:
+        violation_msg = f", ⚠️ {tier1_violations} TIER VIOLATIONS"
+    if provenance_warnings > 0:
+        violation_msg += f", ⚠️ {provenance_warnings} CROSS-CLUSTER"
     log.info(
         f"   ✅ Cell CZRC complete: {len(deduped_removed)} removed, "
-        f"{len(all_added)} added ({elapsed:.2f}s)"
+        f"{len(all_added)} added ({elapsed:.2f}s){violation_msg}"
     )
 
     return (
@@ -2291,6 +2933,8 @@ def run_cell_czrc_pass(
             "third_pass_existing_boreholes": all_existing_boreholes,
             # Tier geometries for diagnostic export (GeoJSON)
             "tier_geometries": tier_geometries,
+            # Spacing used for tier computation (from cluster overall_r_max)
+            "spacing": spacing,
         },
     )
 
@@ -2338,6 +2982,7 @@ def solve_czrc_ilp_for_cluster(
         (selected, removed, added, stats) tuple
     """
     start_time = time.perf_counter()
+    log = logger or _logger  # Use module logger as fallback
 
     unified_tier1 = cluster["unified_tier1"]
     overall_r_max = cluster["overall_r_max"]
@@ -2372,42 +3017,14 @@ def solve_czrc_ilp_for_cluster(
     )
 
     # Step 3.5: Generate Tier 2 ring test points if enabled
-    t2_protection = config.get("tier2_test_point_protection", {})
-    t2_enabled = t2_protection.get("enabled", True)
-    t2_multiplier = t2_protection.get("tier2_test_spacing_multiplier", 3.0)
-    base_test_mult = config.get("test_spacing_mult", 0.2)
-
-    tier2_ring_test_points = []
+    tier2_ring_test_points = _compute_tier2_ring_test_points_with_filter(
+        unified_tier1, unified_tier2, overall_r_max, config, zones_clip_geometry
+    )
     tier2_ring_unsatisfied = []
-    if t2_enabled:
-        tier2_ring_test_points = generate_tier2_ring_test_points(
-            unified_tier1,
-            unified_tier2,
-            overall_r_max,
-            tier2_spacing_multiplier=t2_multiplier,
-            base_test_spacing_mult=base_test_mult,
-            clip_geometry=zones_clip_geometry,
+    if tier2_ring_test_points:
+        tier2_ring_unsatisfied, _ = _compute_unsatisfied_test_points(
+            tier2_ring_test_points, locked, logger, external_boreholes=external
         )
-
-        # Filter out Tier 2 test points that fall inside existing borehole coverage
-        # This prevents spawning test points in areas already covered (green areas)
-        existing_coverage = config.get("_existing_coverage")
-        print(
-            f"   🔷 [solve_czrc_ilp_for_cluster] existing_coverage={existing_coverage is not None}, tier2 count={len(tier2_ring_test_points)}"
-        )
-        if existing_coverage is not None:
-            tier2_ring_test_points = filter_tier2_by_existing_coverage(
-                tier2_ring_test_points, existing_coverage
-            )
-        else:
-            print(
-                "   ⚠️ [solve_czrc_ilp_for_cluster] NO _existing_coverage in config - Tier 2 NOT filtered!"
-            )
-
-        if tier2_ring_test_points:
-            tier2_ring_unsatisfied, _ = _compute_unsatisfied_test_points(
-                tier2_ring_test_points, locked, logger, external_boreholes=external
-            )
 
     # Combine Tier 1 and Tier 2 ring unsatisfied test points
     unsatisfied = tier1_unsatisfied + tier2_ring_unsatisfied
@@ -2428,7 +3045,7 @@ def solve_czrc_ilp_for_cluster(
     # Get aggregated spacing from all zones using config method
     all_zones = set()
     for pk in pair_keys:
-        all_zones.update(pk.split("_"))
+        all_zones.update(parse_pair_key(pk, zone_spacings))
     # Use cross_zone_exclusion_method from config to aggregate spacings
     exclusion_method = _get_cross_zone_exclusion_method(config)
     min_spacing = _aggregate_zone_spacings(
@@ -2447,35 +3064,7 @@ def solve_czrc_ilp_for_cluster(
     cluster_key = "+".join(sorted(pair_keys))
 
     # Generate HiGHS log file path if folder provided
-    highs_log_file: Optional[str] = None
-    cluster_header: Optional[str] = None
-    if highs_log_folder:
-        import os
-
-        os.makedirs(highs_log_folder, exist_ok=True)
-        # Use meaningful cluster_key for log filenames
-        safe_cluster_name, full_name = _sanitize_log_name(cluster_key)
-        cluster_header = full_name  # Will be None if not truncated
-        # cluster_idx < 1000: cell solve within split cluster
-        # cluster_idx >= 1000: direct solve (non-split cluster)
-        if cluster_idx >= 1000:
-            # Direct solve - use cluster name
-            highs_log_file = os.path.join(
-                highs_log_folder, f"second_{safe_cluster_name}.log"
-            )
-        else:
-            # Cell solve within split cluster - include cell index
-            cell_idx = cluster_idx % 100
-            highs_log_file = os.path.join(
-                highs_log_folder,
-                f"second_{safe_cluster_name}_c{cell_idx + 1:02d}.log",
-            )
-        
-        # Write cluster composition header to log file if using simplified name
-        if cluster_header:
-            with open(highs_log_file, 'w') as f:
-                f.write(f"# Cluster composition: {cluster_header}\n")
-                f.write(f"# Original cluster_key: {cluster_key}\n\n")
+    highs_log_file = _setup_highs_logging(highs_log_folder, cluster_idx, cluster_key)
 
     if czrc_cache is not None:
         # Use cache: key is based on actual problem (unsatisfied test points)
@@ -2517,57 +3106,296 @@ def solve_czrc_ilp_for_cluster(
     selected, removed, added = _assemble_czrc_results(
         indices, candidates, bh_candidates, min_spacing
     )
+
+    # Validate that removed boreholes were inside Tier 1
+    _validate_tier1_removals(removed, unified_tier1, log)
+
     elapsed = time.perf_counter() - start_time
 
-    cluster_key = "+".join(sorted(pair_keys))
-    cluster_area_ha = unified_tier1.area / 10000.0  # m² to hectares
-    stats = {
-        "status": "success",
-        "cluster_key": cluster_key,
-        "pair_keys": pair_keys,
-        "is_unified_cluster": len(pair_keys) > 1,
-        "overall_r_max": overall_r_max,
-        "r_max": overall_r_max,  # For tier geometry export
-        "area_ha": cluster_area_ha,  # Tier1 area in hectares for stats reporting
-        "max_spacing_m": overall_r_max,  # Max zone spacing for this cluster
-        "tier1_wkt": unified_tier1.wkt,  # For tier geometry export
-        "tier2_wkt": unified_tier2.wkt,  # For tier geometry export
-        "tier1_test_points": len(tier1_test_points),
-        "tier2_ring_test_points": len(tier2_ring_test_points),
-        "precovered_count": precovered_ct,
-        "external_coverage_bhs": len(external),  # Track external coverage sources
-        "unsatisfied_count": len(unsatisfied),
-        "candidates_count": len(candidates),
-        "selected_count": len(selected),
-        "boreholes_removed": len(removed),  # For per-cluster stats reporting
-        "boreholes_added": len(added),  # For per-cluster stats reporting
-        "solve_time": elapsed,
-        "ilp_stats": ilp_stats,
-        "first_pass_candidates": bh_candidates,
-        # CZRC test points for visualization with is_covered flag including external coverage
-        "czrc_test_points": (
-            _annotate_test_points_with_coverage(
-                tier1_test_points, locked, external_boreholes=external
-            )
-            + _annotate_test_points_with_coverage(
-                tier2_ring_test_points, locked, external_boreholes=external
-            )
-        ),
-        # Second Pass output = selected (for direct ILP, this is final; for split, Third Pass comes after)
-        "second_pass_boreholes": [
-            {
-                "x": bh["x"],
-                "y": bh["y"],
-                "coverage_radius": bh.get("coverage_radius", min_spacing),
-            }
-            for bh in selected
-        ],
-    }
+    # Step 7: Build stats
+    stats = _build_cluster_stats(
+        cluster_key=cluster_key,
+        pair_keys=pair_keys,
+        unified_tier1=unified_tier1,
+        unified_tier2=unified_tier2,
+        overall_r_max=overall_r_max,
+        cluster_idx=cluster_idx,
+        tier1_test_points=tier1_test_points,
+        tier2_ring_test_points=tier2_ring_test_points,
+        precovered_ct=precovered_ct,
+        external=external,
+        locked=locked,
+        unsatisfied=unsatisfied,
+        candidates=candidates,
+        bh_candidates=bh_candidates,
+        selected=selected,
+        removed=removed,
+        added=added,
+        min_spacing=min_spacing,
+        elapsed=elapsed,
+        ilp_stats=ilp_stats,
+    )
     return selected, removed, added, stats
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 🚀 MAIN ENTRY POINT
+# � CZRC ENTRY POINT HELPERS
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _build_zones_clip_geometry(
+    czrc_data: Dict[str, Any],
+) -> Optional[BaseGeometry]:
+    """
+    Build zones clip geometry for Tier 2 test point clipping.
+
+    Prioritizes raw zone geometries (actual boundaries) over coverage clouds
+    (which extend beyond zone boundaries).
+
+    Args:
+        czrc_data: CZRC geometry data containing zone_geometries or coverage_clouds
+
+    Returns:
+        Union of zone geometries, or None if not available.
+    """
+    zone_geometries = czrc_data.get("zone_geometries", {})
+    if zone_geometries:
+        return unary_union(list(zone_geometries.values()))
+
+    # Fallback to coverage clouds (legacy compatibility)
+    coverage_clouds = czrc_data.get("coverage_clouds", {})
+    coverage_clouds_wkt = czrc_data.get("coverage_clouds_wkt", {})
+    if coverage_clouds:
+        return unary_union(list(coverage_clouds.values()))
+    elif coverage_clouds_wkt:
+        cloud_geoms = [wkt.loads(w) for w in coverage_clouds_wkt.values()]
+        return unary_union(cloud_geoms)
+
+    return None
+
+
+def _parse_existing_coverage(
+    czrc_data: Dict[str, Any],
+) -> Optional[BaseGeometry]:
+    """
+    Parse existing borehole coverage for Tier 2 filtering.
+
+    Prevents Tier 2 test points from spawning in already-covered areas (green).
+
+    Args:
+        czrc_data: CZRC geometry data containing covered_union_wkt
+
+    Returns:
+        Existing coverage geometry, or None if not available.
+    """
+    covered_union_wkt = czrc_data.get("covered_union_wkt")
+    if not covered_union_wkt:
+        print(
+            "   🔷 Tier 2 filter: no covered_union_wkt in czrc_data "
+            "(Tier 2 points won't be filtered by existing coverage)"
+        )
+        return None
+
+    try:
+        existing_coverage = wkt.loads(covered_union_wkt)
+        print(
+            f"   🔷 Tier 2 filter: parsed existing coverage "
+            f"(area={existing_coverage.area/10000:.1f} ha)"
+        )
+        return existing_coverage
+    except Exception as e:
+        print(f"   ⚠️ Tier 2 filter: failed to parse covered_union_wkt: {e}")
+        return None
+
+
+def _filter_viz_data(
+    all_removed: List[Dict[str, Any]],
+    all_added: List[Dict[str, Any]],
+    all_third_pass_removed: List[Dict[str, Any]],
+    all_third_pass_added: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """
+    Filter removed/added for visualization, excluding Third Pass data.
+
+    BUG FIX: all_removed/all_added contain BOTH Second Pass AND Third Pass changes
+    because check_and_split_large_cluster() extends deduped_removed/deduped_added
+    with Third Pass cell-cell CZRC results. This causes Third Pass boreholes to
+    appear in the "Second Pass" visualization layer.
+
+    Returns:
+        Tuple of (second_pass_only_removed, second_pass_only_added)
+    """
+    third_pass_removed_pos = {get_bh_position(bh) for bh in all_third_pass_removed}
+    third_pass_added_pos = {get_bh_position(bh) for bh in all_third_pass_added}
+
+    second_pass_only_removed = [
+        bh for bh in all_removed
+        if get_bh_position(bh) not in third_pass_removed_pos
+    ]
+    second_pass_only_added = [
+        bh for bh in all_added
+        if get_bh_position(bh) not in third_pass_added_pos
+    ]
+
+    return second_pass_only_removed, second_pass_only_added
+
+
+@dataclass
+class CZRCAccumulators:
+    """
+    Accumulator state for CZRC optimization run.
+    
+    Groups the 18+ accumulator variables used in run_czrc_optimization
+    into a single dataclass for cleaner parameter passing to helper functions.
+    """
+    
+    # Core results
+    all_cluster_stats: Dict[str, Any] = field(default_factory=dict)
+    all_removed: List[Dict[str, Any]] = field(default_factory=list)
+    all_added: List[Dict[str, Any]] = field(default_factory=list)
+    boreholes_to_add: List[Dict[str, Any]] = field(default_factory=list)
+    
+    # First/Second pass candidates
+    all_first_pass_candidates: List[Dict[str, Any]] = field(default_factory=list)
+    all_czrc_test_points: List[Dict[str, Any]] = field(default_factory=list)
+    all_second_pass_boreholes: List[Dict[str, Any]] = field(default_factory=list)
+    
+    # Third pass data
+    all_third_pass_removed: List[Dict[str, Any]] = field(default_factory=list)
+    all_third_pass_added: List[Dict[str, Any]] = field(default_factory=list)
+    all_third_pass_test_points: List[Dict[str, Any]] = field(default_factory=list)
+    all_third_pass_existing: List[Dict[str, Any]] = field(default_factory=list)
+    
+    # Visualization data
+    all_cell_wkts: List[str] = field(default_factory=list)
+    all_cell_clouds_wkt: Dict[str, str] = field(default_factory=dict)
+    all_cell_intersections_wkt: Dict[str, str] = field(default_factory=dict)
+    all_tier_geometries: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    max_third_pass_spacing: float = 0.0
+    
+    # Deduplication sets (for position tracking)
+    seen_candidates: set = field(default_factory=set)
+    seen_test_points: set = field(default_factory=set)
+    seen_second_pass: set = field(default_factory=set)
+    seen_third_pass_test_points: set = field(default_factory=set)
+    seen_third_pass_existing: set = field(default_factory=set)
+    
+    # Summary tracking
+    cluster_summaries: List[Dict[str, Any]] = field(default_factory=list)
+    cluster_idx: int = 0  # For unique log file naming
+
+
+def _resolve_multi_cluster_conflicts(
+    boreholes_to_add: List[Dict[str, Any]],
+    all_removed: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Handle multi-cluster overlap case.
+
+    BUG FIX: When a borehole spans multiple clusters, it can be:
+    - Selected by Cluster A's ILP -> in boreholes_to_add
+    - Not selected by Cluster B's ILP -> in all_removed
+
+    Same borehole ends up in BOTH lists. The removed borehole gets re-added via
+    boreholes_to_add, causing it to appear in Proposed Boreholes (blue markers)
+    even though it should be removed (red markers in Second Pass are correct).
+
+    Rule: If ANY cluster removes a borehole, it should NOT be re-added.
+
+    Args:
+        boreholes_to_add: Boreholes selected by at least one cluster
+        all_removed: Boreholes removed by at least one cluster
+
+    Returns:
+        Filtered boreholes_to_add list with conflicts removed.
+    """
+    removed_positions = {get_bh_position(bh) for bh in all_removed}
+    filtered = [
+        bh for bh in boreholes_to_add
+        if get_bh_position(bh) not in removed_positions
+    ]
+
+    conflicting_count = len(boreholes_to_add) - len(filtered)
+    if conflicting_count > 0:
+        print(
+            f"   🔧 Multi-cluster overlap: {conflicting_count} boreholes removed by one cluster, "
+            f"selected by another → removing (removed wins over re-add)"
+        )
+
+    return filtered
+
+
+def _validate_third_pass_removals(
+    all_third_pass_removed: List[Dict[str, Any]],
+    all_tier_geometries: Dict[str, Dict[str, Any]],
+    log: logging.Logger,
+) -> set:
+    """
+    Validate Third Pass removals against tier geometries.
+
+    BUG FIX: Boreholes in SP Tier 1 but OUTSIDE TP Tier 1 were being incorrectly
+    removed because they shared coordinates with legitimate TP removals.
+
+    This function builds a union of all Third Pass Tier 1 geometries and validates
+    that each removal is inside Tier 1.
+
+    Args:
+        all_third_pass_removed: List of boreholes marked for Third Pass removal
+        all_tier_geometries: Dict of tier geometry data keyed by pair_key
+        log: Logger for warnings
+
+    Returns:
+        Set of validated removal positions (only removals inside TP Tier 1).
+    """
+    third_pass_removed_positions: set = set()
+
+    if not all_third_pass_removed or not all_tier_geometries:
+        return third_pass_removed_positions
+
+    # Build union of all Third Pass Tier 1 geometries for validation
+    tp_tier1_polys = []
+    for pair_key, tier_data in all_tier_geometries.items():
+        tier1_wkt_str = tier_data.get("tier1_wkt")
+        if tier1_wkt_str:
+            try:
+                tier1_geom = wkt.loads(tier1_wkt_str)
+                tp_tier1_polys.append(tier1_geom)
+            except Exception:
+                pass
+
+    tp_tier1_union = unary_union(tp_tier1_polys) if tp_tier1_polys else None
+
+    # Validate each removal is inside Third Pass Tier 1
+    validated_count = 0
+    skipped_count = 0
+    for bh in all_third_pass_removed:
+        pos = get_bh_position(bh)
+        if tp_tier1_union:
+            pt = Point(pos[0], pos[1])
+            if tp_tier1_union.contains(pt):
+                third_pass_removed_positions.add(pos)
+                validated_count += 1
+            else:
+                skipped_count += 1
+                log.debug(
+                    f"Skipped invalid TP removal at ({pos[0]:.1f}, {pos[1]:.1f}) - outside TP Tier 1"
+                )
+        else:
+            # No tier geometries to validate against - include all
+            third_pass_removed_positions.add(pos)
+            validated_count += 1
+
+    if skipped_count > 0:
+        log.warning(
+            f"Blocked {skipped_count} invalid Third Pass removals (outside TP Tier 1). "
+            f"Validated: {validated_count}"
+        )
+
+    return third_pass_removed_positions
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# �🚀 MAIN ENTRY POINT
 # ═══════════════════════════════════════════════════════════════════════════
 
 
@@ -2600,6 +3428,7 @@ def run_czrc_optimization(
         removed_boreholes and added_boreholes for visualization.
     """
     start_time = time.perf_counter()
+    log = logger or _logger
 
     if not config.get("enabled", False):
         return first_pass_boreholes, {"status": "disabled"}
@@ -2610,41 +3439,11 @@ def run_czrc_optimization(
     if not pairwise_wkts:
         return first_pass_boreholes, {"status": "skipped", "reason": "no_pairwise"}
 
-    # Build zones clip geometry from raw zone geometries for Tier 2 test point clipping
-    # Use raw zone geometries (not buffered coverage clouds) to ensure test points
-    # stay within actual zone boundaries
-    zone_geometries = czrc_data.get("zone_geometries", {})
-    zones_clip_geometry: Optional[BaseGeometry] = None
-    if zone_geometries:
-        # Use raw zone geometry objects (preferred - actual zone boundaries)
-        zones_clip_geometry = unary_union(list(zone_geometries.values()))
-    else:
-        # Fallback to coverage clouds only if zone_geometries not available
-        # (legacy compatibility - coverage clouds extend beyond zone boundaries)
-        coverage_clouds = czrc_data.get("coverage_clouds", {})
-        coverage_clouds_wkt = czrc_data.get("coverage_clouds_wkt", {})
-        if coverage_clouds:
-            zones_clip_geometry = unary_union(list(coverage_clouds.values()))
-        elif coverage_clouds_wkt:
-            cloud_geoms = [wkt.loads(w) for w in coverage_clouds_wkt.values()]
-            zones_clip_geometry = unary_union(cloud_geoms)
+    # Build zones clip geometry for Tier 2 test point clipping
+    zones_clip_geometry = _build_zones_clip_geometry(czrc_data)
 
-    # Parse existing borehole coverage for Tier 2 test point filtering
-    # This prevents Tier 2 test points from spawning in already-covered areas (green)
-    covered_union_wkt = czrc_data.get("covered_union_wkt")
-    existing_coverage: Optional[BaseGeometry] = None
-    if covered_union_wkt:
-        try:
-            existing_coverage = wkt.loads(covered_union_wkt)
-            print(
-                f"   🔷 Tier 2 filter: parsed existing coverage (area={existing_coverage.area/10000:.1f} ha)"
-            )
-        except Exception as e:
-            print(f"   ⚠️ Tier 2 filter: failed to parse covered_union_wkt: {e}")
-    else:
-        print(
-            "   🔷 Tier 2 filter: no covered_union_wkt in czrc_data (Tier 2 points won't be filtered by existing coverage)"
-        )
+    # Parse existing borehole coverage for Tier 2 filtering
+    existing_coverage = _parse_existing_coverage(czrc_data)
 
     # Store in config for access in downstream functions
     config = dict(config)  # Shallow copy to avoid mutating original
@@ -2677,11 +3476,17 @@ def run_czrc_optimization(
     all_third_pass_existing: List[Dict[str, Any]] = []  # Third pass existing boreholes
     seen_third_pass_existing: set = set()  # Track unique existing boreholes
     all_tier_geometries: Dict[str, Dict[str, Any]] = {}  # Third pass tier geometries
+    max_third_pass_spacing: float = (
+        0.0  # Track max spacing for third pass visualization
+    )
     all_second_pass_boreholes: List[Dict[str, Any]] = (
         []
     )  # Second pass output (before third pass)
     seen_second_pass: set = set()  # Track unique second pass boreholes by (x, y)
     cluster_idx = 0  # For unique log file naming
+
+    # === CLUSTER PROCESSING SUMMARY TRACKING ===
+    cluster_summaries: List[Dict[str, Any]] = []
 
     for cluster in clusters:
         # Use wrapper that checks size and splits if needed
@@ -2704,6 +3509,35 @@ def run_czrc_optimization(
         all_added.extend(added)
         cluster_idx += 1
 
+        # === CLUSTER PROCESSING SUMMARY ===
+        was_split = cluster_stats.get("was_split", False)
+        third_pass_pairs = 0
+        third_pass_bhs_in = 0
+        third_pass_removed_count = 0
+        if was_split:
+            cell_czrc_stats = cluster_stats.get("cell_czrc_stats", {})
+            third_pass_pairs = cell_czrc_stats.get("pairs_processed", 0)
+            third_pass_removed_count = len(
+                cell_czrc_stats.get("third_pass_removed", [])
+            )
+            # Count boreholes that went into Third Pass
+            pair_stats = cell_czrc_stats.get("pair_stats", [])
+            if pair_stats:
+                # Use first pair's borehole count as estimate
+                third_pass_bhs_in = pair_stats[0].get("bh_count", 0)
+
+        cluster_summaries.append(
+            {
+                "cluster_num": cluster_idx,
+                "cluster_key": cluster_key,
+                "was_split": was_split,
+                "third_pass_pairs": third_pass_pairs,
+                "bhs_in": len(selected) + len(removed),
+                "bhs_removed": len(removed),
+                "third_pass_removed": third_pass_removed_count,
+            }
+        )
+
         # Collect cell geometries from split clusters (for visualization)
         if cluster_stats.get("was_split", False):
             all_cell_wkts.extend(cluster_stats.get("cell_wkts", []))
@@ -2725,13 +3559,13 @@ def run_czrc_optimization(
                     all_cell_intersections_wkt[prefixed_key] = wkt_str
                 # Collect Third Pass test points (Tier 1 filtered + Tier 2 ring)
                 for tp in cell_czrc_stats.get("third_pass_test_points", []):
-                    pos = (tp["x"], tp["y"])
+                    pos = get_bh_position(tp)
                     if pos not in seen_third_pass_test_points:
                         all_third_pass_test_points.append(tp)
                         seen_third_pass_test_points.add(pos)
                 # Collect Third Pass existing boreholes (from Second Pass output)
                 for bh in cell_czrc_stats.get("third_pass_existing_boreholes", []):
-                    pos = (bh["x"], bh["y"])
+                    pos = get_bh_position(bh)
                     if pos not in seen_third_pass_existing:
                         all_third_pass_existing.append(bh)
                         seen_third_pass_existing.add(pos)
@@ -2740,28 +3574,38 @@ def run_czrc_optimization(
                 for pair_key, geom_data in tier_geoms.items():
                     prefixed_key = f"cluster_{cluster_idx}_{pair_key}"
                     all_tier_geometries[prefixed_key] = geom_data
+                # Track max spacing for third pass visualization
+                cell_spacing = cell_czrc_stats.get("spacing", 0.0)
+                if cell_spacing > max_third_pass_spacing:
+                    max_third_pass_spacing = cell_spacing
 
         # Collect unique first-pass candidates across all clusters
         for bh in cluster_stats.get("first_pass_candidates", []):
-            pos = (bh["x"], bh["y"])
+            pos = get_bh_position(bh)
             if pos not in seen_candidates:
                 all_first_pass_candidates.append(bh)
                 seen_candidates.add(pos)
 
         # Collect unique CZRC test points across all clusters
         for tp in cluster_stats.get("czrc_test_points", []):
-            pos = (tp["x"], tp["y"])
+            pos = get_bh_position(tp)
             if pos not in seen_test_points:
                 all_czrc_test_points.append(tp)
                 seen_test_points.add(pos)
 
         # Collect Second Pass boreholes (before Third Pass) for per-pass CSV export
+        # NOTE: These are cluster-local second_pass outputs. We aggregate them here,
+        # but later (line ~3060-3095) we recompute the TRUE global second_pass output
+        # that correctly handles cross-cluster removals.
         sp_bhs = cluster_stats.get("second_pass_boreholes", [])
         for bh in sp_bhs:
-            pos = (bh["x"], bh["y"])
+            pos = get_bh_position(bh)
             if pos not in seen_second_pass:
                 all_second_pass_boreholes.append(bh)
                 seen_second_pass.add(pos)
+
+    # === CLUSTER PROCESSING SUMMARY OUTPUT ===
+    _print_cluster_processing_summary(cluster_summaries, log)
 
     # Compute true Second Pass output:
     # = First Pass boreholes not removed by Second Pass
@@ -2775,87 +3619,119 @@ def run_czrc_optimization(
     # Note: For split clusters, Third Pass removed/added are separate from Second Pass removed/added
 
     # Build sets of removed/added from Second Pass only (exclude Third Pass changes)
-    second_pass_removed_positions: set = set()
+    second_pass_removed_positions_v1: set = set()
     for bh in all_removed:
-        pos = (bh["x"], bh["y"])
+        pos = get_bh_position(bh)
         # Check if this removal came from Third Pass
         is_third_pass = any(
-            (tp_bh["x"], tp_bh["y"]) == pos for tp_bh in all_third_pass_removed
+            get_bh_position(tp_bh) == pos for tp_bh in all_third_pass_removed
         )
         if not is_third_pass:
-            second_pass_removed_positions.add(pos)
+            second_pass_removed_positions_v1.add(pos)
 
     # Build Second Pass output: First Pass survivors + Second Pass additions
     # Start with First Pass boreholes not removed by Second Pass
     computed_second_pass: List[Dict[str, Any]] = []
     for bh in first_pass_boreholes:
-        pos = (bh["x"], bh["y"])
-        if pos not in second_pass_removed_positions:
+        pos = get_bh_position(bh)
+        if pos not in second_pass_removed_positions_v1:
+            x, y = get_bh_coords(bh)
             computed_second_pass.append(
-                {
-                    "x": bh["x"],
-                    "y": bh["y"],
-                    "coverage_radius": bh.get("coverage_radius", 100.0),
-                }
+                Borehole(
+                    x=x,
+                    y=y,
+                    coverage_radius=get_bh_radius(bh, default=100.0),
+                    source_pass=get_bh_source_pass(bh, default=BoreholePass.FIRST),
+                    status=BoreholeStatus.PROPOSED,
+                ).as_dict()
             )
 
     # Add Second Pass additions (from all_second_pass_boreholes that aren't in First Pass)
-    existing_second_pass_pos = {(bh["x"], bh["y"]) for bh in computed_second_pass}
+    # CRITICAL FIX: Also exclude boreholes that were removed by ANY cluster
+    existing_second_pass_pos = {get_bh_position(bh) for bh in computed_second_pass}
     for bh in all_second_pass_boreholes:
-        pos = (bh["x"], bh["y"])
-        if pos not in existing_second_pass_pos:
+        pos = get_bh_position(bh)
+        # Skip if already in computed_second_pass OR if removed by any cluster
+        if (
+            pos not in existing_second_pass_pos
+            and pos not in second_pass_removed_positions_v1
+        ):
             computed_second_pass.append(bh)
             existing_second_pass_pos.add(pos)
 
     # Replace the aggregated second pass with the computed one
     all_second_pass_boreholes = computed_second_pass
 
+    # Handle multi-cluster overlap case (removed wins over re-add)
+    boreholes_to_add = _resolve_multi_cluster_conflicts(boreholes_to_add, all_removed)
+
     # ═══════════════════════════════════════════════════════════════════════════
-    # FIX: Handle multi-cluster overlap case
+    # FIX: Separate Second Pass and Third Pass removals
     # ═══════════════════════════════════════════════════════════════════════════
-    # When a borehole spans multiple clusters, it can be:
-    #   - Selected by Cluster A's ILP → in boreholes_to_add
-    #   - Not selected by Cluster B's ILP → in all_removed
-    # BUG: Same borehole in BOTH lists. The removed borehole gets re-added via
-    # boreholes_to_add, causing it to appear in Proposed Boreholes (blue markers)
-    # even though it should be removed (red markers in Second Pass are correct).
-    #
-    # CORRECT FIX: Filter boreholes_to_add to exclude any that were removed.
-    # If ANY cluster removes a borehole, it should NOT be re-added.
-    # The red markers (all_removed) are correct - don't touch them.
-    removed_positions_for_filter = {(bh["x"], bh["y"]) for bh in all_removed}
-    filtered_to_add = [
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Validate Third Pass removals against tier geometries
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Third Pass removals are only valid for boreholes that were in Second Pass Tier 1.
+    # Boreholes that were in Third Pass Tier 2 only should NOT be removed!
+    third_pass_removed_positions = _validate_third_pass_removals(
+        all_third_pass_removed, all_tier_geometries, log
+    )
+
+    # Second Pass removed = all_removed MINUS Third Pass removed
+    second_pass_removed_positions = {
+        get_bh_position(bh)
+        for bh in all_removed
+        if get_bh_position(bh) not in third_pass_removed_positions
+    }
+
+    # Step 1: Compute Second Pass output from First Pass
+    second_pass_output = [
         bh
-        for bh in boreholes_to_add
-        if (bh["x"], bh["y"]) not in removed_positions_for_filter
+        for bh in first_pass_boreholes
+        if get_bh_position(bh) not in second_pass_removed_positions
     ]
+    second_pass_existing_pos = {get_bh_position(bh) for bh in second_pass_output}
 
-    # Report conflict resolution
-    conflicting_count = len(boreholes_to_add) - len(filtered_to_add)
-    if conflicting_count > 0:
-        print(
-            f"   🔧 Multi-cluster overlap: {conflicting_count} boreholes removed by one cluster, "
-            f"selected by another → removing (removed wins over re-add)"
-        )
-    boreholes_to_add = filtered_to_add
+    # Add Second Pass additions (boreholes added by zone-zone CZRC)
+    # Second Pass additions = all_added MINUS Third Pass additions
+    third_pass_added_positions = {get_bh_position(bh) for bh in all_third_pass_added}
+    for bh in all_added:
+        pos = get_bh_position(bh)
+        if (
+            pos not in second_pass_existing_pos
+            and pos not in third_pass_added_positions
+        ):
+            second_pass_output.append(bh)
+            second_pass_existing_pos.add(pos)
 
-    # Assemble result: first-pass + new boreholes (deduplicated), minus removed
-    # Build set of removed positions for efficient filtering
-    removed_positions = {(bh["x"], bh["y"]) for bh in all_removed}
-
-    # Start with first-pass boreholes, excluding those marked for removal
+    # Step 2: Apply Third Pass removals to Second Pass output
     optimized = [
-        bh for bh in first_pass_boreholes if (bh["x"], bh["y"]) not in removed_positions
+        bh
+        for bh in second_pass_output
+        if get_bh_position(bh) not in third_pass_removed_positions
     ]
-    existing_pos = {(bh["x"], bh["y"]) for bh in optimized}
+    existing_pos = {get_bh_position(bh) for bh in optimized}
 
-    # Add new boreholes (deduplicated)
-    for bh in boreholes_to_add:
-        if (bh["x"], bh["y"]) not in existing_pos:
+    # Step 3: Add Third Pass additions (boreholes added by cell-cell CZRC)
+    for bh in all_third_pass_added:
+        pos = get_bh_position(bh)
+        if pos not in existing_pos:
             optimized.append(bh)
-            existing_pos.add((bh["x"], bh["y"]))
+            existing_pos.add(pos)
+
+    # Also add remaining Second Pass additions that might have been filtered
+    for bh in boreholes_to_add:
+        pos = get_bh_position(bh)
+        if pos not in existing_pos:
+            optimized.append(bh)
+            existing_pos.add(pos)
 
     elapsed = time.perf_counter() - start_time
+
+    # Filter removed/added for visualization (exclude Third Pass data)
+    second_pass_only_removed, second_pass_only_added = _filter_viz_data(
+        all_removed, all_added, all_third_pass_removed, all_third_pass_added
+    )
 
     # Count unified clusters (clusters with more than one pair)
     unified_cluster_count = sum(1 for c in clusters if len(c["pair_keys"]) > 1)
@@ -2884,11 +3760,11 @@ def run_czrc_optimization(
         "cluster_stats": all_cluster_stats,
         "original_count": len(first_pass_boreholes),
         "final_count": len(optimized),
-        "boreholes_removed": len(all_removed),
-        "boreholes_added": len(all_added),
-        "net_change": len(all_added) - len(all_removed),
-        "removed_boreholes": all_removed,
-        "added_boreholes": all_added,
+        "boreholes_removed": len(second_pass_only_removed),
+        "boreholes_added": len(second_pass_only_added),
+        "net_change": len(second_pass_only_added) - len(second_pass_only_removed),
+        "removed_boreholes": second_pass_only_removed,
+        "added_boreholes": second_pass_only_added,
         "first_pass_candidates": all_first_pass_candidates,
         "czrc_test_points": all_czrc_test_points,  # For visualization
         "cell_wkts": all_cell_wkts,  # Cell boundaries from split clusters
@@ -2904,6 +3780,7 @@ def run_czrc_optimization(
                 "third_pass_test_points": all_third_pass_test_points,
                 "third_pass_existing_boreholes": all_third_pass_existing,
                 "tier_geometries": all_tier_geometries,  # For diagnostic GeoJSON export
+                "max_spacing": max_third_pass_spacing,  # For tier buffer computation
             }
             if all_cell_clouds_wkt
             or all_cell_intersections_wkt

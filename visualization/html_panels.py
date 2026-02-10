@@ -265,7 +265,7 @@ def generate_layers_panel_html(
     - Second Pass Test Points (test points used in optimization)
     - Third Pass (removed/added from cell-cell CZRC optimization)
     - Cell Overlap (cell clouds and intersection regions)
-    - Cell Grid (hexagonal candidate grid for third pass)
+    - Third Pass Grid (hexagonal candidate grid for third pass)
     - Third Pass Test Points (test points used in cell-cell optimization)
     - Candidate grid (hexagonal grid overlay showing placement grid)
 
@@ -451,7 +451,7 @@ def generate_layers_panel_html(
             """
     <label style="display: flex; align-items: center; cursor: pointer; margin: 5px 0;">
         <input type="checkbox" id="thirdPassGridCheckbox" style="margin-right: 8px;">
-        <span style="font-size: 11px;">Cell Grid</span>
+        <span style="font-size: 11px;">Third Pass Grid</span>
     </label>"""
         )
 

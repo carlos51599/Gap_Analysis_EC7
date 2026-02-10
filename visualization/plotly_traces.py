@@ -45,6 +45,12 @@ from geopandas import GeoDataFrame
 from shapely.geometry import Polygon
 
 from Gap_Analysis_EC7.config_types import BoreholeMarkerConfig, ProposedMarkerConfig
+from Gap_Analysis_EC7.models.data_models import (
+    BoreholePass,
+    get_bh_coords,
+    get_bh_position,
+    get_bh_radius,
+)
 
 
 # ===========================================================================
@@ -818,8 +824,9 @@ def build_coverage_marker_trace(
     Build a single merged marker trace for proposed boreholes.
 
     Args:
-        coordinates: List of {"x": float, "y": float, "source_pass"?: str} dicts
+        coordinates: List of {"x": float, "y": float, "source_pass"?: str, "status"?: str} dicts
             source_pass is optional - if provided, shown in tooltip
+            status is optional - if provided, shown in tooltip (added/removed/proposed/locked)
         name: Trace name for legend
         marker_color: RGBA marker color
         marker_size: Marker size in pixels
@@ -844,9 +851,14 @@ def build_coverage_marker_trace(
 
     x_coords = [c["x"] for c in coordinates]
     y_coords = [c["y"] for c in coordinates]
-    # Include source_pass in customdata: [index, source_pass]
+    # Include source_pass and status in customdata: [index, source_pass, status]
     customdata = [
-        [i + 1, c.get("source_pass", "First Pass")] for i, c in enumerate(coordinates)
+        [
+            i + 1,
+            c.get("source_pass", BoreholePass.FIRST.value),
+            c.get("status", "proposed").title(),  # Capitalize for display
+        ]
+        for i, c in enumerate(coordinates)
     ]
 
     return go.Scattergl(
@@ -865,6 +877,7 @@ def build_coverage_marker_trace(
             "Easting: %{x:,.0f}<br>"
             "Northing: %{y:,.0f}<br>"
             "Source: %{customdata[1]}<br>"
+            "Status: %{customdata[2]}<br>"
             "<extra></extra>"
         ),
         name=name,
@@ -1190,7 +1203,7 @@ def _build_proposed_coverage_per_zone(
         nearby_boreholes = [
             bh
             for bh in proposed_boreholes
-            if Point(bh["x"], bh["y"]).within(expanded_zone)
+            if Point(*get_bh_coords(bh)).within(expanded_zone)
         ]
 
         if not nearby_boreholes:
@@ -1198,7 +1211,7 @@ def _build_proposed_coverage_per_zone(
 
         # Buffer each borehole by ZONE's spacing (not borehole's origin zone)
         borehole_buffers = [
-            Point(bh["x"], bh["y"]).buffer(zone_spacing) for bh in nearby_boreholes
+            Point(*get_bh_coords(bh)).buffer(zone_spacing) for bh in nearby_boreholes
         ]
 
         # Union and clip to zone
@@ -1299,7 +1312,7 @@ def add_proposed_borehole_traces(
     elif coverage_radius is not None and coverage_radius > 0:
         # Fallback: single radius for all boreholes (legacy behavior)
         buffer_circles = [
-            Point(bh["x"], bh["y"]).buffer(bh.get("coverage_radius", coverage_radius))
+            Point(*get_bh_coords(bh)).buffer(get_bh_radius(bh) or coverage_radius)
             for bh in proposed_boreholes
         ]
         buffer_union = unary_union(buffer_circles)
@@ -1341,8 +1354,8 @@ def add_proposed_borehole_traces(
             )
 
     # Add marker trace
-    proposed_x = [bh["x"] for bh in proposed_boreholes]
-    proposed_y = [bh["y"] for bh in proposed_boreholes]
+    proposed_x = [get_bh_coords(bh)[0] for bh in proposed_boreholes]
+    proposed_y = [get_bh_coords(bh)[1] for bh in proposed_boreholes]
     customdata = [[i + 1] for i in range(len(proposed_boreholes))]
 
     fig.add_trace(

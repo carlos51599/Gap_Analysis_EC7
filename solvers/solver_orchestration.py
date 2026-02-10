@@ -57,6 +57,13 @@ from Gap_Analysis_EC7.solvers.solver_config import (
     create_parallel_config,
     create_precision_config,
 )
+from Gap_Analysis_EC7.models.data_models import (
+    Borehole,
+    BoreholePass,
+    BoreholeStatus,
+    get_bh_coords,
+    get_bh_position,
+)
 
 
 # ===========================================================================
@@ -806,9 +813,15 @@ def _run_single_solve(
 
     stats["solver_reason"] = solver_reason
 
-    # Convert to output format with coverage_radius for per-borehole buffer rendering
+    # Convert to output format via Borehole dataclass for type-safe provenance
     boreholes = [
-        {"x": candidates[i].x, "y": candidates[i].y, "coverage_radius": max_spacing}
+        Borehole(
+            x=candidates[i].x,
+            y=candidates[i].y,
+            coverage_radius=max_spacing,
+            source_pass=BoreholePass.FIRST,
+            status=BoreholeStatus.PROPOSED,
+        ).as_dict()
         for i in selected_indices
     ]
 
@@ -985,9 +998,15 @@ def _solve_component(
         )
         stats["method"] = "component_greedy_fallback"
 
-    # Convert to output format with coverage_radius for per-borehole buffer rendering
+    # Convert to output format via Borehole dataclass for type-safe provenance
     boreholes = [
-        {"x": candidates[i].x, "y": candidates[i].y, "coverage_radius": max_spacing}
+        Borehole(
+            x=candidates[i].x,
+            y=candidates[i].y,
+            coverage_radius=max_spacing,
+            source_pass=BoreholePass.FIRST,
+            status=BoreholeStatus.PROPOSED,
+        ).as_dict()
         for i in selected_indices
     ]
 
@@ -1040,17 +1059,19 @@ def _ensure_complete_coverage(
     if not boreholes:
         gap_polys = _normalize_gaps(uncovered_gaps)
         return [
-            {
-                "x": g.representative_point().x,
-                "y": g.representative_point().y,
-                "coverage_radius": radius,
-            }
+            Borehole(
+                x=g.representative_point().x,
+                y=g.representative_point().y,
+                coverage_radius=radius,
+                source_pass=BoreholePass.FIRST,
+                status=BoreholeStatus.PROPOSED,
+            ).as_dict()
             for g in gap_polys
         ]
 
     # Calculate remaining uncovered area
     coverage_union = unary_union(
-        [Point(bh["x"], bh["y"]).buffer(radius) for bh in boreholes]
+        [Point(*get_bh_coords(bh)).buffer(radius) for bh in boreholes]
     )
     remaining = uncovered_gaps.difference(coverage_union)
 
@@ -1063,7 +1084,15 @@ def _ensure_complete_coverage(
 
     for frag in remaining_polys:
         rep_pt = frag.representative_point()
-        result.append({"x": rep_pt.x, "y": rep_pt.y, "coverage_radius": radius})
+        result.append(
+            Borehole(
+                x=rep_pt.x,
+                y=rep_pt.y,
+                coverage_radius=radius,
+                source_pass=BoreholePass.FIRST,
+                status=BoreholeStatus.PROPOSED,
+            ).as_dict()
+        )
 
     if logger and len(remaining_polys) > 0:
         logger.info(
@@ -1110,7 +1139,7 @@ def verify_coverage(
         remaining_area = original_area
     else:
         coverage_union = unary_union(
-            [Point(bh["x"], bh["y"]).buffer(radius) for bh in boreholes]
+            [Point(*get_bh_coords(bh)).buffer(radius) for bh in boreholes]
         )
         remaining = uncovered_gaps.difference(coverage_union)
         remaining_area = remaining.area if not remaining.is_empty else 0

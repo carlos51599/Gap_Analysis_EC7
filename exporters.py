@@ -29,6 +29,8 @@ from shapely.geometry import mapping, shape, Point, MultiPoint, Polygon
 from shapely.geometry.base import BaseGeometry
 from shapely import wkt
 
+from Gap_Analysis_EC7.models.data_models import Borehole, BoreholePass
+
 if TYPE_CHECKING:
     import matplotlib.axes
     import geopandas as gpd
@@ -169,11 +171,14 @@ def export_proposed_boreholes_to_csv(
 
         rows = []
         for i, bh in enumerate(proposed, start=1):
+            # Validate via Borehole dataclass (ensures source_pass is present)
+            validated = Borehole.from_dict(bh)
             rows.append(
                 {
                     "Location_ID": f"PROP_{i:03d}",
-                    "Easting": round(bh["x"], 2),
-                    "Northing": round(bh["y"], 2),
+                    "Easting": round(validated.x, 2),
+                    "Northing": round(validated.y, 2),
+                    "Source_Pass": validated.source_pass.value,
                     "Filter_Combination": filter_description,
                 }
             )
@@ -342,19 +347,28 @@ def _write_borehole_csv(
     if not boreholes:
         # Create empty CSV with headers only
         df = pd.DataFrame(
-            columns=["Location_ID", "Easting", "Northing", "Coverage_Radius"]
+            columns=[
+                "Location_ID",
+                "Easting",
+                "Northing",
+                "Coverage_Radius",
+                "Source_Pass",
+            ]
         )
         df.to_csv(csv_path, index=False)
         return
 
     rows = []
     for i, bh in enumerate(boreholes, start=1):
+        # Validate via Borehole dataclass (ensures source_pass is present)
+        validated = Borehole.from_dict(bh)
         rows.append(
             {
                 "Location_ID": f"{id_prefix}_{i:03d}",
-                "Easting": round(bh.get("x", 0), 2),
-                "Northing": round(bh.get("y", 0), 2),
-                "Coverage_Radius": round(bh.get("coverage_radius", 100.0), 1),
+                "Easting": round(validated.x, 2),
+                "Northing": round(validated.y, 2),
+                "Coverage_Radius": round(validated.coverage_radius, 1),
+                "Source_Pass": validated.source_pass.value,
             }
         )
 
@@ -1566,19 +1580,35 @@ def export_run_stats_summary(
         if zone_stats:
             lines.append(f"- **Zones Processed:** {len(zone_stats)}")
             lines.append("")
-            lines.append("| Zone | BH | Gap% | Time | Termination | Area (ha) | Spacing |")
-            lines.append("|------|----|------|------|-------------|-----------|---------|")
+            lines.append(
+                "| Zone | BH | Gap% | Time | Termination | Area (ha) | Spacing |"
+            )
+            lines.append(
+                "|------|----|------|------|-------------|-----------|---------|"
+            )
 
             for zone_name, zone_info in zone_stats.items():
-                z_stats = zone_info.get("stats", {}) if isinstance(zone_info, dict) else {}
-                z_boreholes = zone_info.get("boreholes", 0) if isinstance(zone_info, dict) else 0
-                z_area = zone_info.get("area_ha", 0) if isinstance(zone_info, dict) else 0
-                z_max_spacing = zone_info.get("max_spacing_m", "N/A") if isinstance(zone_info, dict) else "N/A"
+                z_stats = (
+                    zone_info.get("stats", {}) if isinstance(zone_info, dict) else {}
+                )
+                z_boreholes = (
+                    zone_info.get("boreholes", 0) if isinstance(zone_info, dict) else 0
+                )
+                z_area = (
+                    zone_info.get("area_ha", 0) if isinstance(zone_info, dict) else 0
+                )
+                z_max_spacing = (
+                    zone_info.get("max_spacing_m", "N/A")
+                    if isinstance(zone_info, dict)
+                    else "N/A"
+                )
 
                 # Extract stall detection info (primary source for MIP gap)
                 stall_det = z_stats.get("stall_detection", {})
                 final_gap = stall_det.get("final_gap_pct", None) if stall_det else None
-                term_reason = stall_det.get("termination_reason", None) if stall_det else None
+                term_reason = (
+                    stall_det.get("termination_reason", None) if stall_det else None
+                )
                 solve_time = z_stats.get("total_time", 0)
 
                 # Fallback: use final_mip_gap_pct from solver info if stall detection missed it
@@ -1588,7 +1618,9 @@ def export_run_stats_summary(
                 # Use N/A for unknown gaps (shouldn't happen with updated solver)
                 gap_str = f"{final_gap:.1f}%" if final_gap is not None else "N/A"
                 term_str = term_reason if term_reason else "Optimal"
-                lines.append(f"| {zone_name} | {z_boreholes} | {gap_str} | {solve_time:.2f}s | {term_str} | {z_area:.1f} | {z_max_spacing}m |")
+                lines.append(
+                    f"| {zone_name} | {z_boreholes} | {gap_str} | {solve_time:.2f}s | {term_str} | {z_area:.1f} | {z_max_spacing}m |"
+                )
         else:
             lines.append("- No zone-level statistics available")
         lines.append("")
@@ -1607,32 +1639,16 @@ def export_run_stats_summary(
         if czrc_stats:
             original_count = czrc_stats.get("original_count", len(first_pass_boreholes))
             final_count = czrc_stats.get("final_count", len(second_pass_boreholes))
-            # CZRC uses 'boreholes_removed' and 'boreholes_added' as keys
-            # These are TOTALS including Third Pass - we'll subtract Third Pass for accurate display
-            total_removed_count = czrc_stats.get("boreholes_removed", 0)
-            total_added_count = czrc_stats.get("boreholes_added", 0)
+            # boreholes_removed/added now contain Second Pass only (Third Pass
+            # changes are filtered out at the source in czrc_solver.py)
+            removed_count = czrc_stats.get("boreholes_removed", 0)
+            added_count = czrc_stats.get("boreholes_added", 0)
             solve_time = czrc_stats.get("solve_time", 0)
             status = czrc_stats.get("status", "unknown")
             clusters_processed = czrc_stats.get("clusters_processed", 0)
             unified_clusters = czrc_stats.get("unified_clusters", 0)
-            
-            # Calculate Second Pass only removed/added by subtracting Third Pass
-            # (Third Pass stats will be computed later, so we do it inline here)
-            third_pass_rem = 0
-            third_pass_add = 0
-            cluster_stats_dict = czrc_stats.get("cluster_stats", {})
-            for ckey, cinfo in cluster_stats_dict.items():
-                if isinstance(cinfo, dict) and cinfo.get("was_split", False):
-                    cell_czrc = cinfo.get("cell_czrc_stats", {})
-                    if cell_czrc.get("status") == "success":
-                        tp_rem = cell_czrc.get("third_pass_removed", [])
-                        tp_add = cell_czrc.get("third_pass_added", [])
-                        third_pass_rem += len(tp_rem) if isinstance(tp_rem, list) else 0
-                        third_pass_add += len(tp_add) if isinstance(tp_add, list) else 0
-            
-            # Second Pass only stats
-            removed_count = total_removed_count - third_pass_rem
-            added_count = total_added_count - third_pass_add
+
+            # Second Pass stats are now directly available (no subtraction needed)
             second_pass_output = original_count - removed_count + added_count
             net_change = second_pass_output - original_count
 
@@ -1644,7 +1660,9 @@ def export_run_stats_summary(
             lines.append(f"- **Net Change:** {net_change:+d}")
             lines.append(f"- **Solve Time:** {solve_time:.2f}s")
             if clusters_processed > 0:
-                lines.append(f"- **Clusters Processed:** {clusters_processed} ({unified_clusters} unified)")
+                lines.append(
+                    f"- **Clusters Processed:** {clusters_processed} ({unified_clusters} unified)"
+                )
 
             # CZRC stall detection
             czrc_stall = czrc_stats.get("stall_detection", {})
@@ -1662,8 +1680,12 @@ def export_run_stats_summary(
                 lines.append("")
                 lines.append("**Cluster Details:**")
                 lines.append("")
-                lines.append("| Cluster | BH | Gap% | Time | Termination | Area (ha) | Spacing | Delta |")
-                lines.append("|---------|-----|------|------|-------------|-----------|---------|-------|")
+                lines.append(
+                    "| Cluster | BH | Gap% | Time | Termination | Area (ha) | Spacing | Delta |"
+                )
+                lines.append(
+                    "|---------|-----|------|------|-------------|-----------|---------|-------|"
+                )
                 for cluster_key, cluster_info in cluster_stats.items():
                     if isinstance(cluster_info, dict):
                         c_selected = cluster_info.get("selected_count", 0)
@@ -1687,15 +1709,23 @@ def export_run_stats_summary(
                         # Format termination (None = Optimal)
                         term_str = c_term if c_term else "Optimal"
                         # Truncate long cluster keys for readability
-                        display_key = cluster_key if len(cluster_key) < 25 else cluster_key[:22] + "..."
+                        display_key = (
+                            cluster_key
+                            if len(cluster_key) < 25
+                            else cluster_key[:22] + "..."
+                        )
                         was_split = cluster_info.get("was_split", False)
                         if was_split:
                             display_key = f"[SPLIT] {display_key}"
-                        lines.append(f"| `{display_key}` | {c_selected} | {gap_str} | {c_time:.2f}s | {term_str} | {c_area:.1f} | {c_spacing:.0f}m | {c_delta:+d} |")
+                        lines.append(
+                            f"| `{display_key}` | {c_selected} | {gap_str} | {c_time:.2f}s | {term_str} | {c_area:.1f} | {c_spacing:.0f}m | {c_delta:+d} |"
+                        )
             lines.append("")
         elif consol_stats:
             # Legacy consolidation stats
-            original_count = consol_stats.get("original_count", len(first_pass_boreholes))
+            original_count = consol_stats.get(
+                "original_count", len(first_pass_boreholes)
+            )
             final_count = consol_stats.get("final_count", len(second_pass_boreholes))
             removed_count = consol_stats.get("removed_count", 0)
             solve_time = consol_stats.get("solve_time", 0)
@@ -1724,7 +1754,7 @@ def export_run_stats_summary(
         third_pass_added_total = 0
         all_cell_pairs: Dict[str, Any] = {}
         has_third_pass = False
-        
+
         cluster_stats = czrc_stats.get("cluster_stats", {}) if czrc_stats else {}
         for cluster_key, cluster_info in cluster_stats.items():
             if isinstance(cluster_info, dict) and cluster_info.get("was_split", False):
@@ -1734,8 +1764,12 @@ def export_run_stats_summary(
                     # Count removed/added from third pass
                     tp_removed = cell_czrc.get("third_pass_removed", [])
                     tp_added = cell_czrc.get("third_pass_added", [])
-                    third_pass_removed_total += len(tp_removed) if isinstance(tp_removed, list) else 0
-                    third_pass_added_total += len(tp_added) if isinstance(tp_added, list) else 0
+                    third_pass_removed_total += (
+                        len(tp_removed) if isinstance(tp_removed, list) else 0
+                    )
+                    third_pass_added_total += (
+                        len(tp_added) if isinstance(tp_added, list) else 0
+                    )
                     # Collect cell pairs from pair_stats list
                     pair_stats_list = cell_czrc.get("pair_stats", [])
                     for pair_stat in pair_stats_list:
@@ -1747,7 +1781,9 @@ def export_run_stats_summary(
             lines.append(f"- **Status:** success")
             lines.append(f"- **Removed:** {third_pass_removed_total}")
             lines.append(f"- **Added:** {third_pass_added_total}")
-            lines.append(f"- **Net Change:** {third_pass_added_total - third_pass_removed_total:+d}")
+            lines.append(
+                f"- **Net Change:** {third_pass_added_total - third_pass_removed_total:+d}"
+            )
 
             if all_cell_pairs:
                 lines.append("")
@@ -1774,8 +1810,14 @@ def export_run_stats_summary(
                         gap_str = f"{cp_gap:.1f}%" if cp_gap is not None else "N/A"
                         term_str = cp_term if cp_term else "Optimal"
                         # Truncate long names
-                        display_name = cpair_name if len(cpair_name) < 30 else cpair_name[:27] + "..."
-                        lines.append(f"| `{display_name}` | {cp_selected} | {gap_str} | {cp_time:.2f}s | {term_str} | {cp_delta:+d} |")
+                        display_name = (
+                            cpair_name
+                            if len(cpair_name) < 30
+                            else cpair_name[:27] + "..."
+                        )
+                        lines.append(
+                            f"| `{display_name}` | {cp_selected} | {gap_str} | {cp_time:.2f}s | {term_str} | {cp_delta:+d} |"
+                        )
             lines.append("")
         else:
             lines.append("- **Status:** DISABLED or Not Applicable")
@@ -1819,9 +1861,15 @@ def export_run_stats_summary(
             total_change = p3_count - p1_count
 
             lines.append(f"- **First Pass:** {p1_count} boreholes")
-            lines.append(f"- **Second Pass:** {p2_count} boreholes ({second_pass_change:+d})")
-            lines.append(f"- **Third Pass:** {p3_count} boreholes ({third_pass_change:+d})")
-            lines.append(f"- **Total Reduction:** {-total_change if total_change < 0 else 0} boreholes")
+            lines.append(
+                f"- **Second Pass:** {p2_count} boreholes ({second_pass_change:+d})"
+            )
+            lines.append(
+                f"- **Third Pass:** {p3_count} boreholes ({third_pass_change:+d})"
+            )
+            lines.append(
+                f"- **Total Reduction:** {-total_change if total_change < 0 else 0} boreholes"
+            )
 
             if total_change < 0:
                 pct_reduction = abs(total_change) / p1_count * 100
@@ -1839,7 +1887,9 @@ def export_run_stats_summary(
             if total_area > 0:
                 # Show initial coverage percentage (what existing filtered boreholes covered)
                 coverage_pct = covered_area / total_area * 100
-                lines.append(f"- **Initial Coverage (Filtered BHs):** {coverage_pct:.1f}% ({covered_area:.1f} ha / {total_area:.1f} ha)")
+                lines.append(
+                    f"- **Initial Coverage (Filtered BHs):** {coverage_pct:.1f}% ({covered_area:.1f} ha / {total_area:.1f} ha)"
+                )
             lines.append(f"- **Initial Gap Polygons:** {gap_count}")
 
         lines.append("")

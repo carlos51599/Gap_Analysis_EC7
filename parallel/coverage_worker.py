@@ -21,13 +21,22 @@ For Navigation: Use VS Code outline (Ctrl+Shift+O)
 
 import logging
 import time
-from typing import Dict, Any, List, Set, Optional, Tuple, Union
+from typing import Dict, Any, List, Set, Optional, Tuple
 
 import math
 
 import geopandas as gpd
 from shapely.geometry.base import BaseGeometry
 
+from Gap_Analysis_EC7.models.data_models import (
+    Borehole,
+    BoreholePass,
+    BoreholeStatus,
+    get_bh_coords,
+    get_bh_position,
+    get_bh_radius,
+    get_bh_source_pass,
+)
 from Gap_Analysis_EC7.parallel.coverage_orchestrator import (
     deserialize_geodataframe,
     serialize_geometry,
@@ -67,6 +76,36 @@ def _safe_depth(value: Any) -> float:
         return f
     except (ValueError, TypeError):
         return 0.0
+
+
+def _normalize_borehole_dict(
+    bh: Dict[str, Any],
+    default_pass: BoreholePass = BoreholePass.FIRST,
+    default_status: BoreholeStatus = BoreholeStatus.PROPOSED,
+    fallback_radius: float = 100.0,
+) -> Dict[str, Any]:
+    """Convert a raw borehole dict to a standardized dict via Borehole dataclass.
+
+    Ensures source_pass and status are always present and correctly typed.
+    Uses Borehole.from_dict() for validation, then as_dict() for serialization.
+
+    Args:
+        bh: Raw borehole dict with at least x, y keys
+        default_pass: BoreholePass to use if source_pass is missing
+        default_status: BoreholeStatus to use if status is missing
+        fallback_radius: Coverage radius to use if coverage_radius is missing
+
+    Returns:
+        Standardized borehole dict with all required fields
+    """
+    # Ensure coverage_radius exists before from_dict (which requires it)
+    enriched = {**bh}
+    if "coverage_radius" not in enriched:
+        enriched["coverage_radius"] = fallback_radius
+    if "status" not in enriched:
+        enriched["status"] = default_status.value
+
+    return Borehole.from_dict(enriched, default_pass=default_pass).as_dict()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -438,12 +477,12 @@ def worker_process_filter_combination(
             optimization_stats["consolidation"] = consolidation_stats
 
         result["proposed"] = [
-            {
-                "x": bh["x"],
-                "y": bh["y"],
-                "coverage_radius": bh.get("coverage_radius", max_spacing),
-                "source_pass": "First Pass",  # Default before CZRC optimization
-            }
+            _normalize_borehole_dict(
+                bh,
+                default_pass=BoreholePass.FIRST,
+                default_status=BoreholeStatus.PROPOSED,
+                fallback_radius=max_spacing,
+            )
             for bh in proposed
         ]
 
@@ -452,11 +491,12 @@ def worker_process_filter_combination(
         removed_boreholes = consol_stats.get("removed_boreholes", [])
         if removed_boreholes:
             result["removed"] = [
-                {
-                    "x": bh["x"],
-                    "y": bh["y"],
-                    "coverage_radius": bh.get("coverage_radius", max_spacing),
-                }
+                _normalize_borehole_dict(
+                    bh,
+                    default_pass=BoreholePass.FIRST,
+                    default_status=BoreholeStatus.REMOVED,
+                    fallback_radius=max_spacing,
+                )
                 for bh in removed_boreholes
             ]
 
@@ -465,11 +505,12 @@ def worker_process_filter_combination(
         logger.debug(f"added_boreholes: added_count={len(added_boreholes)}")
         if added_boreholes:
             result["added"] = [
-                {
-                    "x": bh["x"],
-                    "y": bh["y"],
-                    "coverage_radius": bh.get("coverage_radius", max_spacing),
-                }
+                _normalize_borehole_dict(
+                    bh,
+                    default_pass=BoreholePass.FIRST,
+                    default_status=BoreholeStatus.ADDED,
+                    fallback_radius=max_spacing,
+                )
                 for bh in added_boreholes
             ]
 
@@ -552,7 +593,7 @@ def worker_process_filter_combination(
                 # 🔗 CZRC SECOND-PASS OPTIMIZATION (New approach replacing border_consolidation)
                 # ═══════════════════════════════════════════════════════════════════
                 czrc_opt_config = CONFIG.get("czrc_optimization", {})
-                
+
                 # Apply testing mode mip_gap override to CZRC config
                 testing_mode = CONFIG.get("testing_mode", {})
                 if testing_mode.get("enabled", False):
@@ -563,8 +604,10 @@ def worker_process_filter_combination(
                         czrc_ilp = dict(czrc_opt_config.get("ilp", {}))
                         czrc_ilp["mip_gap"] = solver_overrides["mip_gap"]
                         czrc_opt_config["ilp"] = czrc_ilp
-                        print(f"   🧪 CZRC: testing mode mip_gap override applied: {solver_overrides['mip_gap']}")
-                
+                        print(
+                            f"   🧪 CZRC: testing mode mip_gap override applied: {solver_overrides['mip_gap']}"
+                        )
+
                 if czrc_opt_config.get("enabled", False):
                     czrc_cache = None  # Initialize for cleanup handling
                     try:
@@ -603,13 +646,11 @@ def worker_process_filter_combination(
 
                         # Store First Pass boreholes before CZRC optimization
                         first_pass_bhs = [
-                            {
-                                "x": bh["x"],
-                                "y": bh["y"],
-                                "coverage_radius": bh.get(
-                                    "coverage_radius", max_spacing
-                                ),
-                            }
+                            _normalize_borehole_dict(
+                                bh,
+                                default_pass=BoreholePass.FIRST,
+                                fallback_radius=max_spacing,
+                            )
                             for bh in proposed
                         ]
 
@@ -666,6 +707,10 @@ def worker_process_filter_combination(
                         # Add third pass visualization data (cell clouds/intersections)
                         if third_pass_viz_data:
                             result["third_pass_data"] = third_pass_viz_data
+                        # Extract cluster stats for Second Pass Tier 2 tooltips
+                        czrc_cluster_stats = czrc_opt_stats.get("cluster_stats", {})
+                        if czrc_cluster_stats:
+                            result["czrc_cluster_stats"] = czrc_cluster_stats
                         # Store first pass boreholes for per-pass CSV export
                         if first_pass_bhs:
                             result["first_pass_boreholes"] = first_pass_bhs
@@ -683,41 +728,48 @@ def worker_process_filter_combination(
                         )
 
                         # Build source_pass for each proposed borehole
-                        # Uses the same per-pass data already collected for CSV export
-                        first_pass_positions = {
-                            (bh["x"], bh["y"]) for bh in first_pass_bhs
-                        }
-                        # czrc_added = boreholes added in Second Pass (Zone-Zone CZRC)
+                        # czrc_solver now sets source_pass on all boreholes via Borehole dataclass.
+                        # Position-based fallback retained as safety net for edge cases.
                         second_pass_added_positions = {
-                            (bh["x"], bh["y"]) for bh in czrc_added
+                            get_bh_position(bh) for bh in czrc_added
                         }
-                        # third_pass_added = boreholes added in Third Pass (Cell-Cell CZRC)
                         third_pass_added_positions = {
-                            (bh["x"], bh["y"]) for bh in third_pass_added
+                            get_bh_position(bh) for bh in third_pass_added
                         }
 
-                        def _get_source_pass(bh: Dict[str, Any]) -> str:
-                            """Determine which pass a borehole came from."""
-                            pos = (bh["x"], bh["y"])
+                        def _get_source_pass(bh: Dict[str, Any]) -> BoreholePass:
+                            """Determine which pass a borehole came from.
+
+                            Primary: uses source_pass from upstream (set by czrc_solver via Borehole).
+                            Fallback: position-based lookup for legacy edge cases.
+
+                            Returns:
+                                BoreholePass enum for the originating pass
+                            """
+                            upstream = bh.get("source_pass")
+                            if upstream:
+                                if isinstance(upstream, BoreholePass):
+                                    return upstream
+                                return BoreholePass.from_string(str(upstream))
+                            # Fallback: position-based lookup (legacy safety net)
+                            pos = get_bh_position(bh)
                             if pos in third_pass_added_positions:
-                                return "Third Pass"
+                                return BoreholePass.THIRD
                             if pos in second_pass_added_positions:
-                                return "Second Pass"
-                            if pos in first_pass_positions:
-                                return "First Pass"
-                            # Fallback (shouldn't happen if data is consistent)
-                            return "First Pass"
+                                return BoreholePass.SECOND
+                            return BoreholePass.FIRST
 
                         # Update result with optimized boreholes including source_pass
                         result["proposed"] = [
-                            {
-                                "x": bh["x"],
-                                "y": bh["y"],
-                                "coverage_radius": bh.get(
-                                    "coverage_radius", max_spacing
+                            Borehole(
+                                x=get_bh_coords(bh)[0],
+                                y=get_bh_coords(bh)[1],
+                                coverage_radius=get_bh_radius(bh) or max_spacing,
+                                source_pass=_get_source_pass(bh),
+                                status=BoreholeStatus.from_string(
+                                    bh.get("status", "proposed")
                                 ),
-                                "source_pass": _get_source_pass(bh),
-                            }
+                            ).as_dict()
                             for bh in proposed
                         ]
                     except Exception as e:

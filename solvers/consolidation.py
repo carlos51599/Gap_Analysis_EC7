@@ -36,6 +36,15 @@ from shapely.geometry import Point
 from shapely.geometry.base import BaseGeometry
 
 from Gap_Analysis_EC7.solvers.solver_algorithms import _solve_ilp
+from Gap_Analysis_EC7.models.data_models import (
+    Borehole,
+    BoreholePass,
+    BoreholeStatus,
+    get_bh_coords,
+    get_bh_position,
+    get_bh_radius,
+    get_bh_source_pass,
+)
 
 # Module-level logger for debug output (used when no logger passed to functions)
 _logger = logging.getLogger(__name__)
@@ -69,14 +78,14 @@ def _filter_coincident_pairs(
         return removed, added
 
     # Build set of added positions for fast lookup
-    added_positions = [(bh["x"], bh["y"]) for bh in added]
+    added_positions = [get_bh_position(bh) for bh in added]
 
     # Find which removed boreholes have a coincident added borehole
     coincident_removed_indices = set()
     coincident_added_indices = set()
 
     for r_idx, removed_bh in enumerate(removed):
-        r_x, r_y = removed_bh["x"], removed_bh["y"]
+        r_x, r_y = get_bh_coords(removed_bh)
         for a_idx, (a_x, a_y) in enumerate(added_positions):
             dist = ((r_x - a_x) ** 2 + (r_y - a_y) ** 2) ** 0.5
             if dist <= tolerance:
@@ -185,8 +194,8 @@ def _classify_boreholes_and_test_points(
         }
 
     # Convert to Point objects for classification
-    bh_points = [Point(bh["x"], bh["y"]) for bh in boreholes]
-    tp_points = [Point(tp["x"], tp["y"]) for tp in test_points]
+    bh_points = [Point(*get_bh_coords(bh)) for bh in boreholes]
+    tp_points = [Point(*get_bh_coords(tp)) for tp in test_points]
 
     # Classify boreholes
     interior_bh_idx, border_bh_idx = _classify_by_boundary_distance(
@@ -263,10 +272,10 @@ def _compute_locked_coverage(
     pre_covered: Set[int] = set()
 
     # Convert interior boreholes to Point objects once
-    interior_points = [Point(bh["x"], bh["y"]) for bh in interior_boreholes]
+    interior_points = [Point(*get_bh_coords(bh)) for bh in interior_boreholes]
 
     for i, tp in enumerate(buffer_test_points):
-        tp_point = Point(tp["x"], tp["y"])
+        tp_point = Point(*get_bh_coords(tp))
         required_radius = tp.get("required_radius", 100.0)  # Fallback to 100m
 
         # Check if any interior borehole covers this test point
@@ -405,7 +414,7 @@ def _build_warm_start_indices(
     warm_indices = []
 
     for bh in boreholes:
-        bh_point = Point(bh["x"], bh["y"])
+        bh_point = Point(*get_bh_coords(bh))
         # Find closest candidate
         min_dist = float("inf")
         closest_idx = -1
@@ -706,48 +715,56 @@ def _solve_split_regions(
 
     # Add all interior boreholes (locked)
     for bh in interior_boreholes:
+        x, y = get_bh_coords(bh)
         consolidated.append(
-            {
-                "x": bh["x"],
-                "y": bh["y"],
-                "coverage_radius": bh.get("coverage_radius", max_spacing),
-            }
+            Borehole(
+                x=x,
+                y=y,
+                coverage_radius=get_bh_radius(bh, default=max_spacing),
+                source_pass=get_bh_source_pass(bh, default=BoreholePass.FIRST),
+            ).as_dict()
         )
 
     # Add selected boreholes from all regions
     for cand in all_selected:
         consolidated.append(
-            {
-                "x": cand.x,
-                "y": cand.y,
-                "coverage_radius": min_spacing,
-            }
+            Borehole(
+                x=cand.x,
+                y=cand.y,
+                coverage_radius=min_spacing,
+                source_pass=BoreholePass.FIRST,
+            ).as_dict()
         )
 
     # Track removed boreholes
     selected_set = set((c.x, c.y) for c in all_selected)
     removed_boreholes = []
     for bh in border_boreholes:
-        if (bh["x"], bh["y"]) not in selected_set:
+        x, y = get_bh_coords(bh)
+        if (x, y) not in selected_set:
             removed_boreholes.append(
-                {
-                    "x": bh["x"],
-                    "y": bh["y"],
-                    "coverage_radius": bh.get("coverage_radius", max_spacing),
-                }
+                Borehole(
+                    x=x,
+                    y=y,
+                    coverage_radius=get_bh_radius(bh, default=max_spacing),
+                    source_pass=get_bh_source_pass(bh, default=BoreholePass.FIRST),
+                    status=BoreholeStatus.REMOVED,
+                ).as_dict()
             )
 
     # Track added boreholes (new locations not in original border boreholes)
-    border_set = set((bh["x"], bh["y"]) for bh in border_boreholes)
+    border_set = set(get_bh_position(bh) for bh in border_boreholes)
     added_boreholes = []
     for cand in all_selected:
         if (cand.x, cand.y) not in border_set:
             added_boreholes.append(
-                {
-                    "x": cand.x,
-                    "y": cand.y,
-                    "coverage_radius": min_spacing,
-                }
+                Borehole(
+                    x=cand.x,
+                    y=cand.y,
+                    coverage_radius=min_spacing,
+                    source_pass=BoreholePass.FIRST,
+                    status=BoreholeStatus.ADDED,
+                ).as_dict()
             )
 
     # Filter coincident pairs
@@ -776,17 +793,23 @@ def _solve_split_regions(
 
     # Build buffer_candidates_coords for second pass grid visualization
     buffer_candidates_coords = [
-        {"x": cand.x, "y": cand.y, "coverage_radius": min_spacing}
+        Borehole(
+            x=cand.x,
+            y=cand.y,
+            coverage_radius=min_spacing,
+            source_pass=BoreholePass.FIRST,
+        ).as_dict()
         for cand in buffer_candidates
     ]
 
     # Build first_pass_candidates for visualization
     first_pass_candidates = [
-        {
-            "x": bh["x"],
-            "y": bh["y"],
-            "coverage_radius": bh.get("coverage_radius", min_spacing),
-        }
+        Borehole(
+            x=get_bh_coords(bh)[0],
+            y=get_bh_coords(bh)[1],
+            coverage_radius=get_bh_radius(bh, default=min_spacing),
+            source_pass=get_bh_source_pass(bh, default=BoreholePass.FIRST),
+        ).as_dict()
         for bh in border_boreholes
     ]
 
@@ -1056,7 +1079,7 @@ def consolidate_boreholes_buffer_zone(
 
     # Also include border boreholes as candidates (they may still be optimal)
     for bh in border_boreholes:
-        buffer_candidates.append(Point(bh["x"], bh["y"]))
+        buffer_candidates.append(Point(*get_bh_coords(bh)))
 
     if logger:
         logger.info(
@@ -1164,12 +1187,14 @@ def consolidate_boreholes_buffer_zone(
 
     # Add all interior boreholes (locked)
     for bh in interior_boreholes:
+        x, y = get_bh_coords(bh)
         consolidated.append(
-            {
-                "x": bh["x"],
-                "y": bh["y"],
-                "coverage_radius": bh.get("coverage_radius", max_spacing),
-            }
+            Borehole(
+                x=x,
+                y=y,
+                coverage_radius=get_bh_radius(bh, default=max_spacing),
+                source_pass=get_bh_source_pass(bh, default=BoreholePass.FIRST),
+            ).as_dict()
         )
 
     # Add selected buffer boreholes
@@ -1178,21 +1203,24 @@ def consolidate_boreholes_buffer_zone(
             cand = buffer_candidates[idx]
             # Determine radius - use minimum spacing for new candidates
             consolidated.append(
-                {
-                    "x": cand.x,
-                    "y": cand.y,
-                    "coverage_radius": min_spacing,
-                }
+                Borehole(
+                    x=cand.x,
+                    y=cand.y,
+                    coverage_radius=min_spacing,
+                    source_pass=BoreholePass.FIRST,
+                ).as_dict()
             )
 
     # Track removed boreholes (original border boreholes that are replaced)
     # These are the first-pass border boreholes that were replaced by new buffer candidates
     removed_boreholes = [
-        {
-            "x": bh["x"],
-            "y": bh["y"],
-            "coverage_radius": bh.get("coverage_radius", max_spacing),
-        }
+        Borehole(
+            x=get_bh_coords(bh)[0],
+            y=get_bh_coords(bh)[1],
+            coverage_radius=get_bh_radius(bh, default=max_spacing),
+            source_pass=get_bh_source_pass(bh, default=BoreholePass.FIRST),
+            status=BoreholeStatus.REMOVED,
+        ).as_dict()
         for bh in border_boreholes
     ]
 
@@ -1204,11 +1232,13 @@ def consolidate_boreholes_buffer_zone(
             if idx < len(buffer_candidates):
                 cand = buffer_candidates[idx]
                 added_boreholes.append(
-                    {
-                        "x": cand.x,
-                        "y": cand.y,
-                        "coverage_radius": min_spacing,
-                    }
+                    Borehole(
+                        x=cand.x,
+                        y=cand.y,
+                        coverage_radius=min_spacing,
+                        source_pass=BoreholePass.FIRST,
+                        status=BoreholeStatus.ADDED,
+                    ).as_dict()
                 )
 
     # Filter out coincident removed/added pairs (same position = no net change)
@@ -1222,7 +1252,12 @@ def consolidate_boreholes_buffer_zone(
 
     # Convert buffer_candidates (Points) to serializable format for visualization
     buffer_candidates_coords = [
-        {"x": cand.x, "y": cand.y, "coverage_radius": min_spacing}
+        Borehole(
+            x=cand.x,
+            y=cand.y,
+            coverage_radius=min_spacing,
+            source_pass=BoreholePass.FIRST,
+        ).as_dict()
         for cand in buffer_candidates
     ]
 
@@ -1232,11 +1267,12 @@ def consolidate_boreholes_buffer_zone(
     # Extract first-pass border boreholes (used as non-grid candidates)
     # These are the original border boreholes that were also candidates in the ILP
     first_pass_candidates = [
-        {
-            "x": bh["x"],
-            "y": bh["y"],
-            "coverage_radius": bh.get("coverage_radius", min_spacing),
-        }
+        Borehole(
+            x=get_bh_coords(bh)[0],
+            y=get_bh_coords(bh)[1],
+            coverage_radius=get_bh_radius(bh, default=min_spacing),
+            source_pass=get_bh_source_pass(bh, default=BoreholePass.FIRST),
+        ).as_dict()
         for bh in border_boreholes
     ]
 
@@ -1369,8 +1405,8 @@ def consolidate_boreholes(
         _log.debug(
             "CONSOLIDATION: No zone candidates found, using first-pass boreholes"
         )
-        all_candidates = [Point(bh["x"], bh["y"]) for bh in boreholes]
-        all_radii = [bh.get("coverage_radius", max_spacing) for bh in boreholes]
+        all_candidates = [Point(*get_bh_coords(bh)) for bh in boreholes]
+        all_radii = [get_bh_radius(bh, default=max_spacing) for bh in boreholes]
 
     # Deduplicate candidates (may overlap at zone boundaries)
     candidates, radii = _dedupe_candidates(all_candidates, all_radii)
@@ -1492,15 +1528,26 @@ def consolidate_boreholes(
     consolidated = []
     removed = []
 
+    # Build source_pass lookup from input boreholes for provenance tracking
+    source_pass_lookup = {
+        get_bh_position(bh): get_bh_source_pass(bh, default=BoreholePass.FIRST)
+        for bh in boreholes
+    }
+
     for idx in range(len(candidates)):
         cand = candidates[idx]
         rad = radii[idx] if idx < len(radii) else max_spacing
-        bh_record = {
-            "x": cand.x,
-            "y": cand.y,
-            "coverage_radius": rad,
-        }
-        if idx in selected_set:
+        pos_key = (round(cand.x, 6), round(cand.y, 6))
+        pass_enum = source_pass_lookup.get(pos_key, BoreholePass.FIRST)
+        is_selected = idx in selected_set
+        bh_record = Borehole(
+            x=cand.x,
+            y=cand.y,
+            coverage_radius=rad,
+            source_pass=pass_enum,
+            status=(BoreholeStatus.PROPOSED if is_selected else BoreholeStatus.REMOVED),
+        ).as_dict()
+        if is_selected:
             consolidated.append(bh_record)
         else:
             removed.append(bh_record)

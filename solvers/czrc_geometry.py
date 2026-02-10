@@ -38,6 +38,83 @@ from shapely.ops import unary_union
 # Type alias for GeoDataFrame (avoid import for type hints)
 GeoDataFrame = Any
 
+# Delimiter for pair keys (zone name pairs)
+# CRITICAL: Use a delimiter that won't appear in zone names
+PAIR_KEY_DELIMITER = "||"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 🔧 PAIR KEY UTILITIES
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def make_pair_key(zone_a: str, zone_b: str) -> str:
+    """
+    Create a pair key from two zone names.
+
+    Uses a safe delimiter that won't appear in zone names (||) to avoid
+    parsing issues when zone names contain underscores (e.g., "Highways_0").
+
+    Args:
+        zone_a: First zone name
+        zone_b: Second zone name
+
+    Returns:
+        Pair key string like "Highways_0||Embankment_0"
+    """
+    return f"{zone_a}{PAIR_KEY_DELIMITER}{zone_b}"
+
+
+def parse_pair_key(
+    pair_key: str, zone_spacings: Optional[Dict[str, float]] = None
+) -> List[str]:
+    """
+    Extract zone names from a pair key.
+
+    Handles both new format (|| delimiter) and legacy format (_ delimiter).
+    For legacy format, uses zone_spacings to find valid zone names.
+
+    Args:
+        pair_key: Pair key string (e.g., "Highways_0||Embankment_0" or "Zone 1_Zone 2")
+        zone_spacings: Optional dict of {zone_name: spacing} for legacy format parsing
+
+    Returns:
+        List of zone names (typically 2 elements)
+
+    Examples:
+        >>> parse_pair_key("Highways_0||Embankment_0")
+        ["Highways_0", "Embankment_0"]
+        >>> parse_pair_key("Zone 1_Zone 2", {"Zone 1": 100, "Zone 2": 150})
+        ["Zone 1", "Zone 2"]
+    """
+    # New format: use || delimiter
+    if PAIR_KEY_DELIMITER in pair_key:
+        return pair_key.split(PAIR_KEY_DELIMITER)
+
+    # Legacy format: underscore delimiter
+    # Try to match against known zone names from zone_spacings
+    if zone_spacings:
+        known_zones = set(zone_spacings.keys())
+
+        # Try to find two known zones that combine to form pair_key
+        for zone_a in known_zones:
+            # Check if pair_key starts with zone_a followed by _
+            prefix = zone_a + "_"
+            if pair_key.startswith(prefix):
+                zone_b = pair_key[len(prefix) :]
+                if zone_b in known_zones:
+                    return [zone_a, zone_b]
+
+            # Check if pair_key ends with _zone_a
+            suffix = "_" + zone_a
+            if pair_key.endswith(suffix):
+                zone_b = pair_key[: -len(suffix)]
+                if zone_b in known_zones:
+                    return [zone_b, zone_a]
+
+    # Fallback: simple underscore split (may be wrong for zone names with underscores)
+    return pair_key.split("_")
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 🌐 COVERAGE CLOUD COMPUTATION SECTION
@@ -284,7 +361,7 @@ def compute_czrc_consolidation_region(
             )
 
             if intersection is not None and not intersection.is_empty:
-                pair_key = f"{zone_a}_{zone_b}"
+                pair_key = make_pair_key(zone_a, zone_b)
                 pairwise_regions[pair_key] = intersection
 
     if logger:
