@@ -389,25 +389,39 @@ def worker_process_filter_combination(
         )
         result["boreholes_count"] = len(filtered_records)
 
-        # Handle empty filter result
-        if not filtered_records:
-            result.update(_create_empty_filter_result(start_time))
-            logger.info("✅ %s: 0 boreholes (empty filter result)", combo_key)
-            return result
-
-        # Reconstruct GeoDataFrames from serialized records
-        boreholes_gdf = deserialize_geodataframe(filtered_records, boreholes_crs)
+        # Reconstruct zones GeoDataFrame (always needed)
         zones_gdf = deserialize_geodataframe(zones_records, zones_crs)
 
         # Compute coverage zones
-        from Gap_Analysis_EC7.coverage_zones import compute_coverage_zones
+        if not filtered_records:
+            # 0 existing boreholes: entire zone boundary is uncovered
+            # Still proceed to solver so centreline + ILP boreholes are generated
+            from shapely.ops import unary_union
 
-        covered_union, uncovered_gaps, gap_stats = compute_coverage_zones(
-            boreholes_gdf=boreholes_gdf,
-            zones_gdf=zones_gdf,
-            max_spacing=max_spacing,
-            logger=None,
-        )
+            covered_union = None
+            zone_boundary = unary_union(zones_gdf.geometry)
+            uncovered_gaps = (
+                zone_boundary
+                if (zone_boundary and not zone_boundary.is_empty)
+                else None
+            )
+            gap_stats = []
+            logger.info(
+                "📊 %s: 0 existing boreholes - entire zone is gap", combo_key
+            )
+        else:
+            # Normal case: compute coverage from existing boreholes
+            boreholes_gdf = deserialize_geodataframe(
+                filtered_records, boreholes_crs
+            )
+            from Gap_Analysis_EC7.coverage_zones import compute_coverage_zones
+
+            covered_union, uncovered_gaps, gap_stats = compute_coverage_zones(
+                boreholes_gdf=boreholes_gdf,
+                zones_gdf=zones_gdf,
+                max_spacing=max_spacing,
+                logger=None,
+            )
 
         result["covered"] = serialize_geometry(covered_union)
         result["gaps"] = serialize_geometry(uncovered_gaps)
