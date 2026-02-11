@@ -271,17 +271,6 @@ echo Server stopped.
 pause
 """
 
-STOP_BAT_TEMPLATE = r"""@echo off
-echo Stopping Zone Coverage Server...
-taskkill /F /IM zone_coverage_server.exe 2>nul
-if %ERRORLEVEL% EQU 0 (
-    echo Server stopped successfully.
-) else (
-    echo Server was not running.
-)
-timeout /t 2 >nul
-"""
-
 README_TEMPLATE = """ZONE COVERAGE VISUALIZATION
 ===========================
 
@@ -292,7 +281,7 @@ QUICK START:
 
 TO STOP:
 - Close the black command window, OR
-- Double-click STOP.bat
+- Press Ctrl+C in the server window
 
 FEATURES:
 - View zones and borehole positions on interactive map
@@ -300,10 +289,17 @@ FEATURES:
 - See coverage update in real-time
 - Toggle zone visibility with checkboxes
 - Export modified positions to CSV
+- Save positions for next session (persists across restarts)
+
+SAVING YOUR CHANGES:
+- Click "Export CSV" to download your borehole positions
+- Place the exported CSV in the "Saved Positions" folder (next to START.bat)
+- On next startup, the server will load positions from that CSV instead
+- To reset to original data: remove the CSV from "Saved Positions"
 
 TROUBLESHOOTING:
 - If browser doesn't open: manually go to http://127.0.0.1:5051
-- If "port in use" error: run STOP.bat first, then try again
+- If "port in use" error: close the server window first, then try again
 - If blocked by antivirus: add exception for zone_coverage_server.exe
 - If SmartScreen warning: click "More info" then "Run anyway"
 - If "Access Denied": right-click START.bat -> Run as administrator
@@ -554,10 +550,14 @@ def build_portable(
                 "   Run main.py first to generate data, or copy manually later"
             )
 
-    # === Step 6: Create batch launchers ===
+    # Create "Saved Positions" folder at portable root for CSV override
+    saved_dir = output_path / "Saved Positions"
+    saved_dir.mkdir(parents=True, exist_ok=True)
+    logger.info("\U0001f4c2 Created Saved Positions/ folder")
+
+    # === Step 6: Create batch launcher ===
     (output_path / "START.bat").write_text(START_BAT_TEMPLATE, encoding="utf-8")
-    (output_path / "STOP.bat").write_text(STOP_BAT_TEMPLATE, encoding="utf-8")
-    logger.info("📝 Created START.bat and STOP.bat")
+    logger.info("📝 Created START.bat")
 
     # === Step 7: Create README ===
     readme_content = README_TEMPLATE.format(

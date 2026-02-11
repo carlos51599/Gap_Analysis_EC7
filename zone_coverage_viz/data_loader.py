@@ -82,6 +82,9 @@ class DataLoader:
         self._source_files: List[Dict[str, Any]] = []
         self._generated_at: Optional[str] = None
 
+        # CSV override tracking
+        self._csv_source_file: Optional[str] = None
+
         # Coordinate transformer
         self._wgs84_to_bng = Transformer.from_crs(CRS_WGS84, CRS_BNG, always_xy=True)
         self._bng_to_wgs84 = Transformer.from_crs(CRS_BNG, CRS_WGS84, always_xy=True)
@@ -132,7 +135,13 @@ class DataLoader:
 
         # Convert to GeoDataFrames (in BNG for geometry operations)
         self._zones_gdf = self._geojson_to_gdf(self._zones_data, CRS_BNG)
-        self._boreholes_gdf = self._geojson_to_gdf(self._boreholes_data, CRS_BNG)
+
+        # Check for saved CSV override BEFORE using JSON boreholes
+        csv_override = self._try_load_csv_override()
+        if csv_override is not None:
+            self._boreholes_gdf = csv_override
+        else:
+            self._boreholes_gdf = self._geojson_to_gdf(self._boreholes_data, CRS_BNG)
 
         if self._existing_coverage_data:
             self._existing_coverage_gdf = self._geojson_to_gdf(
@@ -193,6 +202,62 @@ class DataLoader:
             gdf = gdf.to_crs(target_crs)
 
         return gdf
+
+    def _try_load_csv_override(self) -> Optional[gpd.GeoDataFrame]:
+        """
+        Check for a saved CSV file in saved_positions/ to override JSON boreholes.
+
+        Returns:
+            GeoDataFrame in BNG if valid CSV found, None otherwise.
+        """
+        # Look for "Saved Positions" folder at portable root (next to Output/)
+        saved_dir = self.data_dir.parent / "Saved Positions"
+        if not saved_dir.exists():
+            return None
+
+        csv_files = [f for f in saved_dir.glob("*.csv") if f.is_file()]
+        if not csv_files:
+            return None
+
+        # Use most recently modified CSV
+        csv_path = sorted(
+            csv_files, key=lambda f: f.stat().st_mtime, reverse=True
+        )[0]
+
+        try:
+            df = pd.read_csv(csv_path)
+
+            # Validate required columns
+            required = {"ID", "Easting", "Northing"}
+            if not required.issubset(set(df.columns)):
+                logger.warning(
+                    f"CSV override missing columns: {required - set(df.columns)} "
+                    f"in {csv_path.name} — falling back to JSON"
+                )
+                return None
+
+            # Build GeoDataFrame in BNG
+            geometry = [
+                Point(x, y)
+                for x, y in zip(df["Easting"], df["Northing"])
+            ]
+            gdf = gpd.GeoDataFrame(crs=CRS_BNG, geometry=geometry)
+            gdf["Location_ID"] = df["ID"]
+            gdf["index"] = range(len(gdf))
+
+            self._csv_source_file = csv_path.name
+            logger.info(
+                f"📂 Loaded {len(gdf)} boreholes from saved CSV: "
+                f"{csv_path.name} (overriding JSON)"
+            )
+            return gdf
+
+        except Exception as e:
+            logger.warning(
+                f"Failed to load CSV override {csv_path.name}: {e} "
+                f"— falling back to JSON"
+            )
+            return None
 
     def _load_fallback(self) -> None:
         """

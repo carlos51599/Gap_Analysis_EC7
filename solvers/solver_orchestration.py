@@ -161,6 +161,7 @@ def _sanitize_log_name(name: str, max_len: int = 50, abbreviate: bool = True) ->
 def optimize_boreholes(
     gaps: Union[Polygon, MultiPolygon, BaseGeometry],
     config: Optional[SolverConfig] = None,
+    centreline_boreholes: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[List[Dict[str, float]], Dict[str, Any]]:
     """
     Compute optimal borehole locations using SolverConfig.
@@ -241,6 +242,7 @@ def optimize_boreholes(
         highs_log_folder=config.highs_log_folder,
         logger=config.logger,
         stall_detection_config=stall_detection_dict,
+        centreline_boreholes=centreline_boreholes,
     )
 
 
@@ -287,6 +289,8 @@ def compute_optimal_boreholes(
     logger: Optional[logging.Logger] = None,
     # Stall detection for early termination
     stall_detection_config: Optional[Dict[str, Any]] = None,
+    # Centreline-locked boreholes (pre-computed, constant across all passes)
+    centreline_boreholes: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[List[Dict[str, float]], Dict[str, Any]]:
     """
     Compute optimal borehole locations to cover uncovered gaps.
@@ -371,6 +375,7 @@ def compute_optimal_boreholes(
         "log_name_prefix": log_name_prefix,
         "logger": logger,
         "stall_detection_config": stall_detection_config,
+        "centreline_boreholes": centreline_boreholes,
     }
 
     # ZONE-BASED DECOMPOSITION
@@ -421,6 +426,71 @@ def compute_optimal_boreholes(
 # ===========================================================================
 # 🏗️ ZONE-BASED DECOMPOSITION
 # ===========================================================================
+
+
+def _filter_centreline_for_zone(
+    centreline_boreholes: Optional[List[Dict[str, Any]]],
+    zone_gap_union: BaseGeometry,
+    zone_spacing: float,
+) -> List[Dict[str, Any]]:
+    """
+    Filter centreline boreholes relevant to a specific zone.
+
+    Keeps boreholes within zone_spacing distance of the zone's gap areas
+    so they can pre-cover test points in this zone.
+
+    Args:
+        centreline_boreholes: All centreline boreholes (may be None)
+        zone_gap_union: Union of gap polygons for this zone
+        zone_spacing: Zone max_spacing_m (coverage radius)
+
+    Returns:
+        Filtered list of centreline boreholes for this zone.
+    """
+    if not centreline_boreholes:
+        return []
+
+    buffer = zone_gap_union.buffer(zone_spacing)
+    return [
+        bh for bh in centreline_boreholes if buffer.contains(Point(bh["x"], bh["y"]))
+    ]
+
+
+def _deduplicate_boreholes(
+    boreholes: List[Dict[str, Any]],
+    tolerance: float = 0.5,
+) -> List[Dict[str, Any]]:
+    """
+    Remove duplicate boreholes by position within tolerance.
+
+    Used after zone decomposition to remove centreline BHs that were
+    assigned to multiple zones due to proximity to zone boundaries.
+
+    Args:
+        boreholes: List of borehole dicts with x, y keys
+        tolerance: Distance in metres to consider as duplicate
+
+    Returns:
+        Deduplicated list preserving order and first occurrence.
+    """
+    tol_sq = tolerance * tolerance
+    seen: List[Tuple[float, float]] = []
+    result: List[Dict[str, Any]] = []
+
+    for bh in boreholes:
+        bx, by = bh["x"], bh["y"]
+        is_dup = False
+        for sx, sy in seen:
+            dx = bx - sx
+            dy = by - sy
+            if dx * dx + dy * dy < tol_sq:
+                is_dup = True
+                break
+        if not is_dup:
+            seen.append((bx, by))
+            result.append(bh)
+
+    return result
 
 
 def _run_zone_decomposition(
@@ -512,6 +582,13 @@ def _run_zone_decomposition(
             # Use meaningful zone name for log files (without "pass" in prefix)
             zone_kwargs["log_name_prefix"] = f"first_{zone_name}"
 
+            # Filter centreline boreholes for this zone (spatial containment)
+            all_cl_bhs = zone_kwargs.pop("centreline_boreholes", None)
+            zone_cl_bhs = _filter_centreline_for_zone(
+                all_cl_bhs, zone_gap_union, zone_spacing
+            )
+            zone_kwargs["centreline_boreholes"] = zone_cl_bhs if zone_cl_bhs else None
+
             # Solve with or without caching
             if zone_cache is not None:
                 # Cache-aware solve: use get_or_compute pattern
@@ -561,6 +638,37 @@ def _run_zone_decomposition(
 
         # NOTE: Border consolidation now runs inside parallel workers
         # (see Gap_Analysis_EC7/parallel/coverage_worker.py)
+
+        # Deduplicate centreline boreholes that may appear in multiple zones
+        # (zone buffering can include BHs near zone boundaries in both zones)
+        pre_dedup_count = len(all_boreholes)
+        all_boreholes = _deduplicate_boreholes(all_boreholes)
+        if logger and pre_dedup_count != len(all_boreholes):
+            logger.info(
+                f"   🔄 Deduped {pre_dedup_count - len(all_boreholes)} "
+                f"cross-zone centreline boreholes"
+            )
+
+        # === ENSURE ALL CENTRELINE BOREHOLES ARE INCLUDED ===
+        # _filter_centreline_for_zone() drops boreholes not near any zone's
+        # gaps.  These are locked constants and must always appear in output.
+        all_cl_bhs = kwargs.get("centreline_boreholes")
+        if all_cl_bhs:
+            existing_positions = {
+                (round(bh["x"], 1), round(bh["y"], 1)) for bh in all_boreholes
+            }
+            missing_cl = [
+                bh
+                for bh in all_cl_bhs
+                if (round(bh["x"], 1), round(bh["y"], 1)) not in existing_positions
+            ]
+            if missing_cl:
+                all_boreholes.extend(missing_cl)
+                if logger:
+                    logger.info(
+                        f"   🛤️ Restored {len(missing_cl)} centreline boreholes "
+                        f"not near any zone gap (total: {len(all_boreholes)})"
+                    )
 
         # Aggregate test points from all zones for consolidation pass
         # Each test point already has required_radius; add zone name for debugging
@@ -718,6 +826,7 @@ def _run_single_solve(
     log_name_prefix: Optional[str],
     logger: Optional[logging.Logger],
     stall_detection_config: Optional[Dict[str, Any]] = None,
+    centreline_boreholes: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[List[Dict[str, float]], Dict[str, Any]]:
     """Run single solve without decomposition."""
     opt_times = {}
@@ -736,9 +845,45 @@ def _run_single_solve(
 
     step_start = time.perf_counter()
     test_points = _generate_test_points(gap_polys, test_spacing, logger)
+    all_test_points_count = len(test_points)  # Track total before pre-coverage
     opt_times["test_points"] = time.perf_counter() - step_start
 
+    # === CENTRELINE PRE-COVERAGE ===
+    # Remove test points already covered by locked centreline boreholes
+    # BEFORE building coverage dict (keeps ILP indices consistent)
+    if centreline_boreholes:
+        step_start = time.perf_counter()
+        from Gap_Analysis_EC7.centreline_constraints import (
+            compute_centreline_precoverage,
+        )
+
+        tp_dicts = [
+            {"x": tp.x, "y": tp.y, "required_radius": max_spacing} for tp in test_points
+        ]
+        pre_covered_indices = compute_centreline_precoverage(
+            tp_dicts, centreline_boreholes, log=logger
+        )
+        if pre_covered_indices:
+            test_points = [
+                tp for i, tp in enumerate(test_points) if i not in pre_covered_indices
+            ]
+        opt_times["centreline_precoverage"] = time.perf_counter() - step_start
+
     if len(test_points) == 0:
+        # All test points covered by centreline boreholes → return them directly
+        if centreline_boreholes:
+            if logger:
+                logger.info(
+                    f"   🛤️ All {all_test_points_count} test points pre-covered by "
+                    f"{len(centreline_boreholes)} centreline boreholes"
+                )
+            return list(centreline_boreholes), {
+                "method": "centreline_precoverage",
+                "boreholes": len(centreline_boreholes),
+                "centreline_count": len(centreline_boreholes),
+                "centreline_precovered": all_test_points_count,
+                "test_points": [],
+            }
         if logger:
             logger.warning("⚠️ No test points generated - gaps may be too small")
         return [], {"method": "error", "message": "Gaps too small for test points"}
@@ -825,6 +970,16 @@ def _run_single_solve(
         for i in selected_indices
     ]
 
+    # === APPEND CENTRELINE BOREHOLES ===
+    # Centreline boreholes are locked constants - always included in output
+    if centreline_boreholes:
+        boreholes.extend(centreline_boreholes)
+        if logger:
+            logger.info(
+                f"   🛤️ Added {len(centreline_boreholes)} centreline boreholes "
+                f"(total: {len(boreholes)})"
+            )
+
     # Optional: ensure complete coverage
     step_start = time.perf_counter()
     if fill_remaining_fragments:
@@ -845,6 +1000,11 @@ def _run_single_solve(
     stats["naive_count"] = naive_count
     stats["optimal_count"] = optimal_count
     stats["improvement_percent"] = improvement
+
+    # Track centreline stats for downstream visibility
+    if centreline_boreholes:
+        stats["centreline_count"] = len(centreline_boreholes)
+        stats["centreline_precovered"] = all_test_points_count - len(test_points)
 
     # Store test points for consolidation pass (convert Point to dict for serialization)
     # Include required_radius for buffer zone consolidation with variable zone spacing
@@ -904,6 +1064,11 @@ def _solve_component(
     highs_log_folder: Optional[str] = None,
     component_idx: Optional[int] = None,
     logger: Optional[logging.Logger] = None,
+    # Extra params forwarded from shared_params — not used in component solve
+    log_name_prefix: Optional[str] = None,
+    stall_detection_config: Optional[Dict[str, Any]] = None,
+    centreline_boreholes: Optional[List[Dict[str, Any]]] = None,
+    **_extra,
 ) -> Tuple[List[Dict[str, float]], Dict[str, Any]]:
     """
     Solve ILP for a single connected component.

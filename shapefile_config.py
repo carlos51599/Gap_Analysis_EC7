@@ -21,6 +21,12 @@ Navigation Guide:
 - "layers": Individual shapefile configurations
 - "defaults": Fallback settings for unconfigured properties
 
+Centreline Constraints:
+- Each layer can optionally have a "centreline" sub-dict
+- When enabled, boreholes are placed at zone-spacing intervals along the centreline
+- These boreholes are locked constants in all ILP solver passes
+- Use get_centreline_config() and get_centreline_enabled_layers() helpers
+
 Zone Naming:
 - If name_column is set (e.g., "Name"), zone names come from that column
 - If name_column is None, each feature becomes a separate zone named "display_name_0", "display_name_1", etc.
@@ -103,6 +109,17 @@ SHAPEFILE_CONFIG: Dict[str, Any] = {
                 "boundary_linewidth": 2.5,
             },
             "features": {},  # No per-feature overrides (single zone from display_name)
+            # ─── Centreline constraint settings ───
+            # When enabled, boreholes are placed at max_spacing_m intervals along
+            # the computed centreline. These boreholes are locked constants in all
+            # ILP solver passes and cannot be removed by CZRC optimisation.
+            "centreline": {
+                "enabled": True,
+                "min_branch_length_m": 100.0,  # Prune branches shorter than this
+                "spacing_m": 5.0,              # Boundary point density for Voronoi
+                "simplify_tolerance_m": 2.0,   # Simplify centreline geometry
+                "sampling_mode": "zone_spacing",  # Uses zone's max_spacing_m
+            },
         },
         # ───────────────────────────────────────────────────────────────────
         # Display layer: GIR Boundary (display only, not used in analysis)
@@ -156,6 +173,15 @@ SHAPEFILE_CONFIG: Dict[str, Any] = {
             "enabled": True,
             "boundary_color": "#000000",
             "boundary_linewidth": 2.0,
+        },
+        # ─── Centreline constraint defaults ───
+        # Applied when a layer doesn't specify centreline settings.
+        "centreline": {
+            "enabled": False,              # Disabled by default
+            "min_branch_length_m": 50.0,   # Prune branches shorter than this
+            "spacing_m": 5.0,              # Boundary point density for Voronoi
+            "simplify_tolerance_m": 2.0,   # Simplify centreline geometry
+            "sampling_mode": "zone_spacing",  # Uses zone's max_spacing_m
         },
     },
 }
@@ -503,3 +529,64 @@ def build_zones_config_for_visualization() -> Dict[str, Dict[str, Any]]:
             }
 
     return zones_config
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 🛤️ CENTRELINE CONSTRAINT HELPERS
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def get_centreline_config(layer_key: str) -> Dict[str, Any]:
+    """
+    Get centreline configuration for a layer with defaults applied.
+
+    Resolution order:
+    1. layer["centreline"] settings (if present)
+    2. defaults["centreline"] settings (fallback)
+
+    Args:
+        layer_key: The layer key (e.g., "highways")
+
+    Returns:
+        Centreline config dict with defaults merged in.
+
+    Example:
+        >>> get_centreline_config("highways")
+        {"enabled": True, "min_branch_length_m": 100.0, ...}
+        >>> get_centreline_config("embankment_zones")
+        {"enabled": False, ...}
+    """
+    layer_config = get_layer_config(layer_key)
+    defaults = SHAPEFILE_CONFIG.get("defaults", {}).get("centreline", {})
+
+    layer_centreline = layer_config.get("centreline", {})
+
+    # Start with defaults, override with layer-specific settings
+    merged: Dict[str, Any] = defaults.copy()
+    merged.update(layer_centreline)
+
+    return merged
+
+
+def get_centreline_enabled_layers() -> List[str]:
+    """
+    Get layer keys where centreline constraints are enabled.
+
+    Returns only layers that are both globally enabled AND have
+    centreline.enabled=True.
+
+    Returns:
+        List of layer keys with centreline constraints active.
+
+    Example:
+        >>> get_centreline_enabled_layers()
+        ['highways']
+    """
+    defaults = SHAPEFILE_CONFIG.get("defaults", {}).get("centreline", {})
+
+    return [
+        key
+        for key, config in SHAPEFILE_CONFIG["layers"].items()
+        if config.get("enabled", True)
+        and config.get("centreline", defaults).get("enabled", False)
+    ]

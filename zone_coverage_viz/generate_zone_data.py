@@ -240,6 +240,12 @@ def load_existing_coverage(
 
     gdf = gpd.read_file(covered_path)
 
+    # Handle empty coverage (e.g., all existing boreholes filtered out)
+    if gdf.empty:
+        logger.info("   ℹ️ Empty existing coverage (no features)")
+        gdf = gpd.GeoDataFrame(geometry=[], crs=CRS_BNG)
+        return gdf, source_info
+
     # The covered.geojson may have incorrect CRS metadata (says WGS84 but has BNG coords)
     # Force BNG CRS based on coordinate values (BNG has 6-digit eastings/northings)
     if gdf.crs is None or gdf.crs.to_epsg() == 4326:

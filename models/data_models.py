@@ -140,6 +140,7 @@ class Borehole:
     zone_id: Optional[str] = None
     cluster_id: Optional[str] = None
     tier: Optional[int] = None
+    is_centreline: bool = False
 
     @property
     def position(self) -> Tuple[float, float]:
@@ -177,6 +178,8 @@ class Borehole:
             result["cluster_id"] = self.cluster_id
         if self.tier is not None:
             result["tier"] = self.tier
+        if self.is_centreline:
+            result["is_centreline"] = True
         return result
 
     @classmethod
@@ -223,6 +226,7 @@ class Borehole:
             zone_id=d.get("zone_id"),
             cluster_id=d.get("cluster_id"),
             tier=d.get("tier"),
+            is_centreline=bool(d.get("is_centreline", False)),
         )
 
     def with_status(self, new_status: BoreholeStatus) -> "Borehole":
@@ -246,6 +250,7 @@ class Borehole:
             zone_id=self.zone_id,
             cluster_id=self.cluster_id,
             tier=self.tier,
+            is_centreline=self.is_centreline,
         )
 
 

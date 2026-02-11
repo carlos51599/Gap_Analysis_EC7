@@ -21,7 +21,7 @@ Navigation Guide:
 """
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -41,6 +41,9 @@ def generate_layer_toggle_scripts(
     has_third_pass_overlap: bool = False,
     has_third_pass_grid: bool = False,
     has_third_pass_test_points: bool = False,
+    has_per_pass: bool = False,
+    has_centrelines: bool = False,
+    centreline_trace_range: Optional[Tuple[int, int]] = None,
 ) -> str:
     """
     Generate JavaScript for layer visibility toggles.
@@ -57,6 +60,7 @@ def generate_layer_toggle_scripts(
     - Third pass overlap checkbox (shows/hides cell clouds and intersections)
     - Third pass grid checkbox (shows/hides cell-cell candidate grid)
     - Third pass test points checkbox (shows/hides test points used in cell-cell optimization)
+    - Per-pass snapshot checkboxes (shows/hides cumulative borehole state per pass)
     - Candidate grid checkbox (shows/hides hexagon overlay)
 
     Args:
@@ -71,6 +75,9 @@ def generate_layer_toggle_scripts(
         has_third_pass_overlap: Whether third pass overlap traces (cell clouds/intersections) are available
         has_third_pass_grid: Whether third pass grid traces (cell-cell candidate grid) are available
         has_third_pass_test_points: Whether third pass test points trace is available
+        has_per_pass: Whether per-pass snapshot traces are available
+        has_centrelines: Whether centreline traces are available
+        centreline_trace_range: Tuple of (start_idx, end_idx) for centreline traces
 
     Returns:
         JavaScript code block as string (without <script> tags)
@@ -156,6 +163,29 @@ def generate_layer_toggle_scripts(
             }
         });
     }
+"""
+
+    # Generate Centrelines toggle script if needed (standalone trace range, not per-combo)
+    centrelines_script = ""
+    if has_centrelines and centreline_trace_range is not None:
+        start_idx, end_idx = centreline_trace_range
+        centrelines_script = f"""
+    const centrelinesCheckbox = document.getElementById('centrelinesCheckbox');
+    if (centrelinesCheckbox) {{
+        centrelinesCheckbox.addEventListener('change', function() {{
+            const plotDiv = document.querySelector('.plotly-graph-div');
+            if (!plotDiv) return;
+
+            const traceIndices = [];
+            for (let i = {start_idx}; i < {end_idx}; i++) {{
+                traceIndices.push(i);
+            }}
+
+            if (traceIndices.length > 0) {{
+                Plotly.restyle(plotDiv, {{'visible': this.checked}}, traceIndices);
+            }}
+        }});
+    }}
 """
 
     # Generate CZRC grid toggle script if needed (independent of CZRC second pass)
@@ -412,6 +442,42 @@ def generate_layer_toggle_scripts(
     }
 """
 
+    # Generate Per-Pass Snapshot toggle scripts if needed
+    per_pass_script = ""
+    if has_per_pass:
+        per_pass_entries = [
+            ("perPassFirstCheckbox", "per_pass_first"),
+            ("perPassSecondCheckbox", "per_pass_second"),
+            ("perPassThirdCheckbox", "per_pass_third"),
+            ("perPassCentrelineCheckbox", "per_pass_centreline"),
+        ]
+        per_pass_blocks = []
+        for checkbox_id, range_key in per_pass_entries:
+            per_pass_blocks.append(
+                f"""
+    const {checkbox_id} = document.getElementById('{checkbox_id}');
+    if ({checkbox_id}) {{
+        {checkbox_id}.addEventListener('change', function() {{
+            const plotDiv = document.querySelector('.plotly-graph-div');
+            if (!plotDiv) return;
+            const traceIndices = [];
+            if (typeof COVERAGE_TRACE_RANGES !== 'undefined' && typeof currentCoverageCombo !== 'undefined') {{
+                const ranges = COVERAGE_TRACE_RANGES[currentCoverageCombo];
+                if (ranges && ranges.{range_key}) {{
+                    const [startIdx, endIdx] = ranges.{range_key};
+                    for (let i = startIdx; i < endIdx; i++) {{
+                        traceIndices.push(i);
+                    }}
+                }}
+            }}
+            if (traceIndices.length > 0) {{
+                Plotly.restyle(plotDiv, {{'visible': this.checked}}, traceIndices);
+            }}
+        }});
+    }}"""
+            )
+        per_pass_script = "\n".join(per_pass_blocks)
+
     return f"""
     // === LAYER STATE ===
     const bgsLayers = {bgs_layers_json};
@@ -558,12 +624,14 @@ def generate_layer_toggle_scripts(
     }}
 {second_pass_script}
 {zone_overlap_script}
+{centrelines_script}
 {czrc_grid_script}
 {czrc_second_pass_script}
 {third_pass_script}
 {third_pass_overlap_script}
 {third_pass_grid_script}
 {third_pass_test_points_script}
+{per_pass_script}
 """
 
 

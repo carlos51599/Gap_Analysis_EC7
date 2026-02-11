@@ -557,55 +557,68 @@ def export_boreholes_csv() -> Response:
     if data_loader is None:
         return jsonify({"error": "Server not initialized"}), 500
 
-    # Parse excludeIndices query parameter (comma-separated integers)
-    exclude_indices_param = request.args.get("excludeIndices", "")
-    exclude_indices: set[int] = set()
-    if exclude_indices_param:
-        try:
-            exclude_indices = {
-                int(idx.strip())
-                for idx in exclude_indices_param.split(",")
-                if idx.strip()
-            }
-        except ValueError:
-            pass  # Ignore invalid indices, export all
+    exclude_indices = _parse_exclude_indices(
+        request.args.get("excludeIndices", "")
+    )
+    csv_content = _build_boreholes_csv(exclude_indices)
 
+    return Response(
+        csv_content,
+        mimetype="text/csv",
+        headers={"Content-Disposition": "attachment; filename=boreholes_export.csv"},
+    )
+
+
+def _parse_exclude_indices(param: str) -> set:
+    """Parse comma-separated exclude indices string into a set of ints."""
+    if not param:
+        return set()
+    try:
+        return {
+            int(idx.strip())
+            for idx in param.split(",")
+            if idx.strip()
+        }
+    except ValueError:
+        return set()
+
+
+def _build_boreholes_csv(exclude_indices: set) -> str:
+    """
+    Build CSV string of current borehole positions (ID, Easting, Northing, Zone).
+
+    Args:
+        exclude_indices: Set of borehole indices to skip.
+
+    Returns:
+        CSV content as string.
+    """
     boreholes_geojson = data_loader.get_boreholes_geojson()
 
-    # Create transformer: WGS84 (lat/lng) -> British National Grid (easting/northing)
     transformer = Transformer.from_crs("EPSG:4326", "EPSG:27700", always_xy=True)
 
-    # Build CSV in memory
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(["ID", "Easting", "Northing", "Zone"])
 
     for idx, feature in enumerate(boreholes_geojson.get("features", [])):
-        # Skip excluded indices
         if idx in exclude_indices:
             continue
 
         props = feature.get("properties", {})
         coords = feature.get("geometry", {}).get("coordinates", [0, 0])
 
-        # coords are [lon, lat] in WGS84
         lon, lat = coords[0], coords[1]
         easting, northing = transformer.transform(lon, lat)
 
         borehole_id = props.get("location_id", "") or props.get("id", "")
-        # zone_ids is the SSOT list of zone names from the server
         zone_ids = props.get("zone_ids", [])
         zone = ", ".join(zone_ids) if zone_ids else ""
 
         writer.writerow([borehole_id, f"{easting:.2f}", f"{northing:.2f}", zone])
 
-    # Return as downloadable CSV
     output.seek(0)
-    return Response(
-        output.getvalue(),
-        mimetype="text/csv",
-        headers={"Content-Disposition": "attachment; filename=boreholes_export.csv"},
-    )
+    return output.getvalue()
 
 
 @app.route("/api/coverage/all", methods=["GET"])

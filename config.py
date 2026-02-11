@@ -141,7 +141,7 @@ CONFIG: Dict[str, Any] = {
         "enabled": True,  # Disabled for CZRC cross-worker cache testing
         # Fixed filter settings for testing (creates maximum gap scenario)
         "filter": {
-            "min_depth": 50,  # Depth >= x (creates good test gaps)
+            "min_depth": 100,  # Depth >= x (creates good test gaps)
             "require_spt": False,  # No SPT requirement
             "require_triaxial_total": False,  # No TxT requirement
             "require_triaxial_effective": False,  # No TxE requirement
@@ -1004,6 +1004,27 @@ CONFIG: Dict[str, Any] = {
             "tier2_covered_color": "rgba(0, 180, 0, 1)",  # Green for Tier 2 ring covered by locked BHs
             "size": 5,  # Small markers
             "symbol": "circle",  # Circle markers
+        },
+        # Per-pass snapshot layer styling (cumulative borehole state at each optimization stage)
+        # Colors are per-borehole by source_pass origin, marker shape/size applies to all
+        "per_pass_snapshots": {
+            "marker_symbol": "circle",  # Marker shape for all snapshot layers
+            "marker_size": 10,  # Marker size in px
+            "source_colors": {
+                "First Pass": "#0066FF",  # Vivid blue
+                "Second Pass": "#00CC44",  # Vivid green
+                "Third Pass": "#FF6600",  # Vivid orange
+            },
+            # Centreline borehole snapshot (subset of First Pass with is_centreline=True)
+            "centreline_marker_symbol": "star-diamond",  # Distinct from other snapshots
+            "centreline_marker_size": 12,  # Slightly larger for visibility
+            "centreline_marker_color": "#00CED1",  # Dark turquoise
+        },
+        # Centreline layer styling (computed medial-axis centrelines for shapefile layers)
+        "centrelines": {
+            "line_color": "#E600A9",  # Magenta-pink for visibility
+            "line_width": 3.0,  # Line width in px
+            "line_dash": "solid",  # 'solid', 'dash', 'dot', 'dashdot'
         },
         # Figure dimensions
         "figure_width": 1400,

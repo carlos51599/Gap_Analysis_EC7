@@ -146,6 +146,7 @@ from Gap_Analysis_EC7.visualization import (
     build_coverage_marker_trace,
     build_coverage_buffer_trace,
     build_borehole_circles_trace,
+    build_per_pass_snapshot_trace,
 )
 
 # Backward compatibility aliases (old names -> new names)
@@ -238,6 +239,7 @@ def _add_single_combo_traces(
     hexgrid_config: Optional[Dict[str, Any]] = None,
     grid_spacing: float = 50.0,
     zones_gdf: Optional["GeoDataFrame"] = None,
+    viz_config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Tuple[int, int]]:
     """Add 5 merged traces for a single filter combination (includes hexagon grid)."""
     from Gap_Analysis_EC7.parallel.coverage_orchestrator import deserialize_geometry
@@ -289,6 +291,12 @@ def _add_single_combo_traces(
             fig, combo_key, proposed, colors, is_visible, max_spacing, zones_gdf
         )
     )
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # 📊 PER-PASS SNAPSHOT TRACES (cumulative state at each optimization stage)
+    # ═══════════════════════════════════════════════════════════════════════
+    # Uses same source data as per-pass CSV exports (first_pass.csv, etc.)
+    ranges.update(_add_per_pass_snapshot_traces(fig, data, viz_config or {}))
 
     # Removed boreholes (from consolidation) - red traces
     # NOTE: Always hidden initially since Second Pass checkbox is unchecked by default
@@ -629,6 +637,90 @@ def _add_proposed_traces(
         )
     )
     ranges["borehole_circles"] = (start_idx, len(fig.data))
+
+    return ranges
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 📊 PER-PASS SNAPSHOT TRACES
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _add_per_pass_snapshot_traces(
+    fig: go.Figure,
+    data: Dict[str, Any],
+    viz_config: Dict[str, Any],
+) -> Dict[str, Tuple[int, int]]:
+    """
+    Add per-pass borehole snapshot traces (hidden by default).
+
+    Uses the same source data as the per-pass CSV exports:
+    - first_pass_boreholes  → first_pass.csv
+    - second_pass_boreholes → second_pass.csv
+    - proposed              → third_pass.csv (final result)
+
+    Reads marker styling from CONFIG["visualization"]["per_pass_snapshots"].
+
+    Args:
+        fig: Plotly figure to add traces to
+        data: Coverage data dict for a single filter combination
+        viz_config: CONFIG["visualization"] dict
+
+    Returns:
+        Dictionary mapping range keys to (start_idx, end_idx) tuples
+    """
+    ranges: Dict[str, Tuple[int, int]] = {}
+
+    # Extract per-pass config (with sensible defaults)
+    pp_config = viz_config.get("per_pass_snapshots", {})
+    marker_symbol = pp_config.get("marker_symbol", "circle")
+    marker_size = pp_config.get("marker_size", 10)
+    source_colors = pp_config.get("source_colors", None)
+
+    pass_configs = [
+        ("first_pass_boreholes", "per_pass_first", "First Pass Snapshot"),
+        ("second_pass_boreholes", "per_pass_second", "Second Pass Snapshot"),
+        ("proposed", "per_pass_third", "Third Pass Snapshot"),
+    ]
+
+    for data_key, range_key, label in pass_configs:
+        boreholes = data.get(data_key, [])
+        if not boreholes:
+            continue
+
+        trace = build_per_pass_snapshot_trace(
+            boreholes=boreholes,
+            pass_label=label,
+            source_colors=source_colors,
+            marker_symbol=marker_symbol,
+            marker_size=marker_size,
+            visible=False,
+        )
+        if trace is not None:
+            start_idx = len(fig.data)
+            fig.add_trace(trace)
+            ranges[range_key] = (start_idx, len(fig.data))
+
+    # === CENTRELINE BH SNAPSHOT ===
+    # Filter first_pass_boreholes for is_centreline=True (locked centreline BHs)
+    first_pass = data.get("first_pass_boreholes", [])
+    centreline_bhs = [bh for bh in first_pass if bh.get("is_centreline")]
+    if centreline_bhs:
+        cl_symbol = pp_config.get("centreline_marker_symbol", "star-diamond")
+        cl_size = pp_config.get("centreline_marker_size", 12)
+        cl_color = pp_config.get("centreline_marker_color", "#00CED1")
+        trace = build_per_pass_snapshot_trace(
+            boreholes=centreline_bhs,
+            pass_label="Centreline Boreholes",
+            source_colors={"First Pass": cl_color},
+            marker_symbol=cl_symbol,
+            marker_size=cl_size,
+            visible=False,
+        )
+        if trace is not None:
+            start_idx = len(fig.data)
+            fig.add_trace(trace)
+            ranges["per_pass_centreline"] = (start_idx, len(fig.data))
 
     return ranges
 
@@ -2644,6 +2736,7 @@ def _add_precomputed_coverage_traces(
     grid_spacing: float = 50.0,
     zones_gdf: Optional["GeoDataFrame"] = None,
     logger: Optional[logging.Logger] = None,
+    viz_config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Dict[str, Tuple[int, int]]]:
     """
     Add pre-computed coverage traces for all filter combinations.
@@ -2685,6 +2778,7 @@ def _add_precomputed_coverage_traces(
             hexgrid_config=hexgrid_config,
             grid_spacing=grid_spacing,
             zones_gdf=zones_gdf,
+            viz_config=viz_config or {},
         )
         combo_count += 1
 
@@ -2801,6 +2895,7 @@ def _generate_sidebar_panels(
     max_spacing: float,
     logger: Optional[logging.Logger] = None,
     default_filter: Optional[Dict[str, Any]] = None,
+    centreline_trace_range: Optional[Tuple[int, int]] = None,
 ) -> Tuple[str, str]:
     """Generate left and right sidebar panel HTML. Returns (left_html, right_html)."""
     # Normalize to typed config
@@ -2909,6 +3004,24 @@ def _generate_sidebar_panels(
                 has_third_pass_test_points = True
                 break
 
+    # Check if any combo has per-pass snapshot traces
+    has_per_pass = False
+    if coverage_trace_ranges:
+        for combo_ranges in coverage_trace_ranges.values():
+            for key in ("per_pass_first", "per_pass_second", "per_pass_third", "per_pass_centreline"):
+                rng = combo_ranges.get(key, (0, 0))
+                if rng[0] != rng[1]:
+                    has_per_pass = True
+                    break
+            if has_per_pass:
+                break
+
+    # Check if centreline traces exist
+    has_centrelines = (
+        centreline_trace_range is not None
+        and centreline_trace_range[0] != centreline_trace_range[1]
+    )
+
     layers_panel_html = ""
     if (
         has_bgs
@@ -2924,6 +3037,8 @@ def _generate_sidebar_panels(
         or has_third_pass_overlap
         or has_third_pass_grid
         or has_third_pass_test_points
+        or has_per_pass
+        or has_centrelines
     ):
         layers_panel_html = _generate_layers_panel_html(
             bgs_layers=bgs_layers if has_bgs else None,
@@ -2942,6 +3057,9 @@ def _generate_sidebar_panels(
             has_third_pass_overlap=has_third_pass_overlap,
             has_third_pass_grid=has_third_pass_grid,
             has_third_pass_test_points=has_third_pass_test_points,
+            has_per_pass=has_per_pass,
+            has_centrelines=has_centrelines,
+            centreline_trace_range=centreline_trace_range,
         )
         _log_layers_panel(
             logger, has_satellite, has_bgs, bgs_layers, has_proposed, has_hexgrid
@@ -3209,6 +3327,7 @@ def _add_coverage_traces_section(
 
     proposed_marker_config = CONFIG.get("visualization", {}).get("proposed_marker", {})
     coverage_colors = CONFIG.get("visualization", {}).get("coverage_colors", {})
+    viz_config = CONFIG.get("visualization", {})
 
     default_combo_key = _get_default_combo_key(precomputed_coverages)
     if default_combo_key != "d0_spt0_txt0_txe0" and logger:
@@ -3229,6 +3348,7 @@ def _add_coverage_traces_section(
         grid_spacing=computed_grid_spacing,
         zones_gdf=zones_gdf,
         logger=logger,
+        viz_config=viz_config,
     )
 
 
@@ -3335,6 +3455,58 @@ def _add_secondary_shapefiles_section(
         logger.info(f"   ✅ Added {traces_added} secondary shapefile traces")
 
     return current_idx + traces_added
+
+
+def _add_centreline_traces_section(
+    fig: go.Figure,
+    centreline_geometries_wkt: Optional[List[str]],
+    logger: Optional[logging.Logger] = None,
+) -> Optional[Tuple[int, int]]:
+    """
+    Add centreline line traces to figure.
+
+    Centrelines are global (not per-combo) so they are added once
+    with a standalone trace range for JS toggle.
+
+    Args:
+        fig: Plotly figure to add traces to
+        centreline_geometries_wkt: List of WKT strings for centreline geometries
+        logger: Optional logger
+
+    Returns:
+        Tuple of (start_idx, end_idx) trace range, or None if no centrelines.
+    """
+    if not centreline_geometries_wkt:
+        return None
+
+    from Gap_Analysis_EC7.visualization.plotly_traces import build_centreline_traces
+
+    cl_config = CONFIG.get("visualization", {}).get("centrelines", {})
+    line_color = cl_config.get("line_color", "#E600A9")
+    line_width = cl_config.get("line_width", 3.0)
+    line_dash = cl_config.get("line_dash", "solid")
+
+    start_idx = len(fig.data)
+    traces = build_centreline_traces(
+        geometries_wkt=centreline_geometries_wkt,
+        line_color=line_color,
+        line_width=line_width,
+        line_dash=line_dash,
+        visible=False,
+    )
+    for trace in traces:
+        fig.add_trace(trace)
+    end_idx = len(fig.data)
+
+    if logger and traces:
+        logger.info(
+            f"   🛤️ Added {len(traces)} centreline traces "
+            f"(idx {start_idx}-{end_idx})"
+        )
+
+    if start_idx == end_idx:
+        return None
+    return (start_idx, end_idx)
 
 
 def _add_zone_boundaries_section(
@@ -3481,6 +3653,7 @@ def generate_multi_layer_html(
     logger: Optional[logging.Logger] = None,
     precomputed_coverages: Optional[Dict[str, Dict[str, Any]]] = None,
     default_filter: Optional[Dict[str, Any]] = None,
+    centreline_geometries_wkt: Optional[List[str]] = None,
 ) -> go.Figure:
     """
     Generate interactive Plotly HTML for EC7 coverage visualization with toggleable layers.
@@ -3534,6 +3707,13 @@ def generate_multi_layer_html(
     substep_start = time.perf_counter()
     hexgrid_trace_range = None
     substep_times["6c3_hexagon_grid"] = time.perf_counter() - substep_start
+
+    # Step 6c4: Add centreline traces (global, not per-combo)
+    substep_start = time.perf_counter()
+    centreline_trace_range = _add_centreline_traces_section(
+        fig, centreline_geometries_wkt, logger
+    )
+    substep_times["6c4_centrelines"] = time.perf_counter() - substep_start
 
     # Step 6d: Add boreholes
     substep_start = time.perf_counter()
@@ -3591,6 +3771,7 @@ def generate_multi_layer_html(
         max_spacing,
         logger,
         default_filter,
+        centreline_trace_range=centreline_trace_range,
     )
     substep_times["6h_panels"] = time.perf_counter() - substep_start
 

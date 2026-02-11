@@ -58,7 +58,7 @@ CRS_WGS84 = "EPSG:4326"  # GPS coordinates (lon, lat)
 CRS_BNG = "EPSG:27700"  # British National Grid (Easting, Northing in meters)
 
 # Default buffer resolution (number of segments in circle)
-BUFFER_RESOLUTION = 32
+BUFFER_RESOLUTION = 128
 
 # Logging
 logger = logging.getLogger(__name__)

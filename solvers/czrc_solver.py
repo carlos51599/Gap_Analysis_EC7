@@ -825,7 +825,11 @@ def classify_first_pass_boreholes(
         pt = Point(x, y)
         # IMPORTANT: Check Tier 1 FIRST (since Tier 2 contains Tier 1)
         if tier1_region.contains(pt):
-            candidates.append(bh)
+            # Centreline boreholes are ALWAYS locked (never candidates for removal)
+            if isinstance(bh, dict) and bh.get("is_centreline", False):
+                locked.append(bh)
+            else:
+                candidates.append(bh)
         elif tier2_region.contains(pt):
             locked.append(bh)
 
@@ -1480,7 +1484,7 @@ def _assemble_czrc_results(
     existing_bh_by_pos = {get_bh_position(bh): bh for bh in bh_candidates}
 
     # Selected = all ILP selections (as dicts for backward compatibility)
-    # Preserve source_pass for existing boreholes, use current pass for new ones
+    # Preserve source_pass and is_centreline for existing boreholes
     selected = []
     for i in indices:
         if i >= len(candidates):
@@ -1489,8 +1493,13 @@ def _assemble_czrc_results(
         existing_bh = existing_bh_by_pos.get(pos)
 
         if existing_bh:
-            # Existing borehole that was kept - preserve source_pass
+            # Existing borehole that was kept - preserve source_pass + is_centreline
             original_pass_str = existing_bh.get("source_pass", BoreholePass.FIRST.value)
+            is_cl = (
+                existing_bh.get("is_centreline", False)
+                if isinstance(existing_bh, dict)
+                else getattr(existing_bh, "is_centreline", False)
+            )
             selected.append(
                 Borehole(
                     x=candidates[i].x,
@@ -1498,6 +1507,7 @@ def _assemble_czrc_results(
                     coverage_radius=min_spacing,
                     source_pass=BoreholePass.from_string(str(original_pass_str)),
                     status=BoreholeStatus.PROPOSED,
+                    is_centreline=is_cl,
                 ).as_dict()
             )
         else:
@@ -1695,6 +1705,11 @@ def _build_cluster_stats(
                     bh.get("status", "proposed")
                     if isinstance(bh, dict)
                     else bh.status.value
+                ),
+                is_centreline=(
+                    bh.get("is_centreline", False)
+                    if isinstance(bh, dict)
+                    else getattr(bh, "is_centreline", False)
                 ),
             ).as_dict()
             for bh in selected
@@ -2136,6 +2151,12 @@ def check_and_split_large_cluster(
         pos = get_bh_position(bh)
         if pos not in removed_positions_for_output and pos not in seen_output_positions:
             x, y = get_bh_coords(bh)
+            # Preserve is_centreline so Third Pass locks centreline BHs
+            is_cl = (
+                bh.get("is_centreline", False)
+                if isinstance(bh, dict)
+                else getattr(bh, "is_centreline", False)
+            )
             true_second_pass_output.append(
                 Borehole(
                     x=x,
@@ -2143,6 +2164,7 @@ def check_and_split_large_cluster(
                     coverage_radius=get_bh_radius(bh, default=100.0),
                     source_pass=get_bh_source_pass(bh, default=BoreholePass.FIRST),
                     status=BoreholeStatus.PROPOSED,
+                    is_centreline=is_cl,
                 ).as_dict()
             )
             seen_output_positions.add(pos)
@@ -2421,7 +2443,7 @@ def solve_cell_cell_czrc(
     # Step 1: Compute tiers (REUSE existing function)
     tier1_mult = config.get("tier1_rmax_multiplier", 1.0)
     tier2_mult = config.get("tier2_rmax_multiplier", 2.0)
-    
+
     # BUG FIX: Compute R_max from actual boreholes' coverage_radius, not uniform spacing
     # This ensures cells with mixed-spacing boreholes use the correct tier boundaries.
     # Boreholes inherit coverage_radius from their origin zone (e.g., 100m or 200m).
@@ -2611,8 +2633,9 @@ def solve_cell_cell_czrc(
         existing_bh = existing_bh_by_pos.get(pos)
 
         if existing_bh:
-            # This is an existing borehole that was kept - preserve source_pass
+            # This is an existing borehole that was kept - preserve source_pass and is_centreline
             original_pass_str = existing_bh.get("source_pass", BoreholePass.FIRST.value)
+            is_cl = existing_bh.get("is_centreline", False) if isinstance(existing_bh, dict) else getattr(existing_bh, "is_centreline", False)
             selected.append(
                 Borehole(
                     x=candidates[i].x,
@@ -2620,6 +2643,7 @@ def solve_cell_cell_czrc(
                     coverage_radius=spacing,
                     source_pass=BoreholePass.from_string(str(original_pass_str)),
                     status=BoreholeStatus.PROPOSED,
+                    is_centreline=is_cl,
                 ).as_dict()
             )
         else:
@@ -3229,12 +3253,10 @@ def _filter_viz_data(
     third_pass_added_pos = {get_bh_position(bh) for bh in all_third_pass_added}
 
     second_pass_only_removed = [
-        bh for bh in all_removed
-        if get_bh_position(bh) not in third_pass_removed_pos
+        bh for bh in all_removed if get_bh_position(bh) not in third_pass_removed_pos
     ]
     second_pass_only_added = [
-        bh for bh in all_added
-        if get_bh_position(bh) not in third_pass_added_pos
+        bh for bh in all_added if get_bh_position(bh) not in third_pass_added_pos
     ]
 
     return second_pass_only_removed, second_pass_only_added
@@ -3244,42 +3266,42 @@ def _filter_viz_data(
 class CZRCAccumulators:
     """
     Accumulator state for CZRC optimization run.
-    
+
     Groups the 18+ accumulator variables used in run_czrc_optimization
     into a single dataclass for cleaner parameter passing to helper functions.
     """
-    
+
     # Core results
     all_cluster_stats: Dict[str, Any] = field(default_factory=dict)
     all_removed: List[Dict[str, Any]] = field(default_factory=list)
     all_added: List[Dict[str, Any]] = field(default_factory=list)
     boreholes_to_add: List[Dict[str, Any]] = field(default_factory=list)
-    
+
     # First/Second pass candidates
     all_first_pass_candidates: List[Dict[str, Any]] = field(default_factory=list)
     all_czrc_test_points: List[Dict[str, Any]] = field(default_factory=list)
     all_second_pass_boreholes: List[Dict[str, Any]] = field(default_factory=list)
-    
+
     # Third pass data
     all_third_pass_removed: List[Dict[str, Any]] = field(default_factory=list)
     all_third_pass_added: List[Dict[str, Any]] = field(default_factory=list)
     all_third_pass_test_points: List[Dict[str, Any]] = field(default_factory=list)
     all_third_pass_existing: List[Dict[str, Any]] = field(default_factory=list)
-    
+
     # Visualization data
     all_cell_wkts: List[str] = field(default_factory=list)
     all_cell_clouds_wkt: Dict[str, str] = field(default_factory=dict)
     all_cell_intersections_wkt: Dict[str, str] = field(default_factory=dict)
     all_tier_geometries: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     max_third_pass_spacing: float = 0.0
-    
+
     # Deduplication sets (for position tracking)
     seen_candidates: set = field(default_factory=set)
     seen_test_points: set = field(default_factory=set)
     seen_second_pass: set = field(default_factory=set)
     seen_third_pass_test_points: set = field(default_factory=set)
     seen_third_pass_existing: set = field(default_factory=set)
-    
+
     # Summary tracking
     cluster_summaries: List[Dict[str, Any]] = field(default_factory=list)
     cluster_idx: int = 0  # For unique log file naming
@@ -3311,8 +3333,7 @@ def _resolve_multi_cluster_conflicts(
     """
     removed_positions = {get_bh_position(bh) for bh in all_removed}
     filtered = [
-        bh for bh in boreholes_to_add
-        if get_bh_position(bh) not in removed_positions
+        bh for bh in boreholes_to_add if get_bh_position(bh) not in removed_positions
     ]
 
     conflicting_count = len(boreholes_to_add) - len(filtered)
@@ -3407,6 +3428,7 @@ def run_czrc_optimization(
     logger: Optional[logging.Logger] = None,
     czrc_cache: Optional["CZRCCacheManager"] = None,
     highs_log_folder: Optional[str] = None,
+    centreline_boreholes: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """
     Main entry point for CZRC second-pass optimization.
@@ -3422,6 +3444,11 @@ def run_czrc_optimization(
             when different filter combinations produce equivalent problems.
         highs_log_folder: Optional folder path for HiGHS solver log files.
             When provided, writes czrc_*.log files for each cluster/cell solve.
+        centreline_boreholes: Optional locked centreline boreholes. These are
+            already included in first_pass_boreholes with is_centreline=True flag.
+            The classify_first_pass_boreholes() function forces them to locked
+            status (never candidates for removal). Parameter accepted for API
+            consistency; not used directly here.
 
     Returns:
         Tuple of (optimized_boreholes, czrc_stats) where czrc_stats includes
@@ -3636,6 +3663,11 @@ def run_czrc_optimization(
         pos = get_bh_position(bh)
         if pos not in second_pass_removed_positions_v1:
             x, y = get_bh_coords(bh)
+            is_cl = (
+                bh.get("is_centreline", False)
+                if isinstance(bh, dict)
+                else getattr(bh, "is_centreline", False)
+            )
             computed_second_pass.append(
                 Borehole(
                     x=x,
@@ -3643,6 +3675,7 @@ def run_czrc_optimization(
                     coverage_radius=get_bh_radius(bh, default=100.0),
                     source_pass=get_bh_source_pass(bh, default=BoreholePass.FIRST),
                     status=BoreholeStatus.PROPOSED,
+                    is_centreline=is_cl,
                 ).as_dict()
             )
 

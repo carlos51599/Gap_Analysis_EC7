@@ -27,7 +27,7 @@ For Navigation: Use VS Code outline (Ctrl+Shift+O)
 import logging
 import time
 from pathlib import Path
-from typing import Dict, Any, Set, Union, Optional
+from typing import Dict, Any, List, Set, Union, Optional
 
 import geopandas as gpd
 
@@ -246,6 +246,7 @@ def precompute_all_coverages_cached(
     config: Union[Dict[str, Any], AppConfig],
     workspace_root: Path,
     highs_log_folder: Optional[str] = None,
+    centreline_boreholes: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """
     Pre-compute coverage zones for all filter combinations WITH CACHING.
@@ -289,6 +290,7 @@ def precompute_all_coverages_cached(
             depth_step=depth_step,
             config=app_config,
             highs_log_folder=highs_log_folder,
+            centreline_boreholes=centreline_boreholes,
         )
 
     # Build fingerprint and log cache check header
@@ -328,6 +330,7 @@ def precompute_all_coverages_cached(
         max_spacing=max_spacing,
         max_depth=max_depth,
         depth_step=depth_step,
+        centreline_boreholes=centreline_boreholes,
         config=app_config,
         highs_log_folder=highs_log_folder,
     )

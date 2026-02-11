@@ -18,7 +18,7 @@ import logging
 import time
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any, Optional, Tuple, Set
+from typing import Dict, Any, List, Optional, Tuple, Set
 
 # Fix Windows console encoding for emoji support
 if sys.platform == "win32":
@@ -838,6 +838,7 @@ def _compute_coverages(
     workspace_root: Path,
     logger: logging.Logger,
     highs_log_folder: Optional[Path] = None,
+    centreline_boreholes: Optional[list] = None,
 ) -> Tuple[Dict[str, Any], Optional[Dict[str, Dict[str, Any]]], Dict[str, float]]:
     """Compute coverage statistics and precompute all filter combinations."""
     timings = {}
@@ -877,6 +878,7 @@ def _compute_coverages(
         config=config,
         workspace_root=workspace_root,
         highs_log_folder=str(highs_log_folder) if highs_log_folder else None,
+        centreline_boreholes=centreline_boreholes,
     )
     timings["5.5_precompute_coverages"] = time.perf_counter() - step_start
     logger.info(
@@ -994,6 +996,7 @@ def _generate_html_and_summary(
     timings: Dict[str, float],
     logger: logging.Logger,
     default_filter: Optional[Dict[str, Any]] = None,
+    centreline_geometries_wkt: Optional[List[str]] = None,
 ) -> Dict:
     """Generate HTML output and log summary statistics."""
     # Step 6: Generate HTML
@@ -1014,6 +1017,7 @@ def _generate_html_and_summary(
         logger=logger,
         precomputed_coverages=precomputed_coverages,
         default_filter=default_filter,
+        centreline_geometries_wkt=centreline_geometries_wkt,
     )
     timings["6_generate_html"] = time.perf_counter() - step_start
     logger.info(f"   ⏱️ Step 6 completed in {timings['6_generate_html']:.2f}s")
@@ -1163,6 +1167,23 @@ def run_ec7_analysis() -> dict:
         ) = _load_analysis_data(file_paths, logger)
         timings.update(load_timings)
 
+        # Phase 1.5: Compute centreline-constrained boreholes
+        logger.info("\nSTEP 4.5: Computing centreline constraint boreholes")
+        step_start = time.perf_counter()
+        from Gap_Analysis_EC7.centreline_constraints import (
+            generate_centreline_boreholes,
+        )
+
+        centreline_boreholes, centreline_stats = generate_centreline_boreholes(
+            all_shapefiles=all_shapefiles,
+            log=logger,
+        )
+        timings["4.5_centreline_constraints"] = time.perf_counter() - step_start
+        logger.info(
+            f"   ⏱️ Step 4.5 completed in "
+            f"{timings['4.5_centreline_constraints']:.2f}s"
+        )
+
         # Phase 2: Compute coverage statistics and precompute combinations
         coverage_summary, precomputed_coverages, coverage_timings = _compute_coverages(
             boreholes_gdf,
@@ -1173,6 +1194,7 @@ def run_ec7_analysis() -> dict:
             WORKSPACE_ROOT,
             logger,
             run_log_folder,  # HiGHS logs also saved in this folder
+            centreline_boreholes=centreline_boreholes or None,
         )
         timings.update(coverage_timings)
 
@@ -1220,6 +1242,7 @@ def run_ec7_analysis() -> dict:
             timings,
             logger,
             default_filter,
+            centreline_geometries_wkt=centreline_stats.get("geometries_wkt"),
         )
 
         # Phase 5: Generate zone_coverage_data.json for zone_coverage_viz

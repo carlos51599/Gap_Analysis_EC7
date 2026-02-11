@@ -246,6 +246,7 @@ def _compute_proposed_boreholes(
     max_spacing: float,
     ilp_config: Dict[str, Any],
     highs_log_folder: Optional[str] = None,
+    centreline_boreholes: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[List[Dict[str, float]], Dict[str, Any]]:
     """
     Compute proposed boreholes for gaps using solver.
@@ -259,6 +260,7 @@ def _compute_proposed_boreholes(
         max_spacing: EC7 maximum spacing in meters
         ilp_config: Full ILP solver configuration dict (from _build_solver_config)
         highs_log_folder: Optional folder path for HiGHS solver log files
+        centreline_boreholes: Optional locked centreline boreholes
 
     Returns:
         Tuple of (proposed_boreholes_list, optimization_stats_dict)
@@ -278,7 +280,9 @@ def _compute_proposed_boreholes(
         highs_log_folder=highs_log_folder,
     )
 
-    return optimize_boreholes(uncovered_gaps, config)
+    return optimize_boreholes(
+        uncovered_gaps, config, centreline_boreholes=centreline_boreholes
+    )
 
 
 def _build_result_stats(
@@ -332,6 +336,7 @@ def worker_process_filter_combination(
     triaxial_total_locations: List[str],
     triaxial_effective_locations: List[str],
     highs_log_folder: Optional[str] = None,
+    centreline_boreholes: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """
     Worker function to process a single filter combination.
@@ -384,25 +389,39 @@ def worker_process_filter_combination(
         )
         result["boreholes_count"] = len(filtered_records)
 
-        # Handle empty filter result
-        if not filtered_records:
-            result.update(_create_empty_filter_result(start_time))
-            logger.info("✅ %s: 0 boreholes (empty filter result)", combo_key)
-            return result
-
-        # Reconstruct GeoDataFrames from serialized records
-        boreholes_gdf = deserialize_geodataframe(filtered_records, boreholes_crs)
+        # Reconstruct zones GeoDataFrame (always needed)
         zones_gdf = deserialize_geodataframe(zones_records, zones_crs)
 
         # Compute coverage zones
-        from Gap_Analysis_EC7.coverage_zones import compute_coverage_zones
+        if not filtered_records:
+            # 0 existing boreholes: entire zone boundary is uncovered
+            # Still proceed to solver so centreline + ILP boreholes are generated
+            from shapely.ops import unary_union
 
-        covered_union, uncovered_gaps, gap_stats = compute_coverage_zones(
-            boreholes_gdf=boreholes_gdf,
-            zones_gdf=zones_gdf,
-            max_spacing=max_spacing,
-            logger=None,
-        )
+            covered_union = None
+            zone_boundary = unary_union(zones_gdf.geometry)
+            uncovered_gaps = (
+                zone_boundary
+                if (zone_boundary and not zone_boundary.is_empty)
+                else None
+            )
+            gap_stats = []
+            logger.info(
+                "📊 %s: 0 existing boreholes - entire zone is gap", combo_key
+            )
+        else:
+            # Normal case: compute coverage from existing boreholes
+            boreholes_gdf = deserialize_geodataframe(
+                filtered_records, boreholes_crs
+            )
+            from Gap_Analysis_EC7.coverage_zones import compute_coverage_zones
+
+            covered_union, uncovered_gaps, gap_stats = compute_coverage_zones(
+                boreholes_gdf=boreholes_gdf,
+                zones_gdf=zones_gdf,
+                max_spacing=max_spacing,
+                logger=None,
+            )
 
         result["covered"] = serialize_geometry(covered_union)
         result["gaps"] = serialize_geometry(uncovered_gaps)
@@ -414,6 +433,7 @@ def worker_process_filter_combination(
             max_spacing,
             ilp_config,
             highs_log_folder=highs_log_folder,
+            centreline_boreholes=centreline_boreholes,
         )
 
         # Consolidation pass: remove redundant boreholes (second pass)
@@ -662,6 +682,7 @@ def worker_process_filter_combination(
                             logger=None,  # Silent in worker
                             czrc_cache=czrc_cache,  # Pass cache for CZRC result caching
                             highs_log_folder=highs_log_folder,  # Pass log folder for CZRC HiGHS logs
+                            centreline_boreholes=centreline_boreholes,
                         )
 
                         # Log cache stats if enabled
@@ -768,6 +789,11 @@ def worker_process_filter_combination(
                                 source_pass=_get_source_pass(bh),
                                 status=BoreholeStatus.from_string(
                                     bh.get("status", "proposed")
+                                ),
+                                is_centreline=(
+                                    bh.get("is_centreline", False)
+                                    if isinstance(bh, dict)
+                                    else getattr(bh, "is_centreline", False)
                                 ),
                             ).as_dict()
                             for bh in proposed
