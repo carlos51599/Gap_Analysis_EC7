@@ -903,9 +903,9 @@ def export_coverage_geojson(
     output_dir.mkdir(parents=True, exist_ok=True)
     exported = {}
 
-    # Export covered area
+    # Export covered area — ALWAYS create file (empty if no coverage)
+    path = output_dir / "covered.geojson"
     if covered_geom is not None and not covered_geom.is_empty:
-        path = output_dir / "covered.geojson"
         geojson = {
             "type": "FeatureCollection",
             "features": [
@@ -920,6 +920,9 @@ def export_coverage_geojson(
             json.dump(geojson, f, indent=2)
         exported["covered"] = path
         logger.info(f"📄 GeoJSON exported: {path.name}")
+    else:
+        _write_empty_feature_collection(path, combo_key, "covered")
+        exported["covered"] = path
 
     # Export gaps
     if gaps_geom is not None and not gaps_geom.is_empty:
@@ -1002,6 +1005,23 @@ def _export_geojson_feature(
     except Exception as e:
         log.warning("   ⚠️ Failed to export %s for %s: %s", feature_type, combo_key, e)
         return False
+
+
+def _write_empty_feature_collection(
+    output_path: Path, combo_key: str, feature_type: str
+) -> None:
+    """Write an empty GeoJSON FeatureCollection so viz always has a file to load."""
+    geojson_data = {
+        "type": "FeatureCollection",
+        "features": [],
+    }
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(geojson_data, f, indent=2)
+    logger.info(
+        "   📄 Created empty %s GeoJSON for %s (no existing coverage)",
+        feature_type,
+        combo_key,
+    )
 
 
 def _export_hexgrid_geojson(
@@ -1112,17 +1132,22 @@ def export_coverage_polygons_to_geojson(
         exported_files[combo_key] = {}
         description = _format_combo_key_human_readable(combo_key)
 
-        # Export covered (green) polygons
+        # Export covered (green) polygons — ALWAYS create file (empty if no coverage)
         covered_wkt = coverage_data.get("covered")
+        covered_path = combo_dir / "covered.geojson"
         if covered_wkt:
             covered_geom = deserialize_geometry(covered_wkt)
             if covered_geom:
-                covered_path = combo_dir / "covered.geojson"
                 if _export_geojson_feature(
                     covered_geom, covered_path, combo_key, "covered", description, log
                 ):
                     exported_files[combo_key]["covered"] = str(covered_path)
                     files_created += 1
+        if not covered_path.exists():
+            # Write empty FeatureCollection so viz server always has a file
+            _write_empty_feature_collection(covered_path, combo_key, "covered")
+            exported_files[combo_key]["covered"] = str(covered_path)
+            files_created += 1
 
         # Export uncovered (red) polygons
         gaps_wkt = coverage_data.get("gaps")
