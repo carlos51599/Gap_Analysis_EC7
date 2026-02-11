@@ -109,7 +109,7 @@ VIZ_CONFIG_DATA: Dict[str, Any] = {
     # 🔧 GEOMETRY SETTINGS
     # ═══════════════════════════════════════════════════════════════════════
     "geometry": {
-        "buffer_resolution": 32,
+        "buffer_resolution": 128,
         "default_max_spacing_m": 100.0,
     },
     # ═══════════════════════════════════════════════════════════════════════

@@ -258,14 +258,14 @@ class UIConfig:
 class GeometryConfig:
     """Configuration for geometry calculations."""
 
-    buffer_resolution: int = 32
+    buffer_resolution: int = 128
     default_max_spacing_m: float = 100.0
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "GeometryConfig":
         """Create from dictionary."""
         return cls(
-            buffer_resolution=d.get("buffer_resolution", 32),
+            buffer_resolution=d.get("buffer_resolution", 128),
             default_max_spacing_m=d.get("default_max_spacing_m", 100.0),
         )
 
