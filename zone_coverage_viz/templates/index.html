@@ -611,6 +611,16 @@
         // Initialize map (centered on UK) - will be re-centered after data loads
         const map = L.map('map', { zoomControl: false }).setView([51.5, -1.0], 14);
         
+        // Custom panes for guaranteed z-ordering:
+        // Leaflet default overlayPane is z-index 400. We create custom panes
+        // so borehole markers always render ABOVE coverage polygons.
+        map.createPane('coveragePane');       // Blue proposed + green existing coverage
+        map.getPane('coveragePane').style.zIndex = 410;
+        map.createPane('boreholePane');       // Black/orange borehole markers
+        map.getPane('boreholePane').style.zIndex = 450;
+        // Disable pointer-events on coverage pane so clicks pass through to boreholes
+        map.getPane('coveragePane').style.pointerEvents = 'none';
+        
         // Add base layer (OpenStreetMap) with very reduced opacity
         const baseLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             attribution: '&copy; OpenStreetMap contributors',
@@ -660,6 +670,7 @@
                 fillColor: '#5feb5f',  // Matches ec7_coverage.html: rgba(95, 235, 95, 0.85)
                 fillOpacity: 0.85
             },
+            pane: 'coveragePane',   // Render below boreholes
             interactive: false  // Let mouse events pass through to boreholes
         });
         
@@ -671,6 +682,7 @@
                 fillColor: '#3498db',
                 fillOpacity: 0.25
             },
+            pane: 'coveragePane',   // Render below boreholes
             interactive: false  // Let mouse events pass through to boreholes
         });
         
@@ -1270,8 +1282,8 @@
                     const isVisible = zoneVisibility[zone.zone_name] !== false;
                     const hiddenClass = isVisible ? '' : 'hidden-zone';
                     
-                    // Extract just the zone number for display (e.g., "Embankment_0" -> "Zone 0")
-                    const shortName = zone.zone_name.replace(/^.*_(\d+)$/, 'Zone $1');
+                    // Extract just the zone number for display (e.g., "Embankment_0" -> "0")
+                    const shortName = zone.zone_name.replace(/^.*_(\d+)$/, '$1');
                     
                     html += `
                         <div class="stat-row ${hiddenClass}"
@@ -1775,6 +1787,7 @@
                     fillColor: markerColor,
                     fillOpacity: 1,
                     weight: 0,
+                    pane: 'boreholePane',
                     interactive: false
                 });
             } else {
@@ -1786,6 +1799,7 @@
                     fillColor: outsideColor,
                     fillOpacity: 1,
                     weight: 0,
+                    pane: 'boreholePane',
                     interactive: false
                 });
             }
@@ -1843,6 +1857,7 @@
                     fillColor: 'transparent',
                     fillOpacity: 0,
                     weight: 0,
+                    pane: 'boreholePane',
                     interactive: true,
                     bubblingMouseEvents: false
                 });
