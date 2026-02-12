@@ -46,7 +46,10 @@ if _FROZEN:
 
     multiprocessing.freeze_support()
 
-    # 3. Set pyproj data path to bundled location (prevents network lookup hang)
+    # 3. Disable PROJ network grid downloads (causes long hangs in frozen exe)
+    os.environ["PROJ_NETWORK"] = "OFF"
+
+    # 4. Set pyproj data path to bundled location (prevents network lookup hang)
     if _MEIPASS:
         _proj_dir = os.path.join(_MEIPASS, "pyproj", "proj_dir")
         _share_proj = os.path.join(_MEIPASS, "share", "proj")
@@ -60,6 +63,7 @@ if _FROZEN:
     _stderr(f"[STARTUP] Frozen exe detected, bundle dir: {_MEIPASS}")
     _stderr(f"[STARTUP] Exe location: {sys.executable}")
     _stderr(f"[STARTUP] PROJ_LIB={os.environ.get('PROJ_LIB', 'NOT SET')}")
+    _stderr("[STARTUP] PROJ_NETWORK=OFF (no internet grid lookups)")
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 📦 IMPORTS (heavy imports happen here - after frozen setup)
@@ -908,21 +912,26 @@ def initialize_services(data_dir: Path) -> bool:
     global data_loader, coverage_service
 
     try:
-        logger.info(f"🚀 Initializing services from: {data_dir}")
-
-        # Initialize data loader
+        _stderr("[INIT] Creating DataLoader...")
         data_loader = DataLoader(data_dir)
+        _stderr("[INIT] DataLoader created OK")
 
-        # Initialize coverage service with zones
+        _stderr("[INIT] Loading zones GeoDataFrame...")
         zones_gdf = data_loader.get_zones_gdf()
+        _stderr(f"[INIT] Loaded {len(zones_gdf)} zones")
+
+        _stderr("[INIT] Creating CoverageService...")
         coverage_service = CoverageService(zones_gdf)
+        _stderr("[INIT] CoverageService created OK")
 
-        logger.info(f"✅ Loaded {len(zones_gdf)} zones")
-        logger.info(f"✅ Loaded {len(data_loader.get_boreholes_gdf())} boreholes")
+        bh_gdf = data_loader.get_boreholes_gdf()
+        _stderr(f"[INIT] Loaded {len(bh_gdf)} boreholes")
 
+        logger.info(f"✅ Loaded {len(zones_gdf)} zones, {len(bh_gdf)} boreholes")
         return True
 
     except Exception as e:
+        _stderr(f"[INIT] FAILED: {e}")
         logger.error(f"❌ Failed to initialize services: {e}")
         return False
 
