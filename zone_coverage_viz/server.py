@@ -77,6 +77,9 @@ import json
 import logging
 import io
 import csv
+import threading
+import webbrowser
+import urllib.request
 
 from flask import (
     Flask,
@@ -936,6 +939,26 @@ def initialize_services(data_dir: Path) -> bool:
         return False
 
 
+def _launch_browser_when_ready(url: str, timeout: int = 30) -> None:
+    """Start a daemon thread that polls the server and opens the browser once ready."""
+
+    def _poll_and_open() -> None:
+        for _ in range(timeout):
+            try:
+                urllib.request.urlopen(url, timeout=1)
+                _stderr(f"[MAIN] Server ready — opening browser at {url}")
+                webbrowser.open(url)
+                return
+            except Exception:
+                import time
+
+                time.sleep(1)
+        _stderr("[MAIN] Timeout waiting for server — open browser manually")
+
+    t = threading.Thread(target=_poll_and_open, daemon=True)
+    t.start()
+
+
 def main() -> None:
     """Main entry point - initialize and start server."""
     _stderr("[MAIN] Entered main()")
@@ -957,15 +980,20 @@ def main() -> None:
         sys.exit(1)
 
     # Start server
-    _stderr(f"[MAIN] Starting Flask on http://{SERVER_HOST}:{SERVER_PORT}")
-    logger.info(f"🌐 Starting server at http://{SERVER_HOST}:{SERVER_PORT}")
-    logger.info(f"   Open browser to: http://{SERVER_HOST}:{SERVER_PORT}")
+    url = f"http://{SERVER_HOST}:{SERVER_PORT}"
+    _stderr(f"[MAIN] Starting Flask on {url}")
+    logger.info(f"🌐 Starting server at {url}")
+    logger.info(f"   Open browser to: {url}")
 
     # Very visible startup message
     logger.info("=" * 70)
     logger.info("    ZONE COVERAGE VIZ SERVER STARTED - DEBUG LOGGING ACTIVE")
     logger.info("    All move/delete operations will be logged here")
     logger.info("=" * 70)
+
+    # Auto-open browser once the server is actually listening
+    if _FROZEN:
+        _launch_browser_when_ready(url)
 
     # Disable debug mode for frozen exe (reloader doesn't work with PyInstaller)
     app.run(host=SERVER_HOST, port=SERVER_PORT, debug=not _FROZEN)

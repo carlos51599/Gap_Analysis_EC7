@@ -48,9 +48,7 @@ logger = logging.getLogger(__name__)
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-def _on_rm_error(
-    func: Callable, path: str, exc: BaseException
-) -> None:
+def _on_rm_error(func: Callable, path: str, exc: BaseException) -> None:
     """Error handler for shutil.rmtree: clears read-only and retries."""
     os.chmod(path, stat.S_IWRITE)
     func(path)
@@ -97,12 +95,31 @@ def _robust_rmtree(target: Path, retries: int = 4, delay: float = 2.0) -> None:
             wait = delay * attempt
             logger.warning(
                 "⏳ Folder still locked (attempt %d/%d), retrying in %.0fs...",
-                attempt, retries, wait,
+                attempt,
+                retries,
+                wait,
             )
             time.sleep(wait)
 
-    # All retries exhausted
+    # All retries exhausted — try purging *contents* so rebuild can reuse folder
     if target.exists():
+        try:
+            for child in list(target.iterdir()):
+                if child.is_dir():
+                    shutil.rmtree(child, ignore_errors=True)
+                else:
+                    child.unlink(missing_ok=True)
+            remaining = list(target.iterdir())
+            if not remaining:
+                logger.warning(
+                    "⚠️ Could not delete folder (OneDrive lock) but purged "
+                    "contents — reusing empty folder."
+                )
+                return  # folder empty, good enough
+        except Exception:  # noqa: BLE001
+            pass
+
+    if target.exists() and any(target.iterdir()):
         raise RuntimeError(
             f"Cannot delete '{target}'. Close any terminals, file explorers, "
             f"or editors open inside this folder, then try again."
@@ -140,7 +157,7 @@ HIDDEN_IMPORTS = [
     "multiprocessing",
 ]
 
-# Modules to exclude from bundle (reduces size dramatically)
+# Modules to exclude from bundle (r![1770895191726](image/portable_builder/1770895191726.png)educes size dramatically)
 # MODIFICATION POINT: Aggressive exclusion of anaconda packages not needed
 EXCLUDE_MODULES = [
     # === GUI / PLOTTING (NOT NEEDED - we use web browser) ===
@@ -328,15 +345,13 @@ echo.
 echo   Starting server... please wait
 echo   (First run may take 10-15 seconds to extract files)
 echo.
-echo   Browser will open automatically at http://127.0.0.1:5051
+echo   Browser will open automatically once server is ready
 echo.
 echo   To stop: Close this window or press Ctrl+C
 echo.
 
-REM Open browser after 5 second delay (gives server time to extract and start)
-start "" cmd /c "timeout /t 5 /nobreak >nul && start http://127.0.0.1:5051"
-
 REM Run the server from the same directory as this batch file
+REM (The exe opens the browser itself once it's ready to accept connections)
 "%~dp0zone_coverage_server.exe"
 
 echo.
