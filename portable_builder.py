@@ -32,12 +32,81 @@ Requirements:
 import subprocess
 import shutil
 import sys
+import os
+import stat
+import time
 from pathlib import Path
 from datetime import datetime
-from typing import Optional
+from typing import Callable, Optional
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 🧹 ROBUST DIRECTORY CLEANUP (Windows / OneDrive safe)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _on_rm_error(
+    func: Callable, path: str, exc: BaseException
+) -> None:
+    """Error handler for shutil.rmtree: clears read-only and retries."""
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
+
+
+def _robust_rmtree(target: Path, retries: int = 4, delay: float = 2.0) -> None:
+    """Remove a directory tree with retries for Windows/OneDrive locks.
+
+    Strategy:
+      1. shutil.rmtree with read-only attribute clearing
+      2. Fallback to cmd /c rmdir /s /q on Windows
+      3. Retry with increasing delay for transient locks
+
+    Args:
+        target: Directory to remove.
+        retries: Number of retry attempts.
+        delay: Base delay between retries (doubles each attempt).
+    """
+    for attempt in range(1, retries + 1):
+        # --- Attempt A: shutil with onexc handler ---
+        try:
+            shutil.rmtree(target, onexc=_on_rm_error)
+            if not target.exists():
+                return
+        except Exception:  # noqa: BLE001
+            pass  # fall through to attempt B
+
+        # --- Attempt B: Windows rmdir fallback ---
+        if sys.platform == "win32" and target.exists():
+            try:
+                subprocess.run(
+                    ["cmd", "/c", "rmdir", "/s", "/q", str(target)],
+                    check=True,
+                    capture_output=True,
+                    timeout=60,
+                )
+                if not target.exists():
+                    return
+            except Exception:  # noqa: BLE001
+                pass
+
+        # Still exists — wait and retry
+        if target.exists():
+            wait = delay * attempt
+            logger.warning(
+                "⏳ Folder still locked (attempt %d/%d), retrying in %.0fs...",
+                attempt, retries, wait,
+            )
+            time.sleep(wait)
+
+    # All retries exhausted
+    if target.exists():
+        raise RuntimeError(
+            f"Cannot delete '{target}'. Close any terminals, file explorers, "
+            f"or editors open inside this folder, then try again."
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -529,7 +598,7 @@ def build_portable(
     # === Step 2: Clean output directory ===
     if clean_build and output_path.exists():
         logger.info("🧹 Removing existing output directory...")
-        shutil.rmtree(output_path)
+        _robust_rmtree(output_path)
 
     output_path.mkdir(parents=True, exist_ok=True)
 
