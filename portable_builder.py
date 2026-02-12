@@ -35,6 +35,7 @@ import sys
 import os
 import stat
 import time
+import tempfile
 from pathlib import Path
 from datetime import datetime
 from typing import Callable, Optional
@@ -196,6 +197,10 @@ EXCLUDE_MODULES = [
     "hvplot",
     "datashader",
     "colorcet",
+    "panel",         # Web dashboard framework - not needed, deeply nested paths
+    "param",         # Panel dependency
+    "pyviz_comms",   # Panel dependency
+    "perspective",   # Panel/perspective-viewer - breaks MAX_PATH on Windows
     # === SCIENTIFIC (NOT NEEDED - only using basic geopandas/shapely) ===
     "scipy",
     "sklearn",
@@ -343,7 +348,6 @@ echo   ZONE COVERAGE VISUALIZATION
 echo   ============================
 echo.
 echo   Starting server... please wait
-echo   (First run may take 10-15 seconds to extract files)
 echo.
 echo   Browser will open automatically once server is ready
 echo.
@@ -445,13 +449,17 @@ def install_pyinstaller() -> bool:
         return False
 
 
-def build_pyinstaller_command(source_dir: Path, work_dir: Path) -> list:
+def build_pyinstaller_command(
+    source_dir: Path, work_dir: Path, dist_dir: Path, build_dir: Path
+) -> list:
     """
     Build the PyInstaller command with all necessary flags.
 
     Args:
         source_dir: Directory containing server.py (zone_coverage_viz/)
         work_dir: Parent directory to run PyInstaller from (Gap_Analysis_EC7/)
+        dist_dir: Output directory for dist (outside OneDrive)
+        build_dir: Working directory for build (outside OneDrive)
 
     Returns:
         List of command arguments
@@ -460,11 +468,15 @@ def build_pyinstaller_command(source_dir: Path, work_dir: Path) -> list:
         sys.executable,
         "-m",
         "PyInstaller",
-        "--onefile",
+        "--onedir",
         "--name",
         "zone_coverage_server",
         "--console",  # Show console for server output
         "--noconfirm",  # Overwrite without asking
+        "--distpath",
+        str(dist_dir),
+        "--workpath",
+        str(build_dir),
     ]
 
     # Add data files (templates folder) - path relative to work_dir
@@ -501,13 +513,23 @@ def run_pyinstaller(source_dir: Path) -> Optional[Path]:
         source_dir: Directory containing server.py (zone_coverage_viz/)
 
     Returns:
-        Path to created executable, or None if failed
+        Path to created output directory, or None if failed
     """
     logger.info("🔨 Running PyInstaller (this may take 1-3 minutes)...")
 
     # Run from parent directory so 'from zone_coverage_viz.xxx' imports work
     work_dir = source_dir.parent
-    cmd = build_pyinstaller_command(source_dir, work_dir)
+
+    # Build to a temp location OUTSIDE OneDrive to avoid file-lock issues
+    temp_base = Path(tempfile.gettempdir()) / "pyinstaller_zcviz"
+    dist_dir = temp_base / "dist"
+    build_dir = temp_base / "build"
+    for d in [dist_dir, build_dir]:
+        if d.exists():
+            shutil.rmtree(d, ignore_errors=True)
+        d.mkdir(parents=True, exist_ok=True)
+
+    cmd = build_pyinstaller_command(source_dir, work_dir, dist_dir, build_dir)
     logger.info(f"📋 Command: {' '.join(cmd[:6])}...")
 
     try:
@@ -518,12 +540,13 @@ def run_pyinstaller(source_dir: Path) -> Optional[Path]:
             logger.error(f"❌ PyInstaller failed with code {result.returncode}")
             return None
 
-        # Find the executable - now in work_dir/dist/
-        exe_path = work_dir / "dist" / "zone_coverage_server.exe"
+        # Find the executable - --onedir puts it in dist/<name>/<name>.exe
+        exe_dir = dist_dir / "zone_coverage_server"
+        exe_path = exe_dir / "zone_coverage_server.exe"
         if exe_path.exists():
             size_mb = exe_path.stat().st_size / (1024 * 1024)
             logger.info(f"✅ Created executable: {exe_path} ({size_mb:.1f} MB)")
-            return exe_path
+            return exe_dir  # Return the DIRECTORY, not just the exe
 
         logger.error("❌ Executable not found after PyInstaller completed")
         return None
@@ -618,13 +641,20 @@ def build_portable(
     output_path.mkdir(parents=True, exist_ok=True)
 
     # === Step 3: Run PyInstaller ===
-    exe_path = run_pyinstaller(viz_dir)
-    if exe_path is None:
+    exe_dir = run_pyinstaller(viz_dir)
+    if exe_dir is None:
         raise RuntimeError("PyInstaller build failed - see errors above")
 
-    # === Step 4: Copy executable to output ===
-    logger.info("📦 Copying executable to output folder...")
-    shutil.copy2(exe_path, output_path / "zone_coverage_server.exe")
+    # === Step 4: Copy --onedir output to portable folder ===
+    logger.info("\U0001f4e6 Copying PyInstaller output to portable folder...")
+    for item in exe_dir.iterdir():
+        dst = output_path / item.name
+        if item.is_dir():
+            if dst.exists():
+                shutil.rmtree(dst, ignore_errors=True)
+            shutil.copytree(item, dst)
+        else:
+            shutil.copy2(item, dst)
 
     # === Step 5: Copy data files ===
     if include_data:
