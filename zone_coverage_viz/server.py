@@ -15,9 +15,57 @@ Key Interactions:
 Navigation Guide:
 - ROUTES: API endpoints (/api/zones, /api/boreholes, /api/coverage)
 - STARTUP: Server initialization and data loading
+- FROZEN EXE SETUP: PyInstaller bootstrap (must be first)
 
 For Navigation: Use VS Code outline (Ctrl+Shift+O)
 """
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 🔒 FROZEN EXE BOOTSTRAP (must run BEFORE any heavy imports)
+# ═══════════════════════════════════════════════════════════════════════════
+import sys
+import os
+
+# Detect PyInstaller frozen exe early
+_FROZEN = getattr(sys, "frozen", False)
+_MEIPASS = getattr(sys, "_MEIPASS", None) if _FROZEN else None
+
+
+def _stderr(msg: str) -> None:
+    """Write to stderr (unbuffered) for guaranteed console visibility."""
+    sys.stderr.write(msg + "\n")
+    sys.stderr.flush()
+
+
+if _FROZEN:
+    # 1. Force unbuffered stdout/stderr so messages appear in console
+    os.environ["PYTHONUNBUFFERED"] = "1"
+
+    # 2. Required for Windows frozen executables using multiprocessing
+    import multiprocessing
+
+    multiprocessing.freeze_support()
+
+    # 3. Set pyproj data path to bundled location (prevents network lookup hang)
+    if _MEIPASS:
+        _proj_dir = os.path.join(_MEIPASS, "pyproj", "proj_dir")
+        _share_proj = os.path.join(_MEIPASS, "share", "proj")
+        _proj_data = os.path.join(_MEIPASS, "proj_data")
+        for _candidate in [_proj_dir, _share_proj, _proj_data]:
+            if os.path.isdir(_candidate):
+                os.environ.setdefault("PROJ_LIB", _candidate)
+                os.environ.setdefault("PROJ_DATA", _candidate)
+                break
+
+    _stderr(f"[STARTUP] Frozen exe detected, bundle dir: {_MEIPASS}")
+    _stderr(f"[STARTUP] Exe location: {sys.executable}")
+    _stderr(f"[STARTUP] PROJ_LIB={os.environ.get('PROJ_LIB', 'NOT SET')}")
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 📦 IMPORTS (heavy imports happen here - after frozen setup)
+# ═══════════════════════════════════════════════════════════════════════════
+if _FROZEN:
+    _stderr("[STARTUP] Importing Flask...")
 
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -25,7 +73,6 @@ import json
 import logging
 import io
 import csv
-import sys
 
 from flask import (
     Flask,
@@ -36,26 +83,54 @@ from flask import (
     Response,
 )
 from flask_cors import CORS
+
+if _FROZEN:
+    _stderr("[STARTUP] Importing pyproj...")
+
 from pyproj import Transformer
+
+if _FROZEN:
+    _stderr("[STARTUP] Importing zone_coverage_viz modules...")
 
 from zone_coverage_viz.viz_config_types import get_frontend_config
 from zone_coverage_viz.data_loader import DataLoader
 from zone_coverage_viz.geometry_service import CoverageService
+
+if _FROZEN:
+    _stderr("[STARTUP] All imports complete.")
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 🔧 CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-# Determine data directory - handle frozen exe vs regular script
 def get_data_dir() -> Path:
     """Get the data directory, handling PyInstaller frozen exe case."""
-    if getattr(sys, "frozen", False):
+    if _FROZEN:
         # Running as frozen exe - look relative to exe location
-        return Path(sys.executable).parent / "Output"
+        return Path(sys.executable).parent / "Data"
     else:
         # Running as script - look relative to this file's parent
         return Path(__file__).parent.parent / "Output"
+
+
+def _get_template_folder() -> str:
+    """Get Flask template folder, handling PyInstaller frozen exe case."""
+    if _FROZEN and _MEIPASS:
+        path = os.path.join(_MEIPASS, "templates")
+        _stderr(f"[STARTUP] Template folder: {path} (exists={os.path.isdir(path)})")
+        return path
+    return "templates"
+
+
+def _get_static_folder() -> Optional[str]:
+    """Get Flask static folder, handling PyInstaller frozen exe case."""
+    if _FROZEN and _MEIPASS:
+        path = os.path.join(_MEIPASS, "static")
+        if os.path.isdir(path):
+            return path
+        return None
+    return "static"
 
 
 DEFAULT_DATA_DIR = get_data_dir()
@@ -68,7 +143,11 @@ SERVER_PORT = 5051
 # 🌐 FLASK APPLICATION
 # ═══════════════════════════════════════════════════════════════════════════
 
-app = Flask(__name__, template_folder="templates", static_folder="static")
+app = Flask(
+    __name__,
+    template_folder=_get_template_folder(),
+    static_folder=_get_static_folder(),
+)
 CORS(app)
 
 # Global services - initialized on startup
@@ -79,14 +158,10 @@ coverage_service: Optional[CoverageService] = None
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
 logger = logging.getLogger(__name__)
 
-# Debug logging helper - writes to stderr which is unbuffered
-import sys
-
 
 def debug_log(msg: str) -> None:
     """Write debug message to stderr (unbuffered) for guaranteed visibility."""
-    sys.stderr.write(msg + "\n")
-    sys.stderr.flush()
+    _stderr(msg)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -557,9 +632,7 @@ def export_boreholes_csv() -> Response:
     if data_loader is None:
         return jsonify({"error": "Server not initialized"}), 500
 
-    exclude_indices = _parse_exclude_indices(
-        request.args.get("excludeIndices", "")
-    )
+    exclude_indices = _parse_exclude_indices(request.args.get("excludeIndices", ""))
     csv_content = _build_boreholes_csv(exclude_indices)
 
     return Response(
@@ -574,11 +647,7 @@ def _parse_exclude_indices(param: str) -> set:
     if not param:
         return set()
     try:
-        return {
-            int(idx.strip())
-            for idx in param.split(",")
-            if idx.strip()
-        }
+        return {int(idx.strip()) for idx in param.split(",") if idx.strip()}
     except ValueError:
         return set()
 
@@ -860,7 +929,7 @@ def initialize_services(data_dir: Path) -> bool:
 
 def main() -> None:
     """Main entry point - initialize and start server."""
-    import sys
+    _stderr("[MAIN] Entered main()")
 
     # Get data directory from command line or use default
     if len(sys.argv) > 1:
@@ -868,12 +937,18 @@ def main() -> None:
     else:
         data_dir = DEFAULT_DATA_DIR
 
+    _stderr(f"[MAIN] Data dir: {data_dir} (exists={data_dir.exists()})")
+
     # Initialize services
     if not initialize_services(data_dir):
+        _stderr("[MAIN] FATAL: Failed to initialize services. Check data files.")
         logger.error("Failed to initialize. Check data files exist.")
+        if _FROZEN:
+            input("Press Enter to exit...")
         sys.exit(1)
 
     # Start server
+    _stderr(f"[MAIN] Starting Flask on http://{SERVER_HOST}:{SERVER_PORT}")
     logger.info(f"🌐 Starting server at http://{SERVER_HOST}:{SERVER_PORT}")
     logger.info(f"   Open browser to: http://{SERVER_HOST}:{SERVER_PORT}")
 
@@ -884,9 +959,17 @@ def main() -> None:
     logger.info("=" * 70)
 
     # Disable debug mode for frozen exe (reloader doesn't work with PyInstaller)
-    is_frozen = getattr(sys, "frozen", False)
-    app.run(host=SERVER_HOST, port=SERVER_PORT, debug=not is_frozen)
+    app.run(host=SERVER_HOST, port=SERVER_PORT, debug=not _FROZEN)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as exc:
+        _stderr(f"[FATAL] Unhandled exception: {exc}")
+        import traceback
+
+        traceback.print_exc(file=sys.stderr)
+        if _FROZEN:
+            input("Press Enter to exit...")
+        sys.exit(1)

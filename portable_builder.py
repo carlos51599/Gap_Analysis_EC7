@@ -8,7 +8,7 @@ Architectural Overview:
     machines without Python installed.
 
     Key Interactions:
-    - Input: zone_coverage_viz/ source code, Output/zone_coverage_data.json
+    - Input: zone_coverage_viz/ source code, Data/zone_coverage_data.json
     - Output: ZoneCoverageViz_Portable/ folder with .exe and launchers
     - Dependencies: PyInstaller (auto-installed if missing)
 
@@ -60,11 +60,15 @@ HIDDEN_IMPORTS = [
     "geopandas",
     "pyproj",
     "pyproj.crs",
+    "pyproj.datadir",
+    "pyproj.database",
+    "pyproj._datadir",
+    "pyproj.transformer",
     "pandas",
-    "fiona",
-    "fiona.crs",
-    "fiona._shim",
-    "fiona.schema",
+    "pyogrio",
+    "pyogrio._io",
+    "pyogrio.raw",
+    "multiprocessing",
 ]
 
 # Modules to exclude from bundle (reduces size dramatically)
@@ -305,7 +309,7 @@ TROUBLESHOOTING:
 - If "Access Denied": right-click START.bat -> Run as administrator
 
 DATA:
-- Current data is in Output/zone_coverage_data.json
+- Current data is in Data/zone_coverage_data.json
 - To update data, replace this file and restart the server
 
 Generated: {timestamp}
@@ -386,6 +390,10 @@ def build_pyinstaller_command(source_dir: Path, work_dir: Path) -> list:
         separator = ";" if sys.platform == "win32" else ":"
         # Path from work_dir perspective
         cmd.extend(["--add-data", f"zone_coverage_viz/templates{separator}templates"])
+
+    # CRITICAL: Bundle pyproj PROJ data (proj.db) - without this,
+    # Transformer.from_crs() hangs or crashes in the frozen exe
+    cmd.extend(["--collect-data", "pyproj"])
 
     # Add hidden imports
     for hidden in HIDDEN_IMPORTS:
@@ -478,7 +486,7 @@ def build_portable(
 
     Args:
         output_dir: Name of output folder (created next to this script)
-        include_data: Whether to copy Output/zone_coverage_data.json
+        include_data: Whether to copy Data/zone_coverage_data.json
         clean_build: Whether to delete existing output folder first
         auto_install_pyinstaller: Install PyInstaller if missing
         cleanup_artifacts: Remove build/dist folders after completion
@@ -538,7 +546,7 @@ def build_portable(
     if include_data:
         data_src = script_dir / "Output" / "zone_coverage_data.json"
         if data_src.exists():
-            data_dst = output_path / "Output"
+            data_dst = output_path / "Data"
             data_dst.mkdir(exist_ok=True)
             shutil.copy2(data_src, data_dst / "zone_coverage_data.json")
             logger.info(

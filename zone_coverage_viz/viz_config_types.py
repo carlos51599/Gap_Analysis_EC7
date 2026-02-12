@@ -278,10 +278,10 @@ class GeometryConfig:
 @dataclass(frozen=True)
 class ZoneVisibilityConfig:
     """Configuration for zone visibility behavior.
-    
+
     Mode options:
         - "clip_coverage": Only hide coverage portion over hidden zone (default)
-        - "hide_zone_boreholes": Hide ALL boreholes inside hidden zone AND their 
+        - "hide_zone_boreholes": Hide ALL boreholes inside hidden zone AND their
           entire coverage (even if coverage extends to visible zones)
     """
 
@@ -365,7 +365,9 @@ class VizConfig:
             coverage_stats=CoverageStatsConfig.from_dict(d.get("coverage_stats", {})),
             ui=UIConfig.from_dict(d.get("ui", {})),
             geometry=GeometryConfig.from_dict(d.get("geometry", {})),
-            zone_visibility=ZoneVisibilityConfig.from_dict(d.get("zone_visibility", {})),
+            zone_visibility=ZoneVisibilityConfig.from_dict(
+                d.get("zone_visibility", {})
+            ),
         )
 
     @classmethod

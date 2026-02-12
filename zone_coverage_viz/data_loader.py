@@ -210,7 +210,7 @@ class DataLoader:
         Returns:
             GeoDataFrame in BNG if valid CSV found, None otherwise.
         """
-        # Look for "Saved Positions" folder at portable root (next to Output/)
+        # Look for "Saved Positions" folder at portable root (next to Data/)
         saved_dir = self.data_dir.parent / "Saved Positions"
         if not saved_dir.exists():
             return None
@@ -220,9 +220,7 @@ class DataLoader:
             return None
 
         # Use most recently modified CSV
-        csv_path = sorted(
-            csv_files, key=lambda f: f.stat().st_mtime, reverse=True
-        )[0]
+        csv_path = sorted(csv_files, key=lambda f: f.stat().st_mtime, reverse=True)[0]
 
         try:
             df = pd.read_csv(csv_path)
@@ -237,10 +235,7 @@ class DataLoader:
                 return None
 
             # Build GeoDataFrame in BNG
-            geometry = [
-                Point(x, y)
-                for x, y in zip(df["Easting"], df["Northing"])
-            ]
+            geometry = [Point(x, y) for x, y in zip(df["Easting"], df["Northing"])]
             gdf = gpd.GeoDataFrame(crs=CRS_BNG, geometry=geometry)
             gdf["Location_ID"] = df["ID"]
             gdf["index"] = range(len(gdf))
