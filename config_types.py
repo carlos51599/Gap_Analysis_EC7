@@ -612,8 +612,8 @@ class SpacingRelativeSizingConfig:
     """
 
     enabled: bool = True
-    cell_area_multiplier: float = 400.0
-    threshold_multiplier: float = 800.0
+    cell_area_multiplier: float = 200.0
+    threshold_multiplier: float = 400.0
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "SpacingRelativeSizingConfig":

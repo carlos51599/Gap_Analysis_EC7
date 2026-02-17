@@ -760,8 +760,8 @@ CONFIG: Dict[str, Any] = {
             # Prevents tier-width/cell-size mismatch for large-spacing zones
             "spacing_relative": {
                 "enabled": True,
-                "cell_area_multiplier": 400,    # K: target = max(base, K × s_c²)
-                "threshold_multiplier": 800,    # M: threshold = max(base, M × s_c²)
+                "cell_area_multiplier": 200,  # K: target = max(base, K × s_c²)
+                "threshold_multiplier": 400,  # M: threshold = max(base, M × s_c²)
             },
             # === K-means + Voronoi settings ===
             "kmeans_voronoi": {
@@ -806,8 +806,8 @@ CONFIG: Dict[str, Any] = {
             # Prevents tier-width/cell-size mismatch for large-spacing clusters
             "spacing_relative": {
                 "enabled": True,
-                "cell_area_multiplier": 400,    # K: target = max(base, K × s_c²)
-                "threshold_multiplier": 800,    # M: threshold = max(base, M × s_c²)
+                "cell_area_multiplier": 200,  # K: target = max(base, K × s_c²)
+                "threshold_multiplier": 400,  # M: threshold = max(base, M × s_c²)
             },
             # === Grid method settings (legacy fallback) ===
             "grid": {
