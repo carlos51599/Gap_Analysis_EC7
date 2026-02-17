@@ -77,7 +77,7 @@ SHAPEFILE_CONFIG: Dict[str, Any] = {
         # Single zone - no per-zone breakdown (features identified by feature ID)
         # ───────────────────────────────────────────────────────────────────
         "embankment_zones": {
-            "enabled": True,
+            "enabled": False,
             "file_path": "Project Shapefiles/Embankment_DF2F.shp",
             "display_name": "Embankment",
             "layer_order": 10,  # Drawn on top
@@ -116,8 +116,8 @@ SHAPEFILE_CONFIG: Dict[str, Any] = {
             "centreline": {
                 "enabled": True,
                 "min_branch_length_m": 100.0,  # Prune branches shorter than this
-                "spacing_m": 5.0,              # Boundary point density for Voronoi
-                "simplify_tolerance_m": 2.0,   # Simplify centreline geometry
+                "spacing_m": 5.0,  # Boundary point density for Voronoi
+                "simplify_tolerance_m": 2.0,  # Simplify centreline geometry
                 "sampling_mode": "zone_spacing",  # Uses zone's max_spacing_m
             },
         },
@@ -125,7 +125,7 @@ SHAPEFILE_CONFIG: Dict[str, Any] = {
         # Display layer: GIR Boundary (display only, not used in analysis)
         # ───────────────────────────────────────────────────────────────────
         "gir_boundary": {
-            "enabled": True,
+            "enabled": False,
             "file_path": "Project Shapefiles/GIR_LocationGroup_Zone_250923.shp",
             "display_name": "GIR Boundary",
             "layer_order": 3,  # Drawn behind all coverage layers
@@ -141,7 +141,7 @@ SHAPEFILE_CONFIG: Dict[str, Any] = {
         # Coverage layer: Buildings (used for coverage analysis)
         # ───────────────────────────────────────────────────────────────────
         "buildings": {
-            "enabled": True,
+            "enabled": False,
             "file_path": "Project Shapefiles/Buildings.shp",
             "display_name": "Buildings",
             "layer_order": 8,
@@ -159,7 +159,7 @@ SHAPEFILE_CONFIG: Dict[str, Any] = {
         # Coverage layer: Reservoir Tunnel (used for coverage analysis)
         # ───────────────────────────────────────────────────────────────────
         "reservoir_tunnel": {
-            "enabled": True,
+            "enabled": False,
             "file_path": "Project Shapefiles/ReservoirTunnel.shp",
             "display_name": "Reservoir Tunnel",
             "layer_order": 7,
@@ -177,7 +177,7 @@ SHAPEFILE_CONFIG: Dict[str, Any] = {
         # Coverage layer: W&B Canal Model (used for coverage analysis)
         # ───────────────────────────────────────────────────────────────────
         "wandb_canal_model": {
-            "enabled": True,
+            "enabled": False,
             "file_path": "Project Shapefiles/WAndBCanalModel.shp",
             "display_name": "W&B Canal Model",
             "layer_order": 6,
@@ -195,7 +195,7 @@ SHAPEFILE_CONFIG: Dict[str, Any] = {
         # Coverage layer: Water Course Diversion (used for coverage analysis)
         # ───────────────────────────────────────────────────────────────────
         "water_course_diversion": {
-            "enabled": True,
+            "enabled": False,
             "file_path": "Project Shapefiles/WaterCourseDiversion.shp",
             "display_name": "Water Course Diversion",
             "layer_order": 4,
@@ -236,10 +236,10 @@ SHAPEFILE_CONFIG: Dict[str, Any] = {
         # ─── Centreline constraint defaults ───
         # Applied when a layer doesn't specify centreline settings.
         "centreline": {
-            "enabled": False,              # Disabled by default
-            "min_branch_length_m": 50.0,   # Prune branches shorter than this
-            "spacing_m": 5.0,              # Boundary point density for Voronoi
-            "simplify_tolerance_m": 2.0,   # Simplify centreline geometry
+            "enabled": False,  # Disabled by default
+            "min_branch_length_m": 50.0,  # Prune branches shorter than this
+            "spacing_m": 5.0,  # Boundary point density for Voronoi
+            "simplify_tolerance_m": 2.0,  # Simplify centreline geometry
             "sampling_mode": "zone_spacing",  # Uses zone's max_spacing_m
         },
     },
@@ -649,3 +649,16 @@ def get_centreline_enabled_layers() -> List[str]:
         if config.get("enabled", True)
         and config.get("centreline", defaults).get("enabled", False)
     ]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 🚀 MAIN ENTRY POINT
+# ═══════════════════════════════════════════════════════════════════════════
+if __name__ == "__main__":
+    # Running shapefile_config.py directly launches main.py
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    main_py = Path(__file__).parent / "main.py"
+    sys.exit(subprocess.call([sys.executable, str(main_py)]))
