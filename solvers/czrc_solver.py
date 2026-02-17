@@ -542,6 +542,41 @@ def _aggregate_zone_spacings(
         )
 
 
+def _compute_local_zone_spacing(
+    region: BaseGeometry,
+    zone_geometries: Dict[str, BaseGeometry],
+    zone_spacings: Dict[str, float],
+    method: str = "min",
+) -> float:
+    """
+    Compute aggregated spacing for zones that spatially overlap a region.
+
+    Instead of using ALL cluster zones (which inflates or deflates grid
+    density), this function intersects the region geometry against each
+    zone geometry and only includes zones that actually overlap.
+
+    Args:
+        region: Shapely geometry (cell or cluster) to test overlap against.
+        zone_geometries: Dict mapping zone_name -> Shapely geometry.
+        zone_spacings: Dict mapping zone_name -> max_spacing_m.
+        method: Aggregation method ("min", "max", or "average").
+
+    Returns:
+        Aggregated spacing of locally overlapping zones. Falls back to
+        min(zone_spacings.values()) if no zones overlap.
+    """
+    overlapping_zones: List[str] = []
+    for zone_name, zone_geom in zone_geometries.items():
+        if zone_name in zone_spacings and region.intersects(zone_geom):
+            overlapping_zones.append(zone_name)
+
+    if not overlapping_zones:
+        # Fallback: no spatial overlap found — use global minimum
+        return min(zone_spacings.values()) if zone_spacings else 100.0
+
+    return _aggregate_zone_spacings(zone_spacings, overlapping_zones, method)
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 🏗️ TIER COMPUTATION SECTION
 # ═══════════════════════════════════════════════════════════════════════════
