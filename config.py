@@ -593,6 +593,19 @@ CONFIG: Dict[str, Any] = {
             "tier2_dash": "longdash",  # Long dash for Tier 2
             "line_width": 2,
         },
+        # First-pass zone auto-split cell boundary styling
+        # These are the sub-zone boundaries drawn when a zone is auto-split
+        # into smaller cells during the first pass
+        "auto_split_cell_boundaries": {
+            "color": "blue",  # Blue for first-pass auto-split cell boundaries
+            "dash": "dot",  # Dotted line style
+        },
+        # Second-pass CZRC cell boundary styling
+        # These are the Voronoi cell boundaries from CZRC cluster splitting
+        "czrc_cell_boundaries": {
+            "color": "orange",  # Orange for second-pass CZRC cell boundaries
+            "dash": "dot",  # Dotted line style
+        },
     },
     # ═══════════════════════════════════════════════════════════════════════
     # 🔗 CZRC OPTIMIZATION (NEW SECOND PASS - REPLACES BORDER CONSOLIDATION)

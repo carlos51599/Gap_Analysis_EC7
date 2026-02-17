@@ -166,8 +166,8 @@ def build_hexagon_grid_trace(
 # ZONE BOUNDARY TRACES
 # ===========================================================================
 
-# --- Auto-split cell boundary style (matches CZRC second-pass cell splitting) ---
-_AUTO_SPLIT_LINE_COLOR = "orange"
+# --- Auto-split cell boundary style defaults (overridden by config) ---
+_AUTO_SPLIT_LINE_COLOR = "blue"
 _AUTO_SPLIT_LINE_DASH = "dot"
 
 
@@ -177,11 +177,12 @@ def _resolve_zone_boundary_style(
     default_color: str,
     seen_parents: set,
     zone_idx: int,
+    auto_split_style: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """
     Resolve visual style for a single zone boundary row.
 
-    Auto-split sub-zones get orange dotted lines matching CZRC cell splitting.
+    Auto-split sub-zones get blue dotted lines (configurable via config.py).
     Regular zones get solid lines with per-zone config color.
 
     Args:
@@ -202,10 +203,12 @@ def _resolve_zone_boundary_style(
         parent_zone = row.get("parent_zone", zone_name)
         first_for_parent = parent_zone not in seen_parents
         seen_parents.add(parent_zone)
+        _color = (auto_split_style or {}).get("color", _AUTO_SPLIT_LINE_COLOR)
+        _dash = (auto_split_style or {}).get("dash", _AUTO_SPLIT_LINE_DASH)
         return {
             "zone_name": zone_name,
-            "line_color": _AUTO_SPLIT_LINE_COLOR,
-            "line_dash": _AUTO_SPLIT_LINE_DASH,
+            "line_color": _color,
+            "line_dash": _dash,
             "legend_name": f"{parent_zone} (auto-split)",
             "legendgroup": f"auto_split_{parent_zone}",
             "show_legend": first_for_parent,
@@ -272,8 +275,8 @@ def build_zone_boundary_traces(
     Build zone boundary outline traces.
 
     Each zone gets a colored outline based on its config.
-    Auto-split sub-zones are drawn with orange dotted lines matching
-    CZRC second-pass cell splitting visuals.
+    Auto-split sub-zones are drawn with configurable style (default: blue dotted).
+    Style controlled by zone_defaults["auto_split_cell_boundaries"].
 
     Args:
         zones_gdf: GeoDataFrame with zone polygon geometries.
@@ -281,6 +284,7 @@ def build_zone_boundary_traces(
             Optional columns: is_auto_split, parent_zone.
         zones_config: Dict with per-zone config including 'boundary_color'
         zone_defaults: Dict with default settings including 'boundary_linewidth'
+            and optional 'auto_split_cell_boundaries' dict with 'color' and 'dash'
         logger: Optional logger instance
 
     Returns:
@@ -290,13 +294,19 @@ def build_zone_boundary_traces(
         return []
 
     linewidth = zone_defaults.get("boundary_linewidth", 3.0)
+    auto_split_style = zone_defaults.get("auto_split_cell_boundaries")
     traces: List[go.Scatter] = []
     seen_parents: set = set()
     n_auto_split = 0
 
     for zone_idx, (_, row) in enumerate(zones_gdf.iterrows()):
         style = _resolve_zone_boundary_style(
-            row, zones_config, "#000000", seen_parents, zone_idx
+            row,
+            zones_config,
+            "#000000",
+            seen_parents,
+            zone_idx,
+            auto_split_style=auto_split_style,
         )
         geom = row.geometry
         if geom is None or geom.is_empty:

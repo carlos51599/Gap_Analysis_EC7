@@ -2207,7 +2207,10 @@ def _add_czrc_cell_boundaries_trace(
     if not cell_wkts:
         return (start_idx, len(fig.data))
 
-    # Use a distinctive color for cell boundaries - orange dashed
+    # Cell boundary styling - configurable via config.py czrc_cell_boundaries
+    czrc_cell_style = czrc_config.get("czrc_cell_boundaries", {})
+    cell_color = czrc_cell_style.get("color", "orange")
+    cell_dash = czrc_cell_style.get("dash", "dot")
     line_width = czrc_config.get("czrc_line_width", 2)
 
     for i, cell_wkt in enumerate(cell_wkts):
@@ -2222,7 +2225,7 @@ def _add_czrc_cell_boundaries_trace(
                     y=y_coords,
                     mode="lines",
                     fill="none",  # No fill, just boundary
-                    line=dict(color="orange", width=line_width + 1, dash="dot"),
+                    line=dict(color=cell_color, width=line_width + 1, dash=cell_dash),
                     hoverinfo="text",
                     hovertext=f"CZRC Cell {i + 1} ({cell_geom.area / 1e6:.2f} km²)",
                     name=f"Cell {i + 1}",
@@ -3547,11 +3550,19 @@ def _add_zone_boundaries_section(
     if logger:
         logger.info(f"   Adding zone boundary outlines ({len(zones_gdf)} zones)...")
 
+    # Inject auto-split cell boundary style from CONFIG into zone_defaults
+    defaults = dict(zone_defaults or {"boundary_linewidth": 3.0})
+    if "auto_split_cell_boundaries" not in defaults:
+        border_config = CONFIG.get("border_consolidation", {})
+        auto_split_style = border_config.get("auto_split_cell_boundaries")
+        if auto_split_style:
+            defaults["auto_split_cell_boundaries"] = auto_split_style
+
     zone_boundary_traces = _add_zone_boundary_traces(
         fig=fig,
         zones_gdf=zones_gdf,
         zones_config=zones_config or {},
-        zone_defaults=zone_defaults or {"boundary_linewidth": 3.0},
+        zone_defaults=defaults,
         logger=logger,
     )
     return current_idx + zone_boundary_traces
