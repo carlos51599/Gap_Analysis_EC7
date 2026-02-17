@@ -20,8 +20,10 @@ effective_target    = max(base_target,    200 × candidate_spacing²)
 This means the cluster-wide minimum spacing (e.g. 50m from one small zone) inflates or deflates cell areas for the entire cluster. A 200m-only area forced through a 50m-derived threshold gets unnecessarily small cells.
 
 **Required behaviour:** Split decision based purely on area. Use static config values:
-- `max_area_for_direct_ilp_m2 = 2,000,000` (2 km²) — if cluster area exceeds this, split
+- `max_area_for_direct_ilp_m2 = 4,000,000` (4 km²) — if cluster area exceeds this, split
 - `target_cell_area_m2 = 2,000,000` (2 km²) — target size for each cell after splitting
+
+Threshold = 2× target ensures splitting only happens when it produces at least 2 meaningful cells. A 3 km² cluster is solved directly; a 5 km² cluster is split into ~3 cells of ~1.67 km².
 
 No scaling. No spacing dependency. The same thresholds regardless of which zones are in the cluster.
 
@@ -276,13 +278,13 @@ Note: this is still cluster-level, not per-pair. For a first iteration this is s
 Three changes:
 
 1. Set `spacing_relative.enabled = False`
-2. Change `max_area_for_direct_ilp_m2` from `1_000_000` to `2_000_000`
+2. Change `max_area_for_direct_ilp_m2` from `1_000_000` to `4_000_000`
 3. Change `target_cell_area_m2` from `1_000_000` to `2_000_000`
 
 ```python
 "cell_splitting": {
     "enabled": True,
-    "max_area_for_direct_ilp_m2": 2_000_000,  # 2 km²
+    "max_area_for_direct_ilp_m2": 4_000_000,  # 4 km² (split when > 2× target)
     ...
     "spacing_relative": {
         "enabled": False,  # Disabled: Second Pass uses purely area-based splitting.
@@ -303,8 +305,8 @@ Three changes:
 
 | Component | Before | After |
 |-----------|--------|-------|
-| Second Pass split threshold | `max(1M, 400 × s²)` — spacing-dependent | `2,000,000 m²` — static |
-| Second Pass target cell area | `max(1M, 200 × s²)` — spacing-dependent | `2,000,000 m²` — static |
+| Second Pass split threshold | `max(1M, 400 × s²)` — spacing-dependent | `4,000,000 m²` (4 km²) — static |
+| Second Pass target cell area | `max(1M, 200 × s²)` — spacing-dependent | `2,000,000 m²` (2 km²) — static |
 | K-means sample grid spacing | `min(zone_spacings) × 0.5` — cluster-wide min | `sqrt(target) / 10 ≈ 141m` — fixed from area |
 | Per-cell candidate grid density | Cluster-wide `_aggregate_zone_spacings()` | `_compute_local_zone_spacing()` per cell |
 | Third Pass candidate grid density | Cluster-wide `_aggregate_zone_spacings()` | `_compute_local_zone_spacing()` for unified_tier1 |
@@ -312,7 +314,7 @@ Three changes:
 | Coverage radius logic | Per-test-point `required_radius` | Per-test-point `required_radius` (unchanged) |
 | `_build_coverage_dict_variable_test_radii()` | Unchanged | Unchanged |
 | Config `cell_splitting.spacing_relative` | `enabled: True` | `enabled: False` |
-| Config `cell_splitting.max_area_for_direct_ilp_m2` | `1,000,000` (1 km²) | `2,000,000` (2 km²) |
+| Config `cell_splitting.max_area_for_direct_ilp_m2` | `1,000,000` (1 km²) | `4,000,000` (4 km²) |
 | Config `cell_splitting.kmeans_voronoi.target_cell_area_m2` | `1,000,000` (1 km²) | `2,000,000` (2 km²) |
 | Config `zone_auto_splitting.spacing_relative` | `enabled: True` | `enabled: True` (unchanged) |
 
@@ -375,7 +377,7 @@ Step 9: Run full pipeline and compare output
 |------|-----------|--------|------------|
 | `zone_geometries` missing from `czrc_data` | Low | Medium | Fallback to cluster-wide aggregation when None |
 | Tangent-only intersection false positives | Low | Low | Accept — `intersects()` is correct for "which zones touch this cell" |
-| Too many cells for large-spacing clusters (2 km² static threshold) | Medium | Low | This is correct — area-based means more cells in large clusters, but each cell has sparse grid. Total candidate count may decrease. |
+| Too many cells for large-spacing clusters (4 km² static threshold) | Medium | Low | Correct — area-based means only clusters > 4 km² get split. Each cell has local grid density, so total candidate count is controlled. |
 | K-means seeding at fixed density produces bad cell shapes | Low | Low | ~141m sample spacing gives ~100 seeds per 2 km² cell — plenty for good Voronoi cells |
 
 ---
