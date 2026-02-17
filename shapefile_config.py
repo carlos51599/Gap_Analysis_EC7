@@ -77,13 +77,13 @@ SHAPEFILE_CONFIG: Dict[str, Any] = {
         # Single zone - no per-zone breakdown (features identified by feature ID)
         # ───────────────────────────────────────────────────────────────────
         "embankment_zones": {
-            "enabled": False,
+            "enabled": True,
             "file_path": "Project Shapefiles/Embankment_DF2F.shp",
             "display_name": "Embankment",
             "layer_order": 10,  # Drawn on top
             "use_for_coverage": True,  # Used for coverage analysis
             "name_column": None,  # No per-zone breakdown - single max_spacing for whole shapefile
-            "max_spacing_m": 100.0,  # Single spacing for all features
+            "max_spacing_m": 50.0,  # EC7: 1 per 50m along reservoir alignment [1]
             "order": 2,  # Priority for overlap resolution (lower = higher priority, used when spacing equal)
             "rendering": {
                 "boundary_color": "#FF0000",  # Red
@@ -125,7 +125,7 @@ SHAPEFILE_CONFIG: Dict[str, Any] = {
         # Display layer: GIR Boundary (display only, not used in analysis)
         # ───────────────────────────────────────────────────────────────────
         "gir_boundary": {
-            "enabled": False,
+            "enabled": True,
             "file_path": "Project Shapefiles/GIR_LocationGroup_Zone_250923.shp",
             "display_name": "GIR Boundary",
             "layer_order": 3,  # Drawn behind all coverage layers
@@ -141,13 +141,13 @@ SHAPEFILE_CONFIG: Dict[str, Any] = {
         # Coverage layer: Buildings (used for coverage analysis)
         # ───────────────────────────────────────────────────────────────────
         "buildings": {
-            "enabled": False,
+            "enabled": True,
             "file_path": "Project Shapefiles/Buildings.shp",
             "display_name": "Buildings",
             "layer_order": 8,
             "use_for_coverage": True,
             "name_column": None,
-            "max_spacing_m": 100.0,
+            "max_spacing_m": 30.0,  # EC7: 1 per 30m grid [1]
             "order": 3,
             "rendering": {
                 "boundary_color": "#FF8C00",  # Dark orange
@@ -159,13 +159,13 @@ SHAPEFILE_CONFIG: Dict[str, Any] = {
         # Coverage layer: Reservoir Tunnel (used for coverage analysis)
         # ───────────────────────────────────────────────────────────────────
         "reservoir_tunnel": {
-            "enabled": False,
+            "enabled": True,
             "file_path": "Project Shapefiles/ReservoirTunnel.shp",
             "display_name": "Reservoir Tunnel",
             "layer_order": 7,
             "use_for_coverage": True,
             "name_column": None,
-            "max_spacing_m": 100.0,
+            "max_spacing_m": 25.0,  # EC7: 1 per 25m grid, Water Conveyance basement logic [1]
             "order": 4,
             "rendering": {
                 "boundary_color": "#228B22",  # Forest green
@@ -177,7 +177,7 @@ SHAPEFILE_CONFIG: Dict[str, Any] = {
         # Coverage layer: W&B Canal Model (used for coverage analysis)
         # ───────────────────────────────────────────────────────────────────
         "wandb_canal_model": {
-            "enabled": False,
+            "enabled": True,
             "file_path": "Project Shapefiles/WAndBCanalModel.shp",
             "display_name": "W&B Canal Model",
             "layer_order": 6,
@@ -195,7 +195,7 @@ SHAPEFILE_CONFIG: Dict[str, Any] = {
         # Coverage layer: Water Course Diversion (used for coverage analysis)
         # ───────────────────────────────────────────────────────────────────
         "water_course_diversion": {
-            "enabled": False,
+            "enabled": True,
             "file_path": "Project Shapefiles/WaterCourseDiversion.shp",
             "display_name": "Water Course Diversion",
             "layer_order": 4,
