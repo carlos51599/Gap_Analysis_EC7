@@ -354,9 +354,11 @@ echo.
 echo   To stop: Close this window or press Ctrl+C
 echo.
 
-REM Run the server from the same directory as this batch file
-REM (The exe opens the browser itself once it's ready to accept connections)
-"%~dp0zone_coverage_server.exe"
+REM Set portable root so the server can find Saved Positions at top level
+set "ZCVIZ_ROOT=%~dp0"
+
+REM Run the server from the _engine subfolder
+"%~dp0_engine\zone_coverage_server.exe"
 
 echo.
 echo Server stopped.
@@ -392,13 +394,19 @@ SAVING YOUR CHANGES:
 TROUBLESHOOTING:
 - If browser doesn't open: manually go to http://127.0.0.1:5051
 - If "port in use" error: close the server window first, then try again
-- If blocked by antivirus: add exception for zone_coverage_server.exe
+- If blocked by antivirus: add exception for _engine/zone_coverage_server.exe
 - If SmartScreen warning: click "More info" then "Run anyway"
 - If "Access Denied": right-click START.bat -> Run as administrator
 
 DATA:
-- Current data is in Data/zone_coverage_data.json
+- Current data is in _engine/Data/zone_coverage_data.json
 - To update data, replace this file and restart the server
+
+FOLDER STRUCTURE:
+- START.bat           Launch the server
+- README.txt          This file
+- Saved Positions/    Your saved borehole CSVs
+- _engine/            Server runtime (do not modify)
 
 Generated: {timestamp}
 Version: 1.0
@@ -645,10 +653,12 @@ def build_portable(
     if exe_dir is None:
         raise RuntimeError("PyInstaller build failed - see errors above")
 
-    # === Step 4: Copy --onedir output to portable folder ===
-    logger.info("\U0001f4e6 Copying PyInstaller output to portable folder...")
+    # === Step 4: Copy --onedir output to _engine subfolder ===
+    engine_path = output_path / "_engine"
+    engine_path.mkdir(parents=True, exist_ok=True)
+    logger.info("\U0001f4e6 Copying PyInstaller output to _engine/ subfolder...")
     for item in exe_dir.iterdir():
-        dst = output_path / item.name
+        dst = engine_path / item.name
         if item.is_dir():
             if dst.exists():
                 shutil.rmtree(dst, ignore_errors=True)
@@ -660,7 +670,7 @@ def build_portable(
     if include_data:
         data_src = script_dir / "Output" / "zone_coverage_data.json"
         if data_src.exists():
-            data_dst = output_path / "Data"
+            data_dst = engine_path / "Data"
             data_dst.mkdir(exist_ok=True)
             shutil.copy2(data_src, data_dst / "zone_coverage_data.json")
             logger.info(

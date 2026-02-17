@@ -210,8 +210,14 @@ class DataLoader:
         Returns:
             GeoDataFrame in BNG if valid CSV found, None otherwise.
         """
-        # Look for "Saved Positions" folder at portable root (next to Data/)
-        saved_dir = self.data_dir.parent / "Saved Positions"
+        # ZCVIZ_ROOT is set by START.bat to the portable distribution root.
+        # When present, Saved Positions lives at root level (next to START.bat).
+        # Fallback: look next to Data/ (legacy flat layout).
+        zcviz_root = os.environ.get("ZCVIZ_ROOT")
+        if zcviz_root:
+            saved_dir = Path(zcviz_root.rstrip("\\/")) / "Saved Positions"
+        else:
+            saved_dir = self.data_dir.parent / "Saved Positions"
         if not saved_dir.exists():
             return None
 
