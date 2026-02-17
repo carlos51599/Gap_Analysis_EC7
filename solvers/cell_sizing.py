@@ -57,7 +57,7 @@ def compute_effective_cell_thresholds(
     if not spacing_relative_sizing:
         return base_threshold_m2, base_target_area_m2
 
-    spacing_sq = candidate_grid_spacing_m ** 2
+    spacing_sq = candidate_grid_spacing_m**2
 
     effective_target = max(
         base_target_area_m2,

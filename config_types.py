@@ -620,8 +620,8 @@ class SpacingRelativeSizingConfig:
         """Create SpacingRelativeSizingConfig from config dictionary."""
         return cls(
             enabled=d.get("enabled", True),
-            cell_area_multiplier=d.get("cell_area_multiplier", 400.0),
-            threshold_multiplier=d.get("threshold_multiplier", 800.0),
+            cell_area_multiplier=d.get("cell_area_multiplier", 200.0),
+            threshold_multiplier=d.get("threshold_multiplier", 400.0),
         )
 
 
@@ -868,7 +868,7 @@ class AppConfig:
                 config_dict.get("border_consolidation", {})
             ),
             zone_auto_splitting=ZoneAutoSplittingConfig.from_dict(
-                config_dict.get("ilp_solver", {}).get("zone_auto_splitting", {})
+                config_dict.get("czrc_optimization", {}).get("zone_auto_splitting", {})
             ),
             _raw_config=config_dict,
         )

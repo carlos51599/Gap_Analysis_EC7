@@ -1785,12 +1785,8 @@ def _compute_cluster_cell_thresholds(
         base_threshold_m2=base_threshold_m2,
         base_target_area_m2=base_target_area_m2,
         spacing_relative_sizing=spacing_relative_config.get("enabled", True),
-        cell_area_multiplier=spacing_relative_config.get(
-            "cell_area_multiplier", 400.0
-        ),
-        threshold_multiplier=spacing_relative_config.get(
-            "threshold_multiplier", 800.0
-        ),
+        cell_area_multiplier=spacing_relative_config.get("cell_area_multiplier", 200.0),
+        threshold_multiplier=spacing_relative_config.get("threshold_multiplier", 400.0),
     )
 
 
@@ -1944,7 +1940,8 @@ def check_and_split_large_cluster(
         candidate_positions = np.array([[p.x, p.y] for p in sample_grid])
 
         cells = split_into_voronoi_cells(
-            unified_tier1, candidate_positions,
+            unified_tier1,
+            candidate_positions,
             _override_target_cell_area(cell_config, effective_target),
             logger,
         )

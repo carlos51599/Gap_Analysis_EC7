@@ -362,7 +362,7 @@ def get_zones_for_coverage_gdf(
     # Large zones are split into smaller sub-zones for tractable first-pass ILP.
     # Sub-zones become first-class zones so CZRC consolidates their boundaries.
     auto_split_config = ZoneAutoSplittingConfig.from_dict(
-        CONFIG.get("ilp_solver", {}).get("zone_auto_splitting", {})
+        CONFIG.get("czrc_optimization", {}).get("zone_auto_splitting", {})
     )
     if auto_split_config.enabled:
         result = expand_zones_with_auto_splitting(

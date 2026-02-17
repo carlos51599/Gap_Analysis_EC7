@@ -260,7 +260,10 @@ def expand_zones_with_auto_splitting(
         )
 
         cells = _split_single_zone(
-            zone_geom, zone_spacing, config, log,
+            zone_geom,
+            zone_spacing,
+            config,
+            log,
             effective_target_area_m2=effective_target,
         )
 
