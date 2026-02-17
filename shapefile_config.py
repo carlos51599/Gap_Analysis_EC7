@@ -210,6 +210,24 @@ SHAPEFILE_CONFIG: Dict[str, Any] = {
             "features": {},
         },
         # ───────────────────────────────────────────────────────────────────
+        # Coverage layer: Borrow Pit (used for coverage analysis)
+        # ───────────────────────────────────────────────────────────────────
+        "borrow_pit": {
+            "enabled": True,
+            "file_path": "Project Shapefiles/BorrowPit.shp",
+            "display_name": "Borrow Pit",
+            "layer_order": 5,
+            "use_for_coverage": True,
+            "name_column": None,
+            "max_spacing_m": 250.0,  # EC7: 1 per 250m grid [3] (engineering best judgement)
+            "order": 7,
+            "rendering": {
+                "boundary_color": "#A0522D",  # Sienna brown
+                "boundary_linewidth": 2.0,
+            },
+            "features": {},
+        },
+        # ───────────────────────────────────────────────────────────────────
         # MODIFICATION POINT: Add new shapefiles below
         # ───────────────────────────────────────────────────────────────────
     },
