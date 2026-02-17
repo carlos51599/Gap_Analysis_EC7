@@ -299,6 +299,8 @@ def build_zone_boundary_traces(
             row, zones_config, "#000000", seen_parents, zone_idx
         )
         geom = row.geometry
+        if geom is None or geom.is_empty:
+            continue
         if style["is_auto_split"]:
             n_auto_split += 1
 
@@ -311,6 +313,10 @@ def build_zone_boundary_traces(
 
         first_poly_for_zone = True
         for poly in polygons:
+            # Skip empty/degenerate polygons (can occur after zone preprocessing)
+            if poly.is_empty or poly.exterior is None or len(poly.exterior.coords) < 3:
+                continue
+
             # Collect all rings (exterior + interior) with None separators
             all_x: List[float] = []
             all_y: List[float] = []
