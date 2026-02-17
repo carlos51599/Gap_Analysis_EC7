@@ -246,7 +246,7 @@ def sample_boreholes_along_centreline(
                 "y": y,
                 "coverage_radius": coverage_radius,
                 "source_pass": "First Pass",
-                "status": "locked",
+                "status": "centreline",
                 "zone_id": zone_id,
                 "is_centreline": True,
             }

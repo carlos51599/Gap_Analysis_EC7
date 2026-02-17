@@ -72,6 +72,7 @@ class BoreholeStatus(Enum):
     ADDED = "added"  # Added by CZRC optimization
     REMOVED = "removed"  # Eliminated by optimization
     LOCKED = "locked"  # Fixed, cannot be removed
+    CENTRELINE = "centreline"  # Centreline-constrained borehole
 
     @classmethod
     def from_string(cls, s: str) -> "BoreholeStatus":
