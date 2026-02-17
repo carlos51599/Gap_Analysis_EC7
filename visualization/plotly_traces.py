@@ -166,6 +166,101 @@ def build_hexagon_grid_trace(
 # ZONE BOUNDARY TRACES
 # ===========================================================================
 
+# --- Auto-split cell boundary style (matches CZRC second-pass cell splitting) ---
+_AUTO_SPLIT_LINE_COLOR = "orange"
+_AUTO_SPLIT_LINE_DASH = "dot"
+
+
+def _resolve_zone_boundary_style(
+    row: Any,
+    zones_config: Dict[str, Any],
+    default_color: str,
+    seen_parents: set,
+    zone_idx: int,
+) -> Dict[str, Any]:
+    """
+    Resolve visual style for a single zone boundary row.
+
+    Auto-split sub-zones get orange dotted lines matching CZRC cell splitting.
+    Regular zones get solid lines with per-zone config color.
+
+    Args:
+        row: GeoDataFrame row with zone data.
+        zones_config: Per-zone visualization config.
+        default_color: Fallback boundary color.
+        seen_parents: Set of parent zone names already encountered (mutated).
+        zone_idx: Index of the zone in iteration order.
+
+    Returns:
+        Dict with keys: zone_name, line_color, line_dash, legend_name,
+        legendgroup, show_legend, is_auto_split, parent_zone.
+    """
+    zone_name = row.get("zone_name", row.get("Name", f"Zone {zone_idx + 1}"))
+    is_auto_split = bool(row.get("is_auto_split", False))
+
+    if is_auto_split:
+        parent_zone = row.get("parent_zone", zone_name)
+        first_for_parent = parent_zone not in seen_parents
+        seen_parents.add(parent_zone)
+        return {
+            "zone_name": zone_name,
+            "line_color": _AUTO_SPLIT_LINE_COLOR,
+            "line_dash": _AUTO_SPLIT_LINE_DASH,
+            "legend_name": f"{parent_zone} (auto-split)",
+            "legendgroup": f"auto_split_{parent_zone}",
+            "show_legend": first_for_parent,
+            "is_auto_split": True,
+            "parent_zone": parent_zone,
+        }
+
+    zone_cfg = zones_config.get(zone_name, {})
+    return {
+        "zone_name": zone_name,
+        "line_color": zone_cfg.get("boundary_color", default_color),
+        "line_dash": "solid",
+        "legend_name": zone_name,
+        "legendgroup": f"zone_{zone_name}",
+        "show_legend": True,
+        "is_auto_split": False,
+        "parent_zone": None,
+    }
+
+
+def _build_zone_hover_template(
+    style: Dict[str, Any],
+    poly_area_m2: float,
+) -> str:
+    """
+    Build hover template string for a zone boundary polygon.
+
+    Auto-split cells include area and parent zone info, matching
+    CZRC cell splitting hover style.
+
+    Args:
+        style: Style dict from _resolve_zone_boundary_style().
+        poly_area_m2: Area of the polygon in square meters.
+
+    Returns:
+        Plotly hovertemplate string.
+    """
+    zone_name = style["zone_name"]
+    if style["is_auto_split"]:
+        area_km2 = poly_area_m2 / 1e6
+        return (
+            f"<b>{zone_name}</b><br>"
+            f"Area: {area_km2:.2f} km²<br>"
+            f"Parent: {style['parent_zone']}<br>"
+            "Easting: %{x:,.0f}<br>"
+            "Northing: %{y:,.0f}<br>"
+            "<extra></extra>"
+        )
+    return (
+        f"<b>{zone_name}</b><br>"
+        "Easting: %{x:,.0f}<br>"
+        "Northing: %{y:,.0f}<br>"
+        "<extra></extra>"
+    )
+
 
 def build_zone_boundary_traces(
     zones_gdf: GeoDataFrame,
@@ -177,9 +272,13 @@ def build_zone_boundary_traces(
     Build zone boundary outline traces.
 
     Each zone gets a colored outline based on its config.
+    Auto-split sub-zones are drawn with orange dotted lines matching
+    CZRC second-pass cell splitting visuals.
 
     Args:
-        zones_gdf: GeoDataFrame with zone polygon geometries with 'Name' column
+        zones_gdf: GeoDataFrame with zone polygon geometries.
+            Expected columns: zone_name (or Name), geometry.
+            Optional columns: is_auto_split, parent_zone.
         zones_config: Dict with per-zone config including 'boundary_color'
         zone_defaults: Dict with default settings including 'boundary_linewidth'
         logger: Optional logger instance
@@ -191,17 +290,17 @@ def build_zone_boundary_traces(
         return []
 
     linewidth = zone_defaults.get("boundary_linewidth", 3.0)
-    default_color = "#000000"  # Black default
-    traces = []
-    zone_idx = 0
+    traces: List[go.Scatter] = []
+    seen_parents: set = set()
+    n_auto_split = 0
 
-    for _, row in zones_gdf.iterrows():
-        zone_name = row.get("Name", f"Zone {zone_idx + 1}")
+    for zone_idx, (_, row) in enumerate(zones_gdf.iterrows()):
+        style = _resolve_zone_boundary_style(
+            row, zones_config, "#000000", seen_parents, zone_idx
+        )
         geom = row.geometry
-
-        # Get color from config
-        zone_cfg = zones_config.get(zone_name, {})
-        color = zone_cfg.get("boundary_color", default_color)
+        if style["is_auto_split"]:
+            n_auto_split += 1
 
         # Handle both Polygon and MultiPolygon
         polygons = []
@@ -210,9 +309,7 @@ def build_zone_boundary_traces(
         elif geom.geom_type == "MultiPolygon":
             polygons = list(geom.geoms)
 
-        # Track if this is the first polygon for this zone (for legend)
         first_poly_for_zone = True
-
         for poly in polygons:
             # Collect all rings (exterior + interior) with None separators
             all_x: List[float] = []
@@ -237,32 +334,28 @@ def build_zone_boundary_traces(
                 all_x.extend(int_x)
                 all_y.extend(int_y)
 
+            hover = _build_zone_hover_template(style, poly.area)
             trace = go.Scatter(
                 x=all_x,
                 y=all_y,
                 mode="lines",
                 line=dict(
-                    color=color,
+                    color=style["line_color"],
                     width=linewidth,
+                    dash=style["line_dash"],
                 ),
-                hovertemplate=(
-                    f"<b>{zone_name}</b><br>"
-                    "Easting: %{x:,.0f}<br>"
-                    "Northing: %{y:,.0f}<br>"
-                    "<extra></extra>"
-                ),
-                name=zone_name,
-                legendgroup=f"zone_{zone_name}",
-                showlegend=first_poly_for_zone,
+                hovertemplate=hover,
+                name=style["legend_name"],
+                legendgroup=style["legendgroup"],
+                showlegend=style["show_legend"] and first_poly_for_zone,
                 visible=True,
             )
             traces.append(trace)
             first_poly_for_zone = False
 
-        zone_idx += 1
-
     if logger and traces:
-        logger.info(f"   Built {len(traces)} zone boundary traces")
+        auto_info = f" ({n_auto_split} auto-split cells)" if n_auto_split else ""
+        logger.info(f"   Built {len(traces)} zone boundary traces{auto_info}")
 
     return traces
 
