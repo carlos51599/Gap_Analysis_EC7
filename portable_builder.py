@@ -197,10 +197,10 @@ EXCLUDE_MODULES = [
     "hvplot",
     "datashader",
     "colorcet",
-    "panel",         # Web dashboard framework - not needed, deeply nested paths
-    "param",         # Panel dependency
-    "pyviz_comms",   # Panel dependency
-    "perspective",   # Panel/perspective-viewer - breaks MAX_PATH on Windows
+    "panel",  # Web dashboard framework - not needed, deeply nested paths
+    "param",  # Panel dependency
+    "pyviz_comms",  # Panel dependency
+    "perspective",  # Panel/perspective-viewer - breaks MAX_PATH on Windows
     # === SCIENTIFIC (NOT NEEDED - only using basic geopandas/shapely) ===
     "scipy",
     "sklearn",
