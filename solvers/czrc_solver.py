@@ -2124,8 +2124,18 @@ def check_and_split_large_cluster(
         # Third Pass should filter First Pass test points to its Tier 1 area
         # and generate fresh Tier 2 ring test points for its Tier 2 area
 
-        # Get spacing from cluster (use overall_r_max as uniform spacing for cells)
+        # overall_r_max = max zone spacing (for tier boundaries)
+        # min_grid_spacing = aggregated spacing (for candidate grid density)
         cell_spacing = cluster.get("overall_r_max", 100.0)
+        # FIX: Use aggregated zone spacings for grid density (same as second pass)
+        # Previously used overall_r_max (max), making grid too sparse
+        exclusion_method = _get_cross_zone_exclusion_method(config)
+        all_cluster_zones: set = set()
+        for pk in cluster.get("pair_keys", []):
+            all_cluster_zones.update(parse_pair_key(pk, zone_spacings))
+        min_grid_spacing = _aggregate_zone_spacings(
+            zone_spacings, list(all_cluster_zones), exclusion_method
+        )
 
         # Build cluster_key for meaningful log file naming
         local_cluster_key = "+".join(sorted(cluster["pair_keys"]))
@@ -2151,6 +2161,7 @@ def check_and_split_large_cluster(
             cluster_idx=cluster_idx,
             cluster_key=local_cluster_key,
             second_pass_candidates=true_second_pass_output,  # For grey marker visualization
+            min_grid_spacing=min_grid_spacing,  # Aggregated spacing for grid density
         )
 
         if cell_czrc_stats.get("status") == "success":
@@ -2310,6 +2321,7 @@ def solve_cell_cell_czrc(
     logger: Optional[logging.Logger] = None,
     highs_log_file: Optional[str] = None,
     second_pass_candidates: Optional[List[Dict[str, Any]]] = None,
+    min_grid_spacing: Optional[float] = None,
 ) -> Tuple[
     List[Dict[str, Any]],
     List[Dict[str, Any]],
@@ -2327,7 +2339,7 @@ def solve_cell_cell_czrc(
         czrc_region: Cell-cell coverage cloud intersection
         cell_boreholes: Boreholes output from cell processing (input to third pass)
         cell_test_points: Test points from cell processing
-        spacing: max_spacing_m (uniform for cells in same cluster)
+        spacing: max_spacing_m (for tier boundaries and coverage radius)
         config: Cell CZRC config section
         zones_clip_geometry: Optional geometry to clip test points to (actual zone shapefile)
         logger: Optional logger
@@ -2335,6 +2347,8 @@ def solve_cell_cell_czrc(
         second_pass_candidates: Second Pass OUTPUT boreholes (survivors + added) for
             grey marker visualization. Filtered to Third Pass Tier 1 before display.
             If None, uses bh_candidates (cell_boreholes in Tier 1) instead.
+        min_grid_spacing: Aggregated zone spacing for candidate grid density.
+            When None, falls back to spacing (legacy behavior).
 
     Returns:
         (selected, removed, added, stats) tuple
@@ -2462,8 +2476,11 @@ def solve_cell_cell_czrc(
     )
 
     # Step 5: Prepare candidates (REUSE)
+    # Use min_grid_spacing for candidate grid density (aggregated from zone spacings)
+    # Falls back to spacing (overall_r_max) if not provided (legacy behavior)
+    grid_density_spacing = min_grid_spacing if min_grid_spacing is not None else spacing
     candidates, _ = _prepare_candidates_for_ilp(
-        tier1_region, bh_candidates, r_max, spacing, config
+        tier1_region, bh_candidates, r_max, grid_density_spacing, config
     )
 
     # Step 6: Solve ILP (REUSE)
@@ -2624,6 +2641,7 @@ def run_cell_czrc_pass(
     cluster_idx: int = 0,
     cluster_key: Optional[str] = None,
     second_pass_candidates: Optional[List[Dict[str, Any]]] = None,
+    min_grid_spacing: Optional[float] = None,
 ) -> Tuple[
     List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]
 ]:
@@ -2634,7 +2652,7 @@ def run_cell_czrc_pass(
         cell_wkts: WKT strings of cell geometries (from cluster_stats["cell_wkts"])
         cell_boreholes: Boreholes selected by cell processing
         cell_test_points: Test points from cell processing
-        spacing: max_spacing_m (uniform for cells in cluster)
+        spacing: max_spacing_m (used for tier boundaries and coverage radius)
         config: Cell CZRC config section
         zones_clip_geometry: Optional geometry to clip cells to (actual zone shapefile)
         logger: Optional logger
@@ -2644,6 +2662,8 @@ def run_cell_czrc_pass(
         second_pass_candidates: Second Pass OUTPUT boreholes (survivors + added) for
             grey marker visualization. These are filtered to Third Pass Tier 1 before
             display. If None, uses cell_boreholes for visualization.
+        min_grid_spacing: Aggregated zone spacing for candidate grid density.
+            When None, falls back to spacing (legacy behavior).
 
     Returns:
         (final_boreholes, all_removed, all_added, stats) tuple
@@ -2748,6 +2768,7 @@ def run_cell_czrc_pass(
             logger=logger,
             highs_log_file=highs_log_file,
             second_pass_candidates=second_pass_candidates,
+            min_grid_spacing=min_grid_spacing,
         )
 
         if stats.get("status") == "success":
