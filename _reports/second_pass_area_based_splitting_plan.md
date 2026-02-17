@@ -19,9 +19,9 @@ effective_target    = max(base_target,    200 × candidate_spacing²)
 
 This means the cluster-wide minimum spacing (e.g. 50m from one small zone) inflates or deflates cell areas for the entire cluster. A 200m-only area forced through a 50m-derived threshold gets unnecessarily small cells.
 
-**Required behaviour:** Split decision based purely on area. Use the static config values directly:
-- `max_area_for_direct_ilp_m2 = 1,000,000` (1 km²) — if cluster area exceeds this, split
-- `target_cell_area_m2 = 1,000,000` (1 km²) — target size for each cell after splitting
+**Required behaviour:** Split decision based purely on area. Use static config values:
+- `max_area_for_direct_ilp_m2 = 2,000,000` (2 km²) — if cluster area exceeds this, split
+- `target_cell_area_m2 = 2,000,000` (2 km²) — target size for each cell after splitting
 
 No scaling. No spacing dependency. The same thresholds regardless of which zones are in the cluster.
 
@@ -78,19 +78,26 @@ This also removes the log line about spacing-relative sizing (lines 1879-1884) a
 **File:** `czrc_solver.py`  
 **Function:** `check_and_split_large_cluster()` (lines 1918-1940)
 
-Currently the K-means sample grid is generated at `min_zone_spacing × 0.5`, which means a cluster with mixed 50m/200m zones gets a globally dense 25m grid for seed placement.
+**What is the K-means sample grid?** When the cluster needs splitting, the K-means + Voronoi method works in three sub-steps:
+1. Generate a hexagonal grid of points filling the cluster geometry (the "sample grid")
+2. Run K-means on these points to find N centroids (N = ceil(area / target_cell_area))
+3. Use the centroids as Voronoi seeds to create cell boundaries
 
-**Change:** Use a fixed sample grid spacing for K-means seeding that doesn't depend on zone spacing. A reasonable default: derive from the target cell area.
+The sample grid is ONLY for determining cell shapes — it is NOT the ILP candidate grid. It just needs enough points for K-means to converge on good centroids.
+
+**Current problem:** The sample grid is generated at `min_zone_spacing × 0.5` (e.g. 25m for a cluster containing a 50m zone). This creates thousands of sample points when K-means only needs ~100 per target cell to converge.
+
+**Change:** Use a fixed sample grid spacing derived from the target cell area:
 
 ```python
 # Fixed sample grid for K-means seeding
 # Grid spacing = sqrt(target_cell_area) / 10 gives ~100 seeds per target cell
-# For 1 km² target: sqrt(1e6) / 10 = 100m spacing
+# For 2 km² target: sqrt(2e6) / 10 ≈ 141m spacing
 import math
 sample_spacing = math.sqrt(effective_target) / 10.0
 ```
 
-This gives uniform cell shapes regardless of zone composition. The sample grid is only for K-means seed placement — it has nothing to do with the ILP candidate grid.
+This gives uniform cell shapes regardless of zone composition.
 
 ### Change 3: New helper `_compute_local_zone_spacing()`
 
@@ -266,19 +273,28 @@ Note: this is still cluster-level, not per-pair. For a first iteration this is s
 **File:** `config.py`  
 **Location:** Lines 817-823 (cell_splitting.spacing_relative)
 
-Either:
-- **Option A:** Remove the `spacing_relative` block from `cell_splitting` config entirely
-- **Option B:** Set `"enabled": False` and add a comment explaining why
+Three changes:
 
-**Recommendation:** Option B — keeps the config structure visible for reference and makes the change reversible.
+1. Set `spacing_relative.enabled = False`
+2. Change `max_area_for_direct_ilp_m2` from `1_000_000` to `2_000_000`
+3. Change `target_cell_area_m2` from `1_000_000` to `2_000_000`
 
 ```python
-"spacing_relative": {
-    "enabled": False,  # Disabled: Second Pass uses purely area-based splitting.
-    # First Pass zone_auto_splitting retains spacing-relative sizing.
-    "cell_area_multiplier": 200,
-    "threshold_multiplier": 400,
-},
+"cell_splitting": {
+    "enabled": True,
+    "max_area_for_direct_ilp_m2": 2_000_000,  # 2 km²
+    ...
+    "spacing_relative": {
+        "enabled": False,  # Disabled: Second Pass uses purely area-based splitting.
+        # First Pass zone_auto_splitting retains spacing-relative sizing.
+        "cell_area_multiplier": 200,
+        "threshold_multiplier": 400,
+    },
+    "kmeans_voronoi": {
+        "target_cell_area_m2": 2_000_000,  # 2 km² per cell
+        ...
+    },
+}
 ```
 
 ---
@@ -287,15 +303,17 @@ Either:
 
 | Component | Before | After |
 |-----------|--------|-------|
-| Second Pass split threshold | `max(1M, 400 × s²)` — spacing-dependent | `1,000,000 m²` — static |
-| Second Pass target cell area | `max(1M, 200 × s²)` — spacing-dependent | `1,000,000 m²` — static |
-| K-means sample grid spacing | `min(zone_spacings) × 0.5` — cluster-wide min | `sqrt(target) / 10` — fixed from area |
+| Second Pass split threshold | `max(1M, 400 × s²)` — spacing-dependent | `2,000,000 m²` — static |
+| Second Pass target cell area | `max(1M, 200 × s²)` — spacing-dependent | `2,000,000 m²` — static |
+| K-means sample grid spacing | `min(zone_spacings) × 0.5` — cluster-wide min | `sqrt(target) / 10 ≈ 141m` — fixed from area |
 | Per-cell candidate grid density | Cluster-wide `_aggregate_zone_spacings()` | `_compute_local_zone_spacing()` per cell |
 | Third Pass candidate grid density | Cluster-wide `_aggregate_zone_spacings()` | `_compute_local_zone_spacing()` for unified_tier1 |
 | First Pass zone_auto_splitting | Spacing-relative (unchanged) | Spacing-relative (unchanged) |
 | Coverage radius logic | Per-test-point `required_radius` | Per-test-point `required_radius` (unchanged) |
 | `_build_coverage_dict_variable_test_radii()` | Unchanged | Unchanged |
 | Config `cell_splitting.spacing_relative` | `enabled: True` | `enabled: False` |
+| Config `cell_splitting.max_area_for_direct_ilp_m2` | `1,000,000` (1 km²) | `2,000,000` (2 km²) |
+| Config `cell_splitting.kmeans_voronoi.target_cell_area_m2` | `1,000,000` (1 km²) | `2,000,000` (2 km²) |
 | Config `zone_auto_splitting.spacing_relative` | `enabled: True` | `enabled: True` (unchanged) |
 
 ---
@@ -304,8 +322,8 @@ Either:
 
 | File | What Changes |
 |------|-------------|
-| `czrc_solver.py` | New `_compute_local_zone_spacing()` (~25 lines), remove spacing-relative from `check_and_split_large_cluster()`, add `zone_geometries` parameter plumbing, per-cell local spacing, `override_min_spacing` in `solve_czrc_ilp_for_cluster()`, Third Pass local spacing |
-| `config.py` | Set `cell_splitting.spacing_relative.enabled = False` |
+| `czrc_solver.py` | New `_compute_local_zone_spacing()` (~25 lines), remove spacing-relative from `check_and_split_large_cluster()`, fix K-means sample grid to fixed density, add `zone_geometries` parameter plumbing, per-cell local spacing, `override_min_spacing` in `solve_czrc_ilp_for_cluster()`, Third Pass local spacing |
+| `config.py` | Set `cell_splitting.spacing_relative.enabled = False`, `max_area_for_direct_ilp_m2 = 2_000_000`, `target_cell_area_m2 = 2_000_000` |
 
 ---
 
@@ -357,8 +375,8 @@ Step 9: Run full pipeline and compare output
 |------|-----------|--------|------------|
 | `zone_geometries` missing from `czrc_data` | Low | Medium | Fallback to cluster-wide aggregation when None |
 | Tangent-only intersection false positives | Low | Low | Accept — `intersects()` is correct for "which zones touch this cell" |
-| Too many cells for large-spacing clusters (1 km² static threshold) | Medium | Low | This is correct — area-based means more cells in large clusters, but each cell has sparse grid. Total candidate count may decrease. |
-| K-means seeding at fixed density produces bad cell shapes | Low | Low | 100m sample spacing gives ~100 seeds per km² — plenty for good Voronoi cells |
+| Too many cells for large-spacing clusters (2 km² static threshold) | Medium | Low | This is correct — area-based means more cells in large clusters, but each cell has sparse grid. Total candidate count may decrease. |
+| K-means seeding at fixed density produces bad cell shapes | Low | Low | ~141m sample spacing gives ~100 seeds per 2 km² cell — plenty for good Voronoi cells |
 
 ---
 
