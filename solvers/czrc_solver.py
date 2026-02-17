@@ -1860,6 +1860,7 @@ def check_and_split_large_cluster(
     czrc_cache: Optional["CZRCCacheManager"] = None,
     highs_log_folder: Optional[str] = None,
     cluster_idx: int = 0,
+    zone_geometries: Optional[Dict[str, BaseGeometry]] = None,
 ) -> Tuple[
     List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]
 ]:
@@ -1882,6 +1883,8 @@ def check_and_split_large_cluster(
         czrc_cache: Optional CZRCCacheManager for intra-run result caching
         highs_log_folder: Optional folder for HiGHS log files
         cluster_idx: Index of this cluster (for unique log file naming)
+        zone_geometries: Optional dict mapping zone_name -> Shapely geometry
+            for per-cell local spacing computation
 
     Returns:
         (selected, removed, added, stats) tuple - same as solve_czrc_ilp_for_cluster
@@ -1991,6 +1994,16 @@ def check_and_split_large_cluster(
         cell_cluster = _create_cell_cluster(cell_geom, cluster, i)
         # Use cluster_idx + cell_idx for unique log file naming
         cell_log_idx = cluster_idx * 100 + i  # e.g., cluster 2, cell 3 -> 203
+
+        # Compute per-cell local zone spacing for candidate grid density
+        local_spacing: Optional[float] = None
+        if zone_geometries:
+            exclusion_method = _get_cross_zone_exclusion_method(config)
+            local_spacing = _compute_local_zone_spacing(
+                cell_geom, zone_geometries, zone_spacings, exclusion_method
+            )
+            log.info(f"   📐 Cell {i}: local_spacing={local_spacing:.0f}m")
+
         selected, removed, added, stats = solve_czrc_ilp_for_cluster(
             cell_cluster,
             zone_spacings,
@@ -2002,6 +2015,7 @@ def check_and_split_large_cluster(
             czrc_cache,
             highs_log_folder,
             cell_log_idx,
+            override_min_spacing=local_spacing,
         )
 
         # Deduplicate results across cells
@@ -2923,6 +2937,7 @@ def solve_czrc_ilp_for_cluster(
     czrc_cache: Optional["CZRCCacheManager"] = None,
     highs_log_folder: Optional[str] = None,
     cluster_idx: int = 0,
+    override_min_spacing: Optional[float] = None,
 ) -> Tuple[
     List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]
 ]:
@@ -2945,6 +2960,9 @@ def solve_czrc_ilp_for_cluster(
             definition (tier1 geometry, spacings, unsatisfied test points).
         highs_log_folder: Optional folder for HiGHS log files
         cluster_idx: Index for unique log file naming (e.g., "czrc_cluster_003.log")
+        override_min_spacing: Optional per-cell local spacing override. When
+            provided, used for candidate grid density instead of aggregating
+            from all cluster zones.
 
     Returns:
         (selected, removed, added, stats) tuple
@@ -3010,15 +3028,17 @@ def solve_czrc_ilp_for_cluster(
         )
 
     # Step 4: Prepare candidates using UNIFIED tier1 region (single grid)
-    # Get aggregated spacing from all zones using config method
-    all_zones = set()
-    for pk in pair_keys:
-        all_zones.update(parse_pair_key(pk, zone_spacings))
-    # Use cross_zone_exclusion_method from config to aggregate spacings
-    exclusion_method = _get_cross_zone_exclusion_method(config)
-    min_spacing = _aggregate_zone_spacings(
-        zone_spacings, list(all_zones), exclusion_method
-    )
+    # Use override_min_spacing (per-cell local) if provided, else aggregate
+    if override_min_spacing is not None:
+        min_spacing = override_min_spacing
+    else:
+        all_zones: set = set()
+        for pk in pair_keys:
+            all_zones.update(parse_pair_key(pk, zone_spacings))
+        exclusion_method = _get_cross_zone_exclusion_method(config)
+        min_spacing = _aggregate_zone_spacings(
+            zone_spacings, list(all_zones), exclusion_method
+        )
 
     candidates, _ = _prepare_candidates_for_ilp(
         unified_tier1, bh_candidates, overall_r_max, min_spacing, config
@@ -3413,6 +3433,9 @@ def run_czrc_optimization(
     # Build zones clip geometry for Tier 2 test point clipping
     zones_clip_geometry = _build_zones_clip_geometry(czrc_data)
 
+    # Extract zone geometries for per-cell local spacing computation
+    zone_geometries = czrc_data.get("zone_geometries", {})
+
     # Parse existing borehole coverage for Tier 2 filtering
     existing_coverage = _parse_existing_coverage(czrc_data)
 
@@ -3472,6 +3495,7 @@ def run_czrc_optimization(
             czrc_cache,  # Pass cache to cluster solver
             highs_log_folder,
             cluster_idx,
+            zone_geometries=zone_geometries,
         )
         cluster_key = cluster_stats.get("cluster_key", "+".join(cluster["pair_keys"]))
         all_cluster_stats[cluster_key] = cluster_stats
