@@ -3425,14 +3425,32 @@ def _add_secondary_shapefiles_section(
 
             first_poly = True
             for poly in polygons:
-                x_coords = list(poly.exterior.coords.xy[0])
-                y_coords = list(poly.exterior.coords.xy[1])
-                x_coords.append(x_coords[0])
-                y_coords.append(y_coords[0])
+                # Collect all rings (exterior + interior) with None separators
+                all_x: List[float] = []
+                all_y: List[float] = []
+
+                # Exterior ring
+                ext_x = list(poly.exterior.coords.xy[0])
+                ext_y = list(poly.exterior.coords.xy[1])
+                ext_x.append(ext_x[0])
+                ext_y.append(ext_y[0])
+                all_x.extend(ext_x)
+                all_y.extend(ext_y)
+
+                # Interior rings (holes) - draw outlines so holes are visible
+                for interior in poly.interiors:
+                    all_x.append(None)
+                    all_y.append(None)
+                    int_x = list(interior.coords.xy[0])
+                    int_y = list(interior.coords.xy[1])
+                    int_x.append(int_x[0])
+                    int_y.append(int_y[0])
+                    all_x.extend(int_x)
+                    all_y.extend(int_y)
 
                 trace = go.Scatter(
-                    x=x_coords,
-                    y=y_coords,
+                    x=all_x,
+                    y=all_y,
                     mode="lines",
                     line=dict(color=color, width=linewidth),
                     name=display_name,
