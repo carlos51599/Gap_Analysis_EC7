@@ -141,7 +141,7 @@ SHAPEFILE_CONFIG: Dict[str, Any] = {
         # Coverage layer: Buildings (used for coverage analysis)
         # ───────────────────────────────────────────────────────────────────
         "buildings": {
-            "enabled": True,
+            "enabled": False,  # TEMPORARY: Disabled for testing only
             "file_path": "Project Shapefiles/Buildings.shp",
             "display_name": "Buildings",
             "layer_order": 8,
@@ -159,13 +159,13 @@ SHAPEFILE_CONFIG: Dict[str, Any] = {
         # Coverage layer: Reservoir Tunnel (used for coverage analysis)
         # ───────────────────────────────────────────────────────────────────
         "reservoir_tunnel": {
-            "enabled": True,
+            "enabled": False,  # TEMPORARY: Disabled for testing only
             "file_path": "Project Shapefiles/ReservoirTunnel.shp",
             "display_name": "Reservoir Tunnel",
             "layer_order": 7,
             "use_for_coverage": True,
             "name_column": None,
-            "max_spacing_m": 25.0,  # EC7: 1 per 25m grid, Water Conveyance basement logic [1]
+            "max_spacing_m": 50.0,  # TEMPORARY: Changed to 50m for testing only (was 25m)
             "order": 4,
             "rendering": {
                 "boundary_color": "#228B22",  # Forest green
@@ -195,7 +195,7 @@ SHAPEFILE_CONFIG: Dict[str, Any] = {
         # Coverage layer: Water Course Diversion (used for coverage analysis)
         # ───────────────────────────────────────────────────────────────────
         "water_course_diversion": {
-            "enabled": True,
+            "enabled": False,  # TEMPORARY: Disabled for testing only
             "file_path": "Project Shapefiles/WaterCourseDiversion.shp",
             "display_name": "Water Course Diversion",
             "layer_order": 4,
