@@ -48,7 +48,7 @@ import time
 import numpy as np
 from shapely import wkt
 from shapely.errors import GEOSException
-from shapely.geometry import Point, Polygon, MultiPolygon, MultiPoint
+from shapely.geometry import Point, Polygon, MultiPolygon
 
 # Import typed data models for borehole provenance tracking
 from Gap_Analysis_EC7.models.data_models import (
@@ -63,8 +63,11 @@ from Gap_Analysis_EC7.models.data_models import (
 from shapely.geometry.base import BaseGeometry
 
 from Gap_Analysis_EC7.solvers.czrc_geometry import parse_pair_key
-from shapely.ops import unary_union, voronoi_diagram
-from sklearn.cluster import KMeans
+from Gap_Analysis_EC7.solvers.voronoi_splitter import (
+    split_into_voronoi_cells,
+    split_into_grid_cells,
+)
+from shapely.ops import unary_union
 
 # REUSED IMPORTS - existing infrastructure
 from Gap_Analysis_EC7.solvers.solver_algorithms import _solve_ilp
@@ -1719,196 +1722,10 @@ def _build_cluster_stats(
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 🔧 CELL SPLITTING (Large Region Decomposition)
+# Functions moved to voronoi_splitter.py for shared use by first-pass
+# zone auto-splitting and second-pass CZRC cell splitting.
+# Imports: split_into_voronoi_cells, split_into_grid_cells
 # ═══════════════════════════════════════════════════════════════════════════
-
-
-def _split_into_grid_cells(
-    geometry: BaseGeometry,
-    cell_size_m: float,
-    min_cell_area_m2: float = 100.0,
-) -> List[BaseGeometry]:
-    """
-    Split a geometry into fixed-size grid cells.
-
-    Creates a grid of square cells aligned to the geometry's bounding box,
-    clips each cell to the geometry, and returns cells that exceed the
-    minimum area threshold.
-
-    Args:
-        geometry: Shapely geometry to split
-        cell_size_m: Cell size in meters (e.g., 1000 for 1km cells)
-        min_cell_area_m2: Minimum cell area to include (skip tiny slivers)
-
-    Returns:
-        List of cell geometries (clipped to input geometry)
-    """
-    from shapely.geometry import box
-
-    if geometry.is_empty:
-        return []
-
-    minx, miny, maxx, maxy = geometry.bounds
-
-    cells = []
-    x = minx
-    while x < maxx:
-        y = miny
-        while y < maxy:
-            # Create cell
-            cell_box = box(x, y, x + cell_size_m, y + cell_size_m)
-            # Clip to geometry
-            clipped = geometry.intersection(cell_box)
-            # Keep if area exceeds threshold
-            if not clipped.is_empty and clipped.area >= min_cell_area_m2:
-                cells.append(clipped)
-            y += cell_size_m
-        x += cell_size_m
-
-    return cells
-
-
-def _determine_cell_count(
-    region_area_m2: float,
-    config: Dict[str, Any],
-) -> int:
-    """
-    Calculate number of cells based on target average cell area.
-
-    Uses rule: K = ceil(region_area / target_cell_area), with min/max bounds.
-
-    Args:
-        region_area_m2: Total area of region to split (m²)
-        config: cell_splitting config section
-
-    Returns:
-        Number of cells (K for K-means)
-    """
-    kmeans_config = config.get("kmeans_voronoi", {})
-    target_cell_area = kmeans_config.get(
-        "target_cell_area_m2", 1_000_000
-    )  # Default 1 km²
-    min_cells = kmeans_config.get("min_cells", 2)
-    max_cells = kmeans_config.get("max_cells", 50)
-
-    # Calculate based on target area
-    computed_k = math.ceil(region_area_m2 / target_cell_area)
-
-    # Clamp to range
-    return max(min_cells, min(computed_k, max_cells))
-
-
-def _get_clipped_voronoi_cells(
-    seeds: np.ndarray,
-    region: BaseGeometry,
-    buffer_margin: float = 1000.0,
-    min_cell_area_m2: float = 100.0,
-) -> List[BaseGeometry]:
-    """
-    Generate Voronoi cells from seeds, clipped to a region.
-
-    Uses shapely.ops.voronoi_diagram for clean handling of boundaries.
-
-    Args:
-        seeds: K-means cluster centroids (n, 2) array
-        region: Region polygon to clip cells to
-        buffer_margin: Extra margin for envelope (meters)
-        min_cell_area_m2: Minimum cell area to keep
-
-    Returns:
-        List of clipped cell polygons
-    """
-    if len(seeds) < 2:
-        return [region]  # Cannot tessellate with <2 seeds
-
-    # Create seed points
-    seed_multipoint = MultiPoint([Point(s) for s in seeds])
-
-    # Envelope larger than region to ensure bounded cells
-    envelope = region.envelope.buffer(buffer_margin)
-
-    # Generate Voronoi diagram
-    voronoi_result = voronoi_diagram(seed_multipoint, envelope=envelope)
-
-    # Clip each cell to region
-    cells = []
-    for voronoi_cell in voronoi_result.geoms:
-        clipped = voronoi_cell.intersection(region)
-
-        if clipped.is_empty:
-            continue
-
-        # Handle MultiPolygon (can occur with complex regions)
-        if isinstance(clipped, MultiPolygon):
-            for part in clipped.geoms:
-                if part.area >= min_cell_area_m2:
-                    cells.append(part)
-        else:
-            if clipped.area >= min_cell_area_m2:
-                cells.append(clipped)
-
-    return cells
-
-
-def _split_into_voronoi_cells(
-    geometry: BaseGeometry,
-    candidate_positions: np.ndarray,
-    config: Dict[str, Any],
-    logger: Optional[logging.Logger] = None,
-) -> List[BaseGeometry]:
-    """
-    Split a geometry into cells using K-means + Voronoi.
-
-    Uses target average cell area to determine K, then K-means on
-    candidate positions to find balanced seeds.
-
-    Args:
-        geometry: Region to split
-        candidate_positions: (n, 2) array of candidate (x, y) positions
-        config: cell_splitting config section
-        logger: Optional logger
-
-    Returns:
-        List of cell geometries
-    """
-    log = logger or _logger
-
-    if geometry.is_empty:
-        return []
-
-    region_area = geometry.area
-    n_candidates = len(candidate_positions)
-
-    # Determine cell count from target area
-    n_cells = _determine_cell_count(region_area, config)
-
-    if n_candidates < n_cells:
-        log.debug(f"   Too few candidates ({n_candidates}) for {n_cells} cells")
-        # Fall back to fewer cells
-        n_cells = max(2, n_candidates)
-
-    if n_cells < 2:
-        return [geometry]
-
-    # K-means clustering
-    kmeans_config = config.get("kmeans_voronoi", {})
-    random_state = kmeans_config.get("random_state", 42)
-
-    kmeans = KMeans(n_clusters=n_cells, random_state=random_state, n_init="auto")
-    kmeans.fit(candidate_positions)
-
-    seeds = kmeans.cluster_centers_
-
-    # Generate Voronoi cells clipped to region
-    min_cell_area = config.get("min_cell_area_m2", 100.0)
-    cells = _get_clipped_voronoi_cells(seeds, geometry, min_cell_area_m2=min_cell_area)
-
-    target_area = kmeans_config.get("target_cell_area_m2", 1_000_000)
-    log.info(
-        f"   🔷 K-means + Voronoi: {region_area/1e6:.2f} km² → {len(cells)} cells "
-        f"(target: {target_area/1e6:.1f} km² avg)"
-    )
-
-    return cells
 
 
 def _create_cell_cluster(
@@ -2040,14 +1857,14 @@ def check_and_split_large_cluster(
         )
         candidate_positions = np.array([[p.x, p.y] for p in sample_grid])
 
-        cells = _split_into_voronoi_cells(
+        cells = split_into_voronoi_cells(
             unified_tier1, candidate_positions, cell_config, logger
         )
     else:
         # Fallback to grid method
         grid_config = cell_config.get("grid", {})
         cell_size = grid_config.get("cell_size_m", cell_config.get("cell_size_m", 2000))
-        cells = _split_into_grid_cells(unified_tier1, cell_size, min_cell_area)
+        cells = split_into_grid_cells(unified_tier1, cell_size, min_cell_area)
 
     if not cells:
         return [], [], [], {"status": "skipped", "reason": "no_cells_after_split"}
