@@ -808,17 +808,17 @@ CONFIG: Dict[str, Any] = {
             # Master switch for cell splitting
             "enabled": True,
             # Maximum area (m²) before triggering cell split
-            # 1,000,000 m² = 1 km² (approx 400-500 candidates at typical density)
-            "max_area_for_direct_ilp_m2": 1_000_000,
+            # 4,000,000 m² = 4 km² (2× target cell area)
+            "max_area_for_direct_ilp_m2": 4_000_000,
             # Splitting method: "kmeans_voronoi" (recommended) or "grid" (legacy)
             "method": "kmeans_voronoi",
             # Minimum cell area to process (skip tiny slivers)
             "min_cell_area_m2": 100,
             # === Spacing-Relative Cell Sizing ===
-            # Scales split threshold and target cell area with candidate_grid_spacing²
-            # Prevents tier-width/cell-size mismatch for large-spacing clusters
+            # DISABLED for Second Pass: cell splitting is purely area-based.
+            # First Pass (zone_auto_splitting) keeps its own spacing_relative enabled.
             "spacing_relative": {
-                "enabled": True,
+                "enabled": False,
                 "cell_area_multiplier": 200,  # K: target = max(base, K × s_c²)
                 "threshold_multiplier": 400,  # M: threshold = max(base, M × s_c²)
             },
@@ -830,7 +830,7 @@ CONFIG: Dict[str, Any] = {
             "kmeans_voronoi": {
                 # Target average cell area (determines number of cells)
                 # K = ceil(region_area / target_cell_area)
-                "target_cell_area_m2": 1_000_000,  # 1 km² per cell
+                "target_cell_area_m2": 2_000_000,  # 2 km² per cell
                 # Minimum number of cells (even for small regions)
                 "min_cells": 2,
                 # Maximum number of cells (safety cap)

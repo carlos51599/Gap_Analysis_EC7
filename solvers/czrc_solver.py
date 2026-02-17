@@ -1862,28 +1862,11 @@ def check_and_split_large_cluster(
     unified_tier1 = cluster["unified_tier1"]
     cluster_area = unified_tier1.area
 
-    # Compute candidate grid spacing for this cluster (same as used in ILP)
-    min_zone_spacing = min(zone_spacings.values()) if zone_spacings else 100.0
-    candidate_mult = config.get("candidate_grid_spacing_mult", 0.5)
-    candidate_grid_spacing = min_zone_spacing * candidate_mult
-
-    # Apply spacing-relative scaling to thresholds
-    sr = cell_config.get("spacing_relative", {})
-    max_area, effective_target = _compute_cluster_cell_thresholds(
-        candidate_grid_spacing_m=candidate_grid_spacing,
-        base_threshold_m2=base_max_area,
-        base_target_area_m2=base_target,
-        spacing_relative_config=sr,
-    )
+    # Area-based thresholds: purely from config, no spacing-relative scaling
+    max_area = base_max_area
+    effective_target = base_target
 
     log = logger or _logger
-    if max_area != base_max_area:
-        log.info(
-            f"   📐 Spacing-relative sizing: threshold "
-            f"{base_max_area/1e6:.1f} → {max_area/1e6:.1f} km², "
-            f"target {base_target/1e6:.1f} → {effective_target/1e6:.1f} km² "
-            f"(cand_spacing={candidate_grid_spacing:.0f}m)"
-        )
 
     # Start timing for split cluster (non-split timing is in solve_czrc_ilp_for_cluster)
     split_start_time = time.perf_counter()
@@ -1914,10 +1897,9 @@ def check_and_split_large_cluster(
 
     if method == "kmeans_voronoi":
         # Need candidate positions for K-means
-        # Generate sample grid at candidate spacing to get density distribution
-        min_zone_spacing = min(zone_spacings.values()) if zone_spacings else 100.0
-        candidate_mult = config.get("candidate_grid_spacing_mult", 0.5)
-        sample_spacing = min_zone_spacing * candidate_mult
+        # Generate sample grid at fixed density derived from target cell area
+        # (area-based, not spacing-dependent — avoids circular dependency)
+        sample_spacing = math.sqrt(effective_target) / 10.0  # ~141m for 2 km²
 
         # Convert geometry to polygon list for _generate_candidate_grid
         if unified_tier1.geom_type == "Polygon":
@@ -1930,7 +1912,7 @@ def check_and_split_large_cluster(
         # Generate sample positions within the region
         sample_grid = _generate_candidate_grid(
             gap_polys=tier1_polys,
-            max_spacing=min_zone_spacing,
+            max_spacing=sample_spacing * 2,
             grid_spacing=sample_spacing,
             grid_type="hexagonal",
             hexagonal_density=1.5,
