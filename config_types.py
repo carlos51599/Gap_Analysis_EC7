@@ -591,7 +591,42 @@ class CellBoundaryConsolidationConfig:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 🔀 7c. ZONE AUTO-SPLITTING CONFIGURATION
+# � 7c-i. SPACING-RELATIVE CELL SIZING SUB-CONFIG
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@dataclass(frozen=True)
+class SpacingRelativeSizingConfig:
+    """
+    Spacing-relative cell sizing parameters.
+
+    Shared between first-pass zone auto-splitting and second-pass
+    CZRC cluster cell splitting. Scales split thresholds and target cell
+    areas with candidate_grid_spacing² to prevent tier-width/cell-size
+    mismatch.
+
+    Attributes:
+        enabled: Scale thresholds with candidate_grid_spacing².
+        cell_area_multiplier: K — target = max(base, K × spacing²).
+        threshold_multiplier: M — threshold = max(base, M × spacing²).
+    """
+
+    enabled: bool = True
+    cell_area_multiplier: float = 400.0
+    threshold_multiplier: float = 800.0
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "SpacingRelativeSizingConfig":
+        """Create SpacingRelativeSizingConfig from config dictionary."""
+        return cls(
+            enabled=d.get("enabled", True),
+            cell_area_multiplier=d.get("cell_area_multiplier", 400.0),
+            threshold_multiplier=d.get("threshold_multiplier", 800.0),
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# �🔀 7c. ZONE AUTO-SPLITTING CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
@@ -613,6 +648,8 @@ class ZoneAutoSplittingConfig:
         min_cells: Minimum number of cells per split.
         max_cells: Maximum number of cells per split.
         random_state: K-means random seed for reproducibility.
+        candidate_spacing_mult: Grid spacing as fraction of max_spacing.
+        spacing_relative: Spacing-relative cell sizing parameters.
     """
 
     enabled: bool = True
@@ -623,6 +660,15 @@ class ZoneAutoSplittingConfig:
     min_cells: int = 2
     max_cells: int = 30
     random_state: int = 42
+    candidate_spacing_mult: float = 0.5
+    spacing_relative: SpacingRelativeSizingConfig = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        """Initialize default spacing_relative if not provided."""
+        if self.spacing_relative is None:
+            object.__setattr__(
+                self, "spacing_relative", SpacingRelativeSizingConfig()
+            )
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "ZoneAutoSplittingConfig":
@@ -637,6 +683,10 @@ class ZoneAutoSplittingConfig:
             min_cells=kv.get("min_cells", 2),
             max_cells=kv.get("max_cells", 30),
             random_state=kv.get("random_state", 42),
+            candidate_spacing_mult=d.get("candidate_spacing_mult", 0.5),
+            spacing_relative=SpacingRelativeSizingConfig.from_dict(
+                d.get("spacing_relative", {})
+            ),
         )
 
 

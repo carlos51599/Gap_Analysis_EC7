@@ -70,6 +70,7 @@ from Gap_Analysis_EC7.solvers.voronoi_splitter import (
 from shapely.ops import unary_union
 
 # REUSED IMPORTS - existing infrastructure
+from Gap_Analysis_EC7.solvers.cell_sizing import compute_effective_cell_thresholds
 from Gap_Analysis_EC7.solvers.solver_algorithms import _solve_ilp
 from Gap_Analysis_EC7.solvers.optimization_geometry import _generate_candidate_grid
 from Gap_Analysis_EC7.solvers.consolidation import (
@@ -1757,6 +1758,66 @@ def _create_cell_cluster(
     }
 
 
+def _compute_cluster_cell_thresholds(
+    candidate_grid_spacing_m: float,
+    base_threshold_m2: float,
+    base_target_area_m2: float,
+    spacing_relative_config: Dict[str, Any],
+) -> Tuple[float, float]:
+    """
+    Extract spacing-relative config and delegate to shared utility.
+
+    Thin wrapper that reads the spacing_relative dict and calls
+    compute_effective_cell_thresholds() with the correct parameters.
+
+    Args:
+        candidate_grid_spacing_m: Candidate grid spacing for this cluster.
+        base_threshold_m2: Absolute floor for split trigger.
+        base_target_area_m2: Absolute floor for target cell area.
+        spacing_relative_config: Dict with enabled, cell_area_multiplier,
+            threshold_multiplier keys.
+
+    Returns:
+        (effective_threshold_m2, effective_target_area_m2)
+    """
+    return compute_effective_cell_thresholds(
+        candidate_grid_spacing_m=candidate_grid_spacing_m,
+        base_threshold_m2=base_threshold_m2,
+        base_target_area_m2=base_target_area_m2,
+        spacing_relative_sizing=spacing_relative_config.get("enabled", True),
+        cell_area_multiplier=spacing_relative_config.get(
+            "cell_area_multiplier", 400.0
+        ),
+        threshold_multiplier=spacing_relative_config.get(
+            "threshold_multiplier", 800.0
+        ),
+    )
+
+
+def _override_target_cell_area(
+    cell_config: Dict[str, Any],
+    effective_target_area_m2: float,
+) -> Dict[str, Any]:
+    """
+    Create a shallow copy of cell_config with overridden target_cell_area_m2.
+
+    Used to pass the spacing-relative effective target to
+    split_into_voronoi_cells() without mutating the original config.
+
+    Args:
+        cell_config: Original cell_splitting config dict.
+        effective_target_area_m2: Overridden target from spacing-relative sizing.
+
+    Returns:
+        New config dict with updated kmeans_voronoi.target_cell_area_m2.
+    """
+    result = dict(cell_config)
+    kv = dict(result.get("kmeans_voronoi", {}))
+    kv["target_cell_area_m2"] = effective_target_area_m2
+    result["kmeans_voronoi"] = kv
+    return result
+
+
 def check_and_split_large_cluster(
     cluster: Dict[str, Any],
     zone_spacings: Dict[str, float],
@@ -1796,12 +1857,37 @@ def check_and_split_large_cluster(
     """
     cell_config = config.get("cell_splitting", {})
     enabled = cell_config.get("enabled", True)
-    max_area = cell_config.get("max_area_for_direct_ilp_m2", 1_000_000)
+    base_max_area = cell_config.get("max_area_for_direct_ilp_m2", 1_000_000)
     cell_size = cell_config.get("cell_size_m", 1000)
     min_cell_area = cell_config.get("min_cell_area_m2", 100)
+    kv_config = cell_config.get("kmeans_voronoi", {})
+    base_target = kv_config.get("target_cell_area_m2", 1_000_000)
 
     unified_tier1 = cluster["unified_tier1"]
     cluster_area = unified_tier1.area
+
+    # Compute candidate grid spacing for this cluster (same as used in ILP)
+    min_zone_spacing = min(zone_spacings.values()) if zone_spacings else 100.0
+    candidate_mult = config.get("candidate_grid_spacing_mult", 0.5)
+    candidate_grid_spacing = min_zone_spacing * candidate_mult
+
+    # Apply spacing-relative scaling to thresholds
+    sr = cell_config.get("spacing_relative", {})
+    max_area, effective_target = _compute_cluster_cell_thresholds(
+        candidate_grid_spacing_m=candidate_grid_spacing,
+        base_threshold_m2=base_max_area,
+        base_target_area_m2=base_target,
+        spacing_relative_config=sr,
+    )
+
+    log = logger or _logger
+    if max_area != base_max_area:
+        log.info(
+            f"   📐 Spacing-relative sizing: threshold "
+            f"{base_max_area/1e6:.1f} → {max_area/1e6:.1f} km², "
+            f"target {base_target/1e6:.1f} → {effective_target/1e6:.1f} km² "
+            f"(cand_spacing={candidate_grid_spacing:.0f}m)"
+        )
 
     # Start timing for split cluster (non-split timing is in solve_czrc_ilp_for_cluster)
     split_start_time = time.perf_counter()
@@ -1858,7 +1944,9 @@ def check_and_split_large_cluster(
         candidate_positions = np.array([[p.x, p.y] for p in sample_grid])
 
         cells = split_into_voronoi_cells(
-            unified_tier1, candidate_positions, cell_config, logger
+            unified_tier1, candidate_positions,
+            _override_target_cell_area(cell_config, effective_target),
+            logger,
         )
     else:
         # Fallback to grid method

@@ -154,7 +154,7 @@ CONFIG: Dict[str, Any] = {
         "solver_overrides": {
             "solver_mode": "ilp",  # Force ILP for testing
             "time_limit_s": 90,  # Standard timeout
-            "mip_gap": 0.04,  # Standard tolerance
+            "mip_gap": 0.1,  # Standard tolerance
         },
     },
     # ═══════════════════════════════════════════════════════════════════════
@@ -752,6 +752,17 @@ CONFIG: Dict[str, Any] = {
             "method": "kmeans_voronoi",
             # Minimum cell area to keep (skip tiny slivers < 0.1 ha)
             "min_cell_area_m2": 1000,
+            # Candidate grid spacing as fraction of max_spacing_m
+            # Used for K-means seeding AND spacing-relative threshold computation
+            "candidate_spacing_mult": 0.5,
+            # === Spacing-Relative Cell Sizing ===
+            # Scales split threshold and target cell area with candidate_grid_spacing²
+            # Prevents tier-width/cell-size mismatch for large-spacing zones
+            "spacing_relative": {
+                "enabled": True,
+                "cell_area_multiplier": 400,    # K: target = max(base, K × s_c²)
+                "threshold_multiplier": 800,    # M: threshold = max(base, M × s_c²)
+            },
             # === K-means + Voronoi settings ===
             "kmeans_voronoi": {
                 # Target average cell area (determines number of cells)
@@ -790,6 +801,14 @@ CONFIG: Dict[str, Any] = {
             "method": "kmeans_voronoi",
             # Minimum cell area to process (skip tiny slivers)
             "min_cell_area_m2": 100,
+            # === Spacing-Relative Cell Sizing ===
+            # Scales split threshold and target cell area with candidate_grid_spacing²
+            # Prevents tier-width/cell-size mismatch for large-spacing clusters
+            "spacing_relative": {
+                "enabled": True,
+                "cell_area_multiplier": 400,    # K: target = max(base, K × s_c²)
+                "threshold_multiplier": 800,    # M: threshold = max(base, M × s_c²)
+            },
             # === Grid method settings (legacy fallback) ===
             "grid": {
                 "cell_size_m": 2000,

@@ -52,6 +52,7 @@ from shapely.geometry import MultiPolygon, Polygon
 from shapely.geometry.base import BaseGeometry
 
 from Gap_Analysis_EC7.config_types import ZoneAutoSplittingConfig
+from Gap_Analysis_EC7.solvers.cell_sizing import compute_effective_cell_thresholds
 from Gap_Analysis_EC7.solvers.optimization_geometry import _generate_candidate_grid
 from Gap_Analysis_EC7.solvers.voronoi_splitter import split_into_voronoi_cells
 
@@ -119,6 +120,7 @@ def _split_single_zone(
     max_spacing_m: float,
     config: ZoneAutoSplittingConfig,
     logger: logging.Logger,
+    effective_target_area_m2: Optional[float] = None,
 ) -> List[BaseGeometry]:
     """
     Split a single zone geometry into Voronoi cells.
@@ -131,20 +133,27 @@ def _split_single_zone(
         max_spacing_m: Zone's max borehole spacing (for grid density).
         config: Auto-splitting configuration.
         logger: Logger instance.
+        effective_target_area_m2: Override for target cell area from
+            spacing-relative sizing. When None, uses config.target_cell_area_m2.
 
     Returns:
         List of cell geometries (may be empty if splitting fails).
     """
-    candidate_positions = _build_candidate_positions(zone_geom, max_spacing_m)
+    candidate_positions = _build_candidate_positions(
+        zone_geom, max_spacing_m, config.candidate_spacing_mult
+    )
 
     if len(candidate_positions) < 2:
         logger.warning("   ⚠️ Too few candidates for splitting — keeping zone intact")
         return [zone_geom]
 
+    # Use effective target area if provided (spacing-relative sizing)
+    target_area = effective_target_area_m2 or config.target_cell_area_m2
+
     # Build config dict in the format split_into_voronoi_cells expects
     splitter_config = {
         "kmeans_voronoi": {
-            "target_cell_area_m2": config.target_cell_area_m2,
+            "target_cell_area_m2": target_area,
             "min_cells": config.min_cells,
             "max_cells": config.max_cells,
             "random_state": config.random_state,
@@ -202,23 +211,41 @@ def expand_zones_with_auto_splitting(
         zones_gdf["is_auto_split"] = False
         return zones_gdf
 
-    threshold = config.max_zone_area_m2
     expanded_rows = []
     n_split = 0
     n_cells_total = 0
 
     log.info(
-        f"🔀 Zone auto-splitting: threshold={threshold/1e6:.1f} km², "
-        f"method={config.method}"
+        f"🔀 Zone auto-splitting: base_threshold={config.max_zone_area_m2/1e6:.1f} km², "
+        f"method={config.method}, "
+        f"spacing_relative={config.spacing_relative.enabled}"
     )
 
     for idx, row in zones_gdf.iterrows():
         zone_geom = row["geometry"]
         zone_area = zone_geom.area
         zone_name = row["zone_name"]
+        zone_spacing = row["max_spacing_m"]
+
+        # Compute per-zone effective thresholds using candidate grid spacing
+        candidate_grid_spacing = zone_spacing * config.candidate_spacing_mult
+        threshold, effective_target = compute_effective_cell_thresholds(
+            candidate_grid_spacing_m=candidate_grid_spacing,
+            base_threshold_m2=config.max_zone_area_m2,
+            base_target_area_m2=config.target_cell_area_m2,
+            spacing_relative_sizing=config.spacing_relative.enabled,
+            cell_area_multiplier=config.spacing_relative.cell_area_multiplier,
+            threshold_multiplier=config.spacing_relative.threshold_multiplier,
+        )
 
         if zone_area <= threshold:
             # Zone is small enough — keep as-is
+            if threshold != config.max_zone_area_m2:
+                log.info(
+                    f"   📐 '{zone_name}': effective_threshold="
+                    f"{threshold/1e6:.1f} km² (spacing={zone_spacing:.0f}m) "
+                    f"→ no split ({zone_area/1e6:.2f} km²)"
+                )
             new_row = row.to_dict()
             new_row["parent_zone"] = None
             new_row["is_auto_split"] = False
@@ -228,10 +255,14 @@ def expand_zones_with_auto_splitting(
         # Zone exceeds threshold — split into cells
         log.info(
             f"   🔷 Splitting '{zone_name}' ({zone_area/1e6:.2f} km²) "
-            f"into sub-zones..."
+            f"into sub-zones (threshold={threshold/1e6:.1f} km², "
+            f"target={effective_target/1e6:.1f} km²)..."
         )
 
-        cells = _split_single_zone(zone_geom, row["max_spacing_m"], config, log)
+        cells = _split_single_zone(
+            zone_geom, zone_spacing, config, log,
+            effective_target_area_m2=effective_target,
+        )
 
         if len(cells) <= 1:
             # Splitting didn't produce multiple cells — keep original
