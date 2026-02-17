@@ -78,7 +78,7 @@ SHAPEFILE_CONFIG: Dict[str, Any] = {
         # ───────────────────────────────────────────────────────────────────
         "embankment_zones": {
             "enabled": True,
-            "file_path": "Project Shapefiles/Embankment.shp",
+            "file_path": "Project Shapefiles/Embankment_DF2F.shp",
             "display_name": "Embankment",
             "layer_order": 10,  # Drawn on top
             "use_for_coverage": True,  # Used for coverage analysis
@@ -97,12 +97,12 @@ SHAPEFILE_CONFIG: Dict[str, Any] = {
         # ───────────────────────────────────────────────────────────────────
         "highways": {
             "enabled": True,
-            "file_path": "Project Shapefiles/Highways.shp",
+            "file_path": "Project Shapefiles/Highways_DF2F.shp",
             "display_name": "Highways",
             "layer_order": 9,  # Drawn just below embankment
             "use_for_coverage": True,  # Used for coverage analysis
             "name_column": None,  # No per-zone breakdown - single max_spacing for whole shapefile
-            "max_spacing_m": 200.0,  # Single spacing for all features
+            "max_spacing_m": 100.0,  # Single spacing for all features
             "order": 1,  # Priority for overlap resolution (lower = higher priority, used when spacing equal)
             "rendering": {
                 "boundary_color": "#0066CC",  # Blue
@@ -128,7 +128,7 @@ SHAPEFILE_CONFIG: Dict[str, Any] = {
             "enabled": True,
             "file_path": "Project Shapefiles/GIR_LocationGroup_Zone_250923.shp",
             "display_name": "GIR Boundary",
-            "layer_order": 5,  # Drawn behind embankment_zones
+            "layer_order": 3,  # Drawn behind all coverage layers
             "use_for_coverage": False,  # NOT used for coverage analysis
             "name_column": "Name",
             "rendering": {
@@ -138,21 +138,80 @@ SHAPEFILE_CONFIG: Dict[str, Any] = {
             "features": {},  # No per-feature overrides
         },
         # ───────────────────────────────────────────────────────────────────
+        # Coverage layer: Buildings (used for coverage analysis)
+        # ───────────────────────────────────────────────────────────────────
+        "buildings": {
+            "enabled": True,
+            "file_path": "Project Shapefiles/Buildings.shp",
+            "display_name": "Buildings",
+            "layer_order": 8,
+            "use_for_coverage": True,
+            "name_column": None,
+            "max_spacing_m": 100.0,
+            "order": 3,
+            "rendering": {
+                "boundary_color": "#FF8C00",  # Dark orange
+                "boundary_linewidth": 2.0,
+            },
+            "features": {},
+        },
+        # ───────────────────────────────────────────────────────────────────
+        # Coverage layer: Reservoir Tunnel (used for coverage analysis)
+        # ───────────────────────────────────────────────────────────────────
+        "reservoir_tunnel": {
+            "enabled": True,
+            "file_path": "Project Shapefiles/ReservoirTunnel.shp",
+            "display_name": "Reservoir Tunnel",
+            "layer_order": 7,
+            "use_for_coverage": True,
+            "name_column": None,
+            "max_spacing_m": 100.0,
+            "order": 4,
+            "rendering": {
+                "boundary_color": "#228B22",  # Forest green
+                "boundary_linewidth": 2.0,
+            },
+            "features": {},
+        },
+        # ───────────────────────────────────────────────────────────────────
+        # Coverage layer: W&B Canal Model (used for coverage analysis)
+        # ───────────────────────────────────────────────────────────────────
+        "wandb_canal_model": {
+            "enabled": True,
+            "file_path": "Project Shapefiles/WAndBCanalModel.shp",
+            "display_name": "W&B Canal Model",
+            "layer_order": 6,
+            "use_for_coverage": True,
+            "name_column": None,
+            "max_spacing_m": 100.0,
+            "order": 5,
+            "rendering": {
+                "boundary_color": "#8B008B",  # Dark magenta
+                "boundary_linewidth": 2.0,
+            },
+            "features": {},
+        },
+        # ───────────────────────────────────────────────────────────────────
+        # Coverage layer: Water Course Diversion (used for coverage analysis)
+        # ───────────────────────────────────────────────────────────────────
+        "water_course_diversion": {
+            "enabled": True,
+            "file_path": "Project Shapefiles/WaterCourseDiversion.shp",
+            "display_name": "Water Course Diversion",
+            "layer_order": 4,
+            "use_for_coverage": True,
+            "name_column": None,
+            "max_spacing_m": 100.0,
+            "order": 6,
+            "rendering": {
+                "boundary_color": "#008B8B",  # Dark cyan
+                "boundary_linewidth": 2.0,
+            },
+            "features": {},
+        },
+        # ───────────────────────────────────────────────────────────────────
         # MODIFICATION POINT: Add new shapefiles below
         # ───────────────────────────────────────────────────────────────────
-        # Example template for new shapefile:
-        # "new_layer_name": {
-        #     "enabled": True,
-        #     "file_path": "path/to/shapefile.shp",
-        #     "display_name": "Display Name",
-        #     "layer_order": 3,
-        #     "use_for_coverage": False,  # Set True only for the coverage analysis layer
-        #     "rendering": {
-        #         "boundary_color": "#RRGGBB",
-        #         "boundary_linewidth": 2.0,
-        #     },
-        #     "features": {},
-        # },
     },
     # ═══════════════════════════════════════════════════════════════════════
     # 🎨 DEFAULT SETTINGS
