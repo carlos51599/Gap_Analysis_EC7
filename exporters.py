@@ -29,7 +29,7 @@ from shapely.geometry import mapping, shape, Point, MultiPoint, Polygon
 from shapely.geometry.base import BaseGeometry
 from shapely import wkt
 
-from Gap_Analysis_EC7.models.data_models import Borehole, BoreholePass
+from Gap_Analysis_EC7.models.data_models import Borehole, BoreholePass, get_bh_position
 
 if TYPE_CHECKING:
     import matplotlib.axes
@@ -1666,24 +1666,28 @@ def export_run_stats_summary(
 
         # Prefer CZRC stats if available
         if czrc_stats:
-            original_count = czrc_stats.get("original_count", len(first_pass_boreholes))
-            final_count = czrc_stats.get("final_count", len(second_pass_boreholes))
-            # boreholes_removed/added now contain Second Pass only (Third Pass
-            # changes are filtered out at the source in czrc_solver.py)
-            removed_count = czrc_stats.get("boreholes_removed", 0)
-            added_count = czrc_stats.get("boreholes_added", 0)
+            # BUG FIX: Use actual borehole lists as ground truth for stats.
+            # The czrc_stats removed/added counts are unreliable because
+            # _filter_viz_data position-matching misses some Third Pass data,
+            # and multi-cluster overlap causes double-counting.
+            original_count = len(first_pass_boreholes)
+            second_pass_output_count = len(second_pass_boreholes)
+
+            # Compute removed/added by comparing actual borehole position sets
+            first_pass_positions = {get_bh_position(bh) for bh in first_pass_boreholes}
+            second_pass_positions = {get_bh_position(bh) for bh in second_pass_boreholes}
+            removed_count = len(first_pass_positions - second_pass_positions)
+            added_count = len(second_pass_positions - first_pass_positions)
+            net_change = second_pass_output_count - original_count
+
             solve_time = czrc_stats.get("solve_time", 0)
             status = czrc_stats.get("status", "unknown")
             clusters_processed = czrc_stats.get("clusters_processed", 0)
             unified_clusters = czrc_stats.get("unified_clusters", 0)
 
-            # Second Pass stats are now directly available (no subtraction needed)
-            second_pass_output = original_count - removed_count + added_count
-            net_change = second_pass_output - original_count
-
             lines.append(f"- **Status:** {status}")
             lines.append(f"- **Input Boreholes:** {original_count}")
-            lines.append(f"- **Output Boreholes:** {second_pass_output}")
+            lines.append(f"- **Output Boreholes:** {second_pass_output_count}")
             lines.append(f"- **Removed:** {removed_count}")
             lines.append(f"- **Added:** {added_count}")
             lines.append(f"- **Net Change:** {net_change:+d}")
@@ -1807,11 +1811,20 @@ def export_run_stats_summary(
                             all_cell_pairs[f"{cluster_key[:15]}:{pair_key}"] = pair_stat
 
         if has_third_pass:
+            # BUG FIX: Compute Third Pass stats from actual borehole lists
+            # (second_pass vs final), not from aggregated cell_czrc_stats which
+            # can double-count due to multi-cluster overlap.
+            sp_positions = {get_bh_position(bh) for bh in second_pass_boreholes}
+            final_positions = {get_bh_position(bh) for bh in proposed}
+            tp_removed_actual = len(sp_positions - final_positions)
+            tp_added_actual = len(final_positions - sp_positions)
+            tp_net_actual = len(proposed) - len(second_pass_boreholes)
+
             lines.append(f"- **Status:** success")
-            lines.append(f"- **Removed:** {third_pass_removed_total}")
-            lines.append(f"- **Added:** {third_pass_added_total}")
+            lines.append(f"- **Removed:** {tp_removed_actual}")
+            lines.append(f"- **Added:** {tp_added_actual}")
             lines.append(
-                f"- **Net Change:** {third_pass_added_total - third_pass_removed_total:+d}"
+                f"- **Net Change:** {tp_net_actual:+d}"
             )
 
             if all_cell_pairs:
@@ -1859,29 +1872,9 @@ def export_run_stats_summary(
         lines.append("")
         lines.append(f"- **Final Proposed Boreholes:** {len(proposed)}")
 
-        # Calculate totals from passes
-        # Use czrc_stats for accurate Second Pass output count (matches "Output Boreholes" in Second Pass section)
+        # Calculate totals from passes using actual borehole lists (ground truth)
         p1_count = len(first_pass_boreholes)
-        # Second Pass output = CZRC final_count (which is after Third Pass too, but the stats say "Output: X")
-        # Actually we need the TRUE Second Pass output (before Third Pass)
-        # This is: First Pass - Second Pass removals + Second Pass additions
-        # We can compute it from czrc_stats:
-        #   original_count = First Pass count
-        #   boreholes_removed = TOTAL removed (Second + Third Pass)
-        #   boreholes_added = TOTAL added (Second + Third Pass)
-        #   third_pass_removed = Third Pass only removals
-        #   third_pass_added = Third Pass only additions
-        #   Second Pass output = original - (removed - third_removed) + (added - third_added)
-        third_pass_removed_count = third_pass_removed_total if has_third_pass else 0
-        third_pass_added_count = third_pass_added_total if has_third_pass else 0
-        if czrc_stats:
-            total_removed = czrc_stats.get("boreholes_removed", 0)
-            total_added = czrc_stats.get("boreholes_added", 0)
-            second_only_removed = total_removed - third_pass_removed_count
-            second_only_added = total_added - third_pass_added_count
-            p2_count = p1_count - second_only_removed + second_only_added
-        else:
-            p2_count = len(second_pass_boreholes)
+        p2_count = len(second_pass_boreholes)
         p3_count = len(proposed)
 
         if p1_count > 0:
