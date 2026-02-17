@@ -39,7 +39,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 WORKSPACE_ROOT = Path(__file__).parent.parent.parent
 
 from Gap_Analysis_EC7.config import CONFIG
-from Gap_Analysis_EC7.config_types import AppConfig, VisualizationConfig, ZoneAutoSplittingConfig
+from Gap_Analysis_EC7.config_types import (
+    AppConfig,
+    VisualizationConfig,
+    ZoneAutoSplittingConfig,
+)
 from Gap_Analysis_EC7.shapefile_config import (
     get_enabled_layers,
     get_coverage_layer_keys,

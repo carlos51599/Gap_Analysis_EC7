@@ -231,9 +231,7 @@ def expand_zones_with_auto_splitting(
             f"into sub-zones..."
         )
 
-        cells = _split_single_zone(
-            zone_geom, row["max_spacing_m"], config, log
-        )
+        cells = _split_single_zone(zone_geom, row["max_spacing_m"], config, log)
 
         if len(cells) <= 1:
             # Splitting didn't produce multiple cells — keep original

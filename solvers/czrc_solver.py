@@ -2452,7 +2452,11 @@ def solve_cell_cell_czrc(
         if existing_bh:
             # This is an existing borehole that was kept - preserve source_pass and is_centreline
             original_pass_str = existing_bh.get("source_pass", BoreholePass.FIRST.value)
-            is_cl = existing_bh.get("is_centreline", False) if isinstance(existing_bh, dict) else getattr(existing_bh, "is_centreline", False)
+            is_cl = (
+                existing_bh.get("is_centreline", False)
+                if isinstance(existing_bh, dict)
+                else getattr(existing_bh, "is_centreline", False)
+            )
             selected.append(
                 Borehole(
                     x=candidates[i].x,

@@ -3008,7 +3008,12 @@ def _generate_sidebar_panels(
     has_per_pass = False
     if coverage_trace_ranges:
         for combo_ranges in coverage_trace_ranges.values():
-            for key in ("per_pass_first", "per_pass_second", "per_pass_third", "per_pass_centreline"):
+            for key in (
+                "per_pass_first",
+                "per_pass_second",
+                "per_pass_third",
+                "per_pass_centreline",
+            ):
                 rng = combo_ranges.get(key, (0, 0))
                 if rng[0] != rng[1]:
                     has_per_pass = True

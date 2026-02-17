@@ -1675,7 +1675,9 @@ def export_run_stats_summary(
 
             # Compute removed/added by comparing actual borehole position sets
             first_pass_positions = {get_bh_position(bh) for bh in first_pass_boreholes}
-            second_pass_positions = {get_bh_position(bh) for bh in second_pass_boreholes}
+            second_pass_positions = {
+                get_bh_position(bh) for bh in second_pass_boreholes
+            }
             removed_count = len(first_pass_positions - second_pass_positions)
             added_count = len(second_pass_positions - first_pass_positions)
             net_change = second_pass_output_count - original_count
@@ -1823,9 +1825,7 @@ def export_run_stats_summary(
             lines.append(f"- **Status:** success")
             lines.append(f"- **Removed:** {tp_removed_actual}")
             lines.append(f"- **Added:** {tp_added_actual}")
-            lines.append(
-                f"- **Net Change:** {tp_net_actual:+d}"
-            )
+            lines.append(f"- **Net Change:** {tp_net_actual:+d}")
 
             if all_cell_pairs:
                 lines.append("")
