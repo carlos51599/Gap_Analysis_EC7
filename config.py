@@ -730,6 +730,42 @@ CONFIG: Dict[str, Any] = {
             "verbose": 1,
         },
         # ═══════════════════════════════════════════════════════════════════
+        # ZONE AUTO-SPLITTING (First Pass Zone Decomposition)
+        # ═══════════════════════════════════════════════════════════════════
+        # When enabled, automatically splits large zones into smaller
+        # Voronoi cells BEFORE the first pass ILP. This removes the need
+        # for manual QGIS splitting of large zones.
+        #
+        # Each sub-zone replaces its parent as a first-class zone in
+        # zones_gdf, so the CZRC second pass naturally consolidates
+        # boundaries between sibling cells (no special-casing needed).
+        #
+        # Trigger: If zone geometry area > max_zone_area_m2, split.
+        # Reuses the same K-means + Voronoi algorithm from cell_splitting.
+        "zone_auto_splitting": {
+            # Master switch for zone auto-splitting
+            "enabled": True,
+            # Maximum zone area (m²) before triggering auto-split
+            # 2,000,000 m² = 2 km² — conservative threshold
+            "max_zone_area_m2": 2_000_000,
+            # Splitting method: "kmeans_voronoi" (recommended) or "grid"
+            "method": "kmeans_voronoi",
+            # Minimum cell area to keep (skip tiny slivers < 0.1 ha)
+            "min_cell_area_m2": 1000,
+            # === K-means + Voronoi settings ===
+            "kmeans_voronoi": {
+                # Target average cell area (determines number of cells)
+                # K = ceil(zone_area / target_cell_area)
+                "target_cell_area_m2": 1_000_000,  # 1 km² per sub-zone
+                # Minimum number of cells (even for zones just above threshold)
+                "min_cells": 2,
+                # Maximum number of cells (safety cap)
+                "max_cells": 30,
+                # Random seed for K-means reproducibility
+                "random_state": 42,
+            },
+        },
+        # ═══════════════════════════════════════════════════════════════════
         # CELL SPLITTING (Large CZRC Region Decomposition)
         # ═══════════════════════════════════════════════════════════════════
         # When enabled, splits large CZRC regions into cells before ILP

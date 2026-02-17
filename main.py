@@ -39,7 +39,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 WORKSPACE_ROOT = Path(__file__).parent.parent.parent
 
 from Gap_Analysis_EC7.config import CONFIG
-from Gap_Analysis_EC7.config_types import AppConfig, VisualizationConfig
+from Gap_Analysis_EC7.config_types import AppConfig, VisualizationConfig, ZoneAutoSplittingConfig
 from Gap_Analysis_EC7.shapefile_config import (
     get_enabled_layers,
     get_coverage_layer_keys,
@@ -51,6 +51,7 @@ from Gap_Analysis_EC7.shapefile_config import (
     build_zones_config_for_visualization,
 )
 from Gap_Analysis_EC7.zone_preprocessor import preprocess_zones
+from Gap_Analysis_EC7.zone_auto_splitter import expand_zones_with_auto_splitting
 from Gap_Analysis_EC7.visualization.html_builder import generate_multi_layer_html
 from Gap_Analysis_EC7.coverage_zones import compute_coverage_zones, get_coverage_summary
 
@@ -352,6 +353,17 @@ def get_zones_for_coverage_gdf(
     if "effective_geometry" in result.columns:
         result["geometry"] = result["effective_geometry"]
         result = gpd.GeoDataFrame(result, geometry="geometry", crs=reference_crs)
+
+    # === ZONE AUTO-SPLITTING (Split large zones into Voronoi cells) ===
+    # Large zones are split into smaller sub-zones for tractable first-pass ILP.
+    # Sub-zones become first-class zones so CZRC consolidates their boundaries.
+    auto_split_config = ZoneAutoSplittingConfig.from_dict(
+        CONFIG.get("ilp_solver", {}).get("zone_auto_splitting", {})
+    )
+    if auto_split_config.enabled:
+        result = expand_zones_with_auto_splitting(
+            result, auto_split_config, logger=logger
+        )
 
     if logger:
         logger.info(f"   ✅ Total coverage zones: {len(result)}")

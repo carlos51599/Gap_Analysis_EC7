@@ -35,6 +35,7 @@ NAVIGATION GUIDE
 # ═════ 6. CACHE CONFIGURATION
 # ═════ 7. QUALITY CONTROL CONFIGURATION
 # ═════ 7b. BORDER CONSOLIDATION CONFIGURATION
+# ═════ 7c. ZONE AUTO-SPLITTING CONFIGURATION
 # ═════ 8. APP CONFIG (MASTER FACADE)
 
 ═══════════════════════════════════════════════════════════════════════════════
@@ -589,6 +590,56 @@ class CellBoundaryConsolidationConfig:
         )
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# 🔀 7c. ZONE AUTO-SPLITTING CONFIGURATION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@dataclass(frozen=True)
+class ZoneAutoSplittingConfig:
+    """
+    Configuration for first-pass zone auto-splitting.
+
+    Automatically splits large zones into smaller Voronoi cells before the
+    first pass ILP. Each sub-zone becomes a first-class zone in zones_gdf,
+    so the CZRC second pass naturally consolidates sibling cell boundaries.
+
+    Attributes:
+        enabled: Master switch for zone auto-splitting.
+        max_zone_area_m2: Zones larger than this are auto-split (2 km²).
+        method: Splitting method ("kmeans_voronoi" or "grid").
+        min_cell_area_m2: Skip slivers smaller than this (0.1 ha).
+        target_cell_area_m2: Target area per sub-zone for K-means.
+        min_cells: Minimum number of cells per split.
+        max_cells: Maximum number of cells per split.
+        random_state: K-means random seed for reproducibility.
+    """
+
+    enabled: bool = True
+    max_zone_area_m2: float = 2_000_000
+    method: str = "kmeans_voronoi"
+    min_cell_area_m2: float = 1000
+    target_cell_area_m2: float = 1_000_000
+    min_cells: int = 2
+    max_cells: int = 30
+    random_state: int = 42
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "ZoneAutoSplittingConfig":
+        """Create ZoneAutoSplittingConfig from config dictionary."""
+        kv = d.get("kmeans_voronoi", {})
+        return cls(
+            enabled=d.get("enabled", True),
+            max_zone_area_m2=d.get("max_zone_area_m2", 2_000_000),
+            method=d.get("method", "kmeans_voronoi"),
+            min_cell_area_m2=d.get("min_cell_area_m2", 1000),
+            target_cell_area_m2=kv.get("target_cell_area_m2", 1_000_000),
+            min_cells=kv.get("min_cells", 2),
+            max_cells=kv.get("max_cells", 30),
+            random_state=kv.get("random_state", 42),
+        )
+
+
 @dataclass(frozen=True)
 class BorderConsolidationConfig:
     """
@@ -688,6 +739,7 @@ class AppConfig:
         cache: Cache configuration.
         quality_control: Quality control settings.
         border_consolidation: Border consolidation second pass configuration.
+        zone_auto_splitting: Zone auto-splitting configuration.
 
     Example:
         from Gap_Analysis_EC7.config import CONFIG
@@ -715,6 +767,9 @@ class AppConfig:
     quality_control: QualityControlConfig = field(default_factory=QualityControlConfig)
     border_consolidation: BorderConsolidationConfig = field(
         default_factory=BorderConsolidationConfig
+    )
+    zone_auto_splitting: ZoneAutoSplittingConfig = field(
+        default_factory=ZoneAutoSplittingConfig
     )
 
     # Raw config dict for legacy access (deprecated - use typed properties)
@@ -761,6 +816,9 @@ class AppConfig:
             ),
             border_consolidation=BorderConsolidationConfig.from_dict(
                 config_dict.get("border_consolidation", {})
+            ),
+            zone_auto_splitting=ZoneAutoSplittingConfig.from_dict(
+                config_dict.get("ilp_solver", {}).get("zone_auto_splitting", {})
             ),
             _raw_config=config_dict,
         )
