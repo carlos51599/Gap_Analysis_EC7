@@ -222,15 +222,17 @@ def sample_boreholes_along_centreline(
     # Branch junctions produce start-of-branch points that may be closer
     # than spacing_m to an existing borehole on the parent branch.
     # Drop any point too close to an already-accepted point.
-    # Same-line points are always >= spacing_m apart (from linspace), so
-    # this only removes cross-branch junction points that violate spacing.
-    if spacing_m > dedup_tolerance_m:
+    # Use half-spacing tolerance to prevent gaps at bends/junctions:
+    # full spacing_m is too aggressive and removes branch-start boreholes,
+    # creating gaps up to 2× spacing_m near junctions.
+    cross_branch_tolerance = spacing_m * 0.5
+    if cross_branch_tolerance > dedup_tolerance_m:
         before_count = len(deduped)
-        deduped = _deduplicate_points(deduped, spacing_m)
+        deduped = _deduplicate_points(deduped, cross_branch_tolerance)
         if log and len(deduped) < before_count:
             log.info(
                 f"   🛤️ Spacing enforcement removed {before_count - len(deduped)} "
-                f"branch-junction points (min spacing {spacing_m:.0f}m)"
+                f"branch-junction points (min spacing {cross_branch_tolerance:.0f}m)"
             )
 
     # === STEP 4: Create borehole dicts ===
