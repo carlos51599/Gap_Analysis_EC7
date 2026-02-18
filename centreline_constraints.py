@@ -30,6 +30,7 @@ MODIFICATION POINT: Extend sampling_mode options in sample_boreholes_along_centr
 """
 
 import logging
+import math
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
@@ -154,8 +155,10 @@ def _sample_points_along_line(
     if total_length < 1.0:
         return []
 
-    # Number of intervals (at least 1, so we get start + end)
-    n_intervals = max(1, int(total_length / interval_m))
+    # Number of intervals — use ceil() so spacing never exceeds interval_m.
+    # int() truncates, which can create gaps up to 2× interval_m for lines
+    # whose length isn't an exact multiple of the interval (common at curves).
+    n_intervals = max(1, math.ceil(total_length / interval_m))
     distances = np.linspace(0, total_length, n_intervals + 1)
 
     points: List[Tuple[float, float]] = []
