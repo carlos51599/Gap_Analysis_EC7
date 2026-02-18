@@ -126,7 +126,7 @@ SHAPEFILE_CONFIG: Dict[str, Any] = {
             # ILP solver passes and cannot be removed by CZRC optimisation.
             "centreline": {
                 "enabled": True,
-                "min_branch_length_m": 200.0,  # Prune branches shorter than this
+                "min_branch_length_m": 150.0,  # Prune branches shorter than this
                 "spacing_m": 5.0,  # Boundary point density for Voronoi
                 "simplify_tolerance_m": 2.0,  # Simplify centreline geometry
                 "sampling_mode": "zone_spacing",  # Uses zone's max_spacing_m
