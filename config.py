@@ -858,7 +858,7 @@ CONFIG: Dict[str, Any] = {
         # unless explicitly overridden in this section's "ilp" subsection.
         "cell_boundary_consolidation": {
             # Master switch for third pass cell-cell CZRC
-            "enabled": True,
+            "enabled": False,
             # Tier 1 multiplier (same as zone CZRC - inherit from parent)
             "tier1_rmax_multiplier": 1.0,
             # Tier 2 multiplier (same as zone CZRC - inherit from parent)

@@ -141,7 +141,7 @@ SHAPEFILE_CONFIG: Dict[str, Any] = {
         # Coverage layer: Buildings (used for coverage analysis)
         # ───────────────────────────────────────────────────────────────────
         "buildings": {
-            "enabled": False,  # TEMPORARY: Disabled for testing only
+            "enabled": True,  # TEMPORARY: Disabled for testing only
             "file_path": "Project Shapefiles/Buildings.shp",
             "display_name": "Buildings",
             "layer_order": 8,
@@ -159,7 +159,7 @@ SHAPEFILE_CONFIG: Dict[str, Any] = {
         # Coverage layer: Reservoir Tunnel (used for coverage analysis)
         # ───────────────────────────────────────────────────────────────────
         "reservoir_tunnel": {
-            "enabled": False,  # TEMPORARY: Disabled for testing only
+            "enabled": True,  # TEMPORARY: Disabled for testing only
             "file_path": "Project Shapefiles/ReservoirTunnel.shp",
             "display_name": "Reservoir Tunnel",
             "layer_order": 7,
@@ -195,7 +195,7 @@ SHAPEFILE_CONFIG: Dict[str, Any] = {
         # Coverage layer: Water Course Diversion (used for coverage analysis)
         # ───────────────────────────────────────────────────────────────────
         "water_course_diversion": {
-            "enabled": False,  # TEMPORARY: Disabled for testing only
+            "enabled": True,  # TEMPORARY: Disabled for testing only
             "file_path": "Project Shapefiles/WaterCourseDiversion.shp",
             "display_name": "Water Course Diversion",
             "layer_order": 4,

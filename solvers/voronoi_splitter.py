@@ -98,6 +98,8 @@ def get_clipped_voronoi_cells(
     Generate Voronoi cells from seeds, clipped to a region.
 
     Uses shapely.ops.voronoi_diagram for clean handling of boundaries.
+    Keeps MultiPolygon results as single cells (preserving K-means cell
+    count). Downstream code handles MultiPolygon geometries correctly.
 
     Args:
         seeds: K-means cluster centroids (n, 2) array
@@ -106,7 +108,7 @@ def get_clipped_voronoi_cells(
         min_cell_area_m2: Minimum cell area to keep
 
     Returns:
-        List of clipped cell polygons
+        List of clipped cell geometries (Polygon or MultiPolygon)
     """
     if len(seeds) < 2:
         return [region]  # Cannot tessellate with <2 seeds
@@ -120,7 +122,9 @@ def get_clipped_voronoi_cells(
     # Generate Voronoi diagram
     voronoi_result = voronoi_diagram(seed_multipoint, envelope=envelope)
 
-    # Clip each cell to region
+    # Clip each cell to region — keep MultiPolygon as single cell
+    # to preserve the K-means cell count (prevents fragmentation
+    # from inflating cell count and shrinking average cell area)
     cells = []
     for voronoi_cell in voronoi_result.geoms:
         clipped = voronoi_cell.intersection(region)
@@ -128,14 +132,8 @@ def get_clipped_voronoi_cells(
         if clipped.is_empty:
             continue
 
-        # Handle MultiPolygon (can occur with complex regions)
-        if isinstance(clipped, MultiPolygon):
-            for part in clipped.geoms:
-                if part.area >= min_cell_area_m2:
-                    cells.append(part)
-        else:
-            if clipped.area >= min_cell_area_m2:
-                cells.append(clipped)
+        if clipped.area >= min_cell_area_m2:
+            cells.append(clipped)
 
     return cells
 

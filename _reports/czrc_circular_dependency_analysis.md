@@ -100,12 +100,12 @@ Lines 2132-2147 — Third Pass `min_grid_spacing` uses the same cluster-wide agg
 
 ## 3. Quantified Impact
 
-| Scenario | Cell Threshold | Target Cell Area | Grid Spacing | Candidates per km² | Cells for 6 km² |
-|---|---|---|---|---|---|
-| Current (min=50m) | 1 km² | 1 km² | 25m | ~1600 | 6 cells |
-| Local=100m zones | 1 km² | 1 km² | 50m | ~400 | 6 cells |
-| Local=200m zones | 4 km² | 2 km² | 100m | ~100 | 3 cells |
-| Local=400m zones | 16 km² | 8 km² | 200m | ~25 | 1 cell |
+| Scenario          | Cell Threshold | Target Cell Area | Grid Spacing | Candidates per km² | Cells for 6 km² |
+| ----------------- | -------------- | ---------------- | ------------ | ------------------ | --------------- |
+| Current (min=50m) | 1 km²          | 1 km²            | 25m          | ~1600              | 6 cells         |
+| Local=100m zones  | 1 km²          | 1 km²            | 50m          | ~400               | 6 cells         |
+| Local=200m zones  | 4 km²          | 2 km²            | 100m         | ~100               | 3 cells         |
+| Local=400m zones  | 16 km²         | 8 km²            | 200m         | ~25                | 1 cell          |
 
 Third Pass adjacency count:
 - 6 cells → ~10 pairs → 10 sequential ILP solves  
@@ -208,12 +208,12 @@ flowchart TD
 
 **Option A (Zone-Aware Pre-Partitioning)** is the structurally correct solution. It addresses all three coupled problems simultaneously:
 
-| Problem | How Option A Fixes It |
-|---|---|
-| Cell sizes too small in large-spacing areas | Each sub-region uses its own threshold |
-| Grid too dense in large-spacing cells | Each cell generates grid at local spacing |
-| Too many Third Pass boundaries | Fewer cells = fewer adjacencies |
-| K-means biased by globally dense grid | Each sub-region has its own sample grid density |
+| Problem                                     | How Option A Fixes It                           |
+| ------------------------------------------- | ----------------------------------------------- |
+| Cell sizes too small in large-spacing areas | Each sub-region uses its own threshold          |
+| Grid too dense in large-spacing cells       | Each cell generates grid at local spacing       |
+| Too many Third Pass boundaries              | Fewer cells = fewer adjacencies                 |
+| K-means biased by globally dense grid       | Each sub-region has its own sample grid density |
 
 The implementation requires:
 1. New function `_compute_local_spacing_regions()` (~30-40 lines)
@@ -310,16 +310,16 @@ for sub_region, local_spacing, local_zone_spacings in sub_regions:
 
 ## 8. Appendix: Key Code Locations
 
-| Component | File | Line(s) |
-|---|---|---|
-| Cluster formation (union-find) | czrc_solver.py | 904-1000 |
-| Zone spacing aggregation | czrc_solver.py | 506-546 |
-| Cell split decision + threshold | czrc_solver.py | 1817-1900 |
-| Spacing-relative cell sizing | cell_sizing.py | Full file |
-| K-means sample grid generation | czrc_solver.py | 1910-1940 |
-| Per-cell ILP solve (spacing aggregation) | czrc_solver.py | 2987-2990 |
-| Third Pass spacing inheritance | czrc_solver.py | 2132-2147 |
-| Third Pass adjacency detection | czrc_solver.py | 2228-2312 |
-| Cell count determination | voronoi_splitter.py | 62-80 |
-| Zone geometries source | czrc_geometry.py | 398-401 |
-| Zone spacings source | czrc_geometry.py | 395-397 |
+| Component                                | File                | Line(s)   |
+| ---------------------------------------- | ------------------- | --------- |
+| Cluster formation (union-find)           | czrc_solver.py      | 904-1000  |
+| Zone spacing aggregation                 | czrc_solver.py      | 506-546   |
+| Cell split decision + threshold          | czrc_solver.py      | 1817-1900 |
+| Spacing-relative cell sizing             | cell_sizing.py      | Full file |
+| K-means sample grid generation           | czrc_solver.py      | 1910-1940 |
+| Per-cell ILP solve (spacing aggregation) | czrc_solver.py      | 2987-2990 |
+| Third Pass spacing inheritance           | czrc_solver.py      | 2132-2147 |
+| Third Pass adjacency detection           | czrc_solver.py      | 2228-2312 |
+| Cell count determination                 | voronoi_splitter.py | 62-80     |
+| Zone geometries source                   | czrc_geometry.py    | 398-401   |
+| Zone spacings source                     | czrc_geometry.py    | 395-397   |

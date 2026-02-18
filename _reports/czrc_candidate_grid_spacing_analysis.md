@@ -21,10 +21,10 @@ test_spacing      = zone_max_spacing_m × test_spacing_mult
 
 ### Config Keys
 
-| Key | Location | Default | Description |
-|-----|----------|---------|-------------|
-| `candidate_spacing_mult` | `CONFIG["ilp_solver"]` | 0.5 | Fraction of zone spacing |
-| `test_spacing_mult` | `CONFIG["ilp_solver"]` | 0.2 | Fraction of zone spacing |
+| Key                      | Location               | Default | Description              |
+| ------------------------ | ---------------------- | ------- | ------------------------ |
+| `candidate_spacing_mult` | `CONFIG["ilp_solver"]` | 0.5     | Fraction of zone spacing |
+| `test_spacing_mult`      | `CONFIG["ilp_solver"]` | 0.2     | Fraction of zone spacing |
 
 ### Behavior
 
@@ -73,11 +73,11 @@ min_spacing = _aggregate_zone_spacings(zone_spacings, list(all_zones), exclusion
 
 [czrc_solver.py L506-L546](../solvers/czrc_solver.py#L506-L546):
 
-| Method | Formula | Effect on Grid |
-|--------|---------|----------------|
-| `"min"` | `min(zone_spacings)` | Densest grid (conservative) |
-| `"max"` | `max(zone_spacings)` | Sparsest grid (aggressive) |
-| `"average"` | `mean(zone_spacings)` | Balanced (default) |
+| Method      | Formula               | Effect on Grid              |
+| ----------- | --------------------- | --------------------------- |
+| `"min"`     | `min(zone_spacings)`  | Densest grid (conservative) |
+| `"max"`     | `max(zone_spacings)`  | Sparsest grid (aggressive)  |
+| `"average"` | `mean(zone_spacings)` | Balanced (default)          |
 
 The method is resolved via `_get_cross_zone_exclusion_method()`:
 1. Check `czrc_optimization.ilp.cross_zone_exclusion_method` (CZRC-specific override)
@@ -86,11 +86,11 @@ The method is resolved via `_get_cross_zone_exclusion_method()`:
 
 #### Config Keys
 
-| Key | Location | Default | Description |
-|-----|----------|---------|-------------|
-| `candidate_grid_spacing_mult` | `CONFIG["czrc_optimization"]` | 0.5 | Fraction of aggregated spacing |
-| `cross_zone_exclusion_method` | `CONFIG["czrc_optimization"]["ilp"]` | `None` (→ inherits) | Aggregation method |
-| `cross_zone_exclusion_method` | `CONFIG["ilp_solver"]` | `"average"` | Global aggregation method |
+| Key                           | Location                             | Default             | Description                    |
+| ----------------------------- | ------------------------------------ | ------------------- | ------------------------------ |
+| `candidate_grid_spacing_mult` | `CONFIG["czrc_optimization"]`        | 0.5                 | Fraction of aggregated spacing |
+| `cross_zone_exclusion_method` | `CONFIG["czrc_optimization"]["ilp"]` | `None` (→ inherits) | Aggregation method             |
+| `cross_zone_exclusion_method` | `CONFIG["ilp_solver"]`               | `"average"`         | Global aggregation method      |
 
 #### Concrete Example
 
@@ -129,14 +129,14 @@ grid_candidates = _generate_candidate_grid(
 
 ### 2.4 Second Pass Candidate Grid vs First Pass
 
-| Aspect | First Pass | Second Pass |
-|--------|-----------|-------------|
-| Spacing base | Zone's own `max_spacing_m` | Aggregated across zones in pair/cluster |
-| Multiplier | `ilp_solver.candidate_spacing_mult` (0.5) | `czrc_optimization.candidate_grid_spacing_mult` (0.5) |
-| Aggregation | N/A (single zone) | `cross_zone_exclusion_method` (average/min/max) |
-| Grid type | Hexagonal | Hexagonal |
-| Density | 1.5 | 1.5 |
-| Buffer | `max_spacing` around gaps | 0 (Tier 1 is pre-buffered) |
+| Aspect       | First Pass                                | Second Pass                                           |
+| ------------ | ----------------------------------------- | ----------------------------------------------------- |
+| Spacing base | Zone's own `max_spacing_m`                | Aggregated across zones in pair/cluster               |
+| Multiplier   | `ilp_solver.candidate_spacing_mult` (0.5) | `czrc_optimization.candidate_grid_spacing_mult` (0.5) |
+| Aggregation  | N/A (single zone)                         | `cross_zone_exclusion_method` (average/min/max)       |
+| Grid type    | Hexagonal                                 | Hexagonal                                             |
+| Density      | 1.5                                       | 1.5                                                   |
+| Buffer       | `max_spacing` around gaps                 | 0 (Tier 1 is pre-buffered)                            |
 
 **Key observation**: The multiplier is the same (0.5) but they come from **different config keys**. Changing one does NOT change the other.
 
@@ -210,10 +210,10 @@ This works correctly because:
 
 Third Pass has **two spacing values** with different purposes:
 
-| Variable | Value | Used For |
-|----------|-------|----------|
-| `spacing` (`cell_spacing`) | `cluster["overall_r_max"]` = max zone spacing | Tier boundaries, coverage radius, ILP conflict distance |
-| `min_grid_spacing` | Aggregated zone spacing (avg/min/max) | Candidate grid density (via `_prepare_candidates_for_ilp`) |
+| Variable                   | Value                                         | Used For                                                   |
+| -------------------------- | --------------------------------------------- | ---------------------------------------------------------- |
+| `spacing` (`cell_spacing`) | `cluster["overall_r_max"]` = max zone spacing | Tier boundaries, coverage radius, ILP conflict distance    |
+| `min_grid_spacing`         | Aggregated zone spacing (avg/min/max)         | Candidate grid density (via `_prepare_candidates_for_ilp`) |
 
 This mirrors Second Pass exactly:
 - `r_max` = max(zone spacings) → tier expansion, conflict constraints
@@ -300,12 +300,12 @@ graph TD
     style D fill:#e8f5e9
 ```
 
-| Pass | Spacing Base | Multiplier Config Key | Default | Aggregation |
-|------|-------------|----------------------|---------|-------------|
-| **First** | Zone's own `max_spacing_m` | `ilp_solver.candidate_spacing_mult` | 0.5 | N/A |
-| **Second (pair)** | `_aggregate_zone_spacings()` | `czrc_optimization.candidate_grid_spacing_mult` | 0.5 | `cross_zone_exclusion_method` |
-| **Second (cluster)** | `_aggregate_zone_spacings()` | `czrc_optimization.candidate_grid_spacing_mult` | 0.5 | `cross_zone_exclusion_method` |
-| **Third** | `_aggregate_zone_spacings()` | **hardcoded fallback 0.5** (see issue below) | 0.5 | `cross_zone_exclusion_method` |
+| Pass                 | Spacing Base                 | Multiplier Config Key                           | Default | Aggregation                   |
+| -------------------- | ---------------------------- | ----------------------------------------------- | ------- | ----------------------------- |
+| **First**            | Zone's own `max_spacing_m`   | `ilp_solver.candidate_spacing_mult`             | 0.5     | N/A                           |
+| **Second (pair)**    | `_aggregate_zone_spacings()` | `czrc_optimization.candidate_grid_spacing_mult` | 0.5     | `cross_zone_exclusion_method` |
+| **Second (cluster)** | `_aggregate_zone_spacings()` | `czrc_optimization.candidate_grid_spacing_mult` | 0.5     | `cross_zone_exclusion_method` |
+| **Third**            | `_aggregate_zone_spacings()` | **hardcoded fallback 0.5** (see issue below)    | 0.5     | `cross_zone_exclusion_method` |
 
 ---
 
@@ -352,14 +352,14 @@ All three passes use `hexagonal_density=1.5`. This is hardcoded in `_prepare_can
 
 Test point spacing follows a different path but is worth documenting:
 
-| Context | Formula | Notes |
-|---------|---------|-------|
-| First Pass | `zone_spacing × test_spacing_mult (0.2)` | Per-zone |
-| Second Pass Tier 1 | **Reused from First Pass** | No regeneration |
-| Second Pass Tier 2 ring | `test_spacing_mult × tier2_test_spacing_multiplier × max_spacing` | Sparser (2-3×) |
-| Third Pass Tier 1 | **Reused from First Pass** (filtered spatially) | Same as Second Pass |
-| Third Pass Tier 2 ring | Same formula as Second Pass Tier 2 | Generated fresh |
-| Coverage cloud grid | `spacing × test_spacing_mult (0.2)` | Used in `detect_cell_adjacencies` |
+| Context                 | Formula                                                           | Notes                             |
+| ----------------------- | ----------------------------------------------------------------- | --------------------------------- |
+| First Pass              | `zone_spacing × test_spacing_mult (0.2)`                          | Per-zone                          |
+| Second Pass Tier 1      | **Reused from First Pass**                                        | No regeneration                   |
+| Second Pass Tier 2 ring | `test_spacing_mult × tier2_test_spacing_multiplier × max_spacing` | Sparser (2-3×)                    |
+| Third Pass Tier 1       | **Reused from First Pass** (filtered spatially)                   | Same as Second Pass               |
+| Third Pass Tier 2 ring  | Same formula as Second Pass Tier 2                                | Generated fresh                   |
+| Coverage cloud grid     | `spacing × test_spacing_mult (0.2)`                               | Used in `detect_cell_adjacencies` |
 
 ---
 

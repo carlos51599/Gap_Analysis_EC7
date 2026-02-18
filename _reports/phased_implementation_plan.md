@@ -17,10 +17,10 @@ Remove spacing-relative cell sizing from Second Pass. Replace with:
 
 Change three values in `cell_splitting`:
 
-| Key | Old Value | New Value |
-|-----|-----------|-----------|
-| `max_area_for_direct_ilp_m2` | `1_000_000` | `4_000_000` |
-| `spacing_relative.enabled` | `True` | `False` |
+| Key                                  | Old Value   | New Value   |
+| ------------------------------------ | ----------- | ----------- |
+| `max_area_for_direct_ilp_m2`         | `1_000_000` | `4_000_000` |
+| `spacing_relative.enabled`           | `True`      | `False`     |
 | `kmeans_voronoi.target_cell_area_m2` | `1_000_000` | `2_000_000` |
 
 Update comments to explain the rationale.
@@ -386,29 +386,29 @@ Phase 6 requires all phases complete.
 
 ## Summary of All Gotchas
 
-| # | Gotcha | Phase | Severity | Mitigation |
-|---|--------|-------|----------|------------|
-| 1 | Don't edit `zone_auto_splitting.spacing_relative` (First Pass) — only `cell_splitting.spacing_relative` (Second Pass) | 1 | High | Double-check config section path before editing |
-| 2 | `candidate_grid_spacing` variable was used for both threshold AND K-means sample grid — ensure K-means section doesn't reference the deleted variable | 1 | Medium | K-means section recalculates independently (lines 1918-1919) |
-| 3 | `_generate_candidate_grid()` `max_spacing` parameter is unused when `buffer_distance=0`, but passing a reasonable value avoids confusion | 1 | Low | Set to `sample_spacing * 2` |
-| 4 | `_override_target_cell_area()` becomes a no-op — harmless but potentially confusing | 1 | Low | Keep for now, clean up in Phase 6 |
-| 5 | `zone_geometries` are raw Shapely objects, NOT WKT — no deserialization needed | 3 | Medium | Confirmed from `czrc_geometry.py` line 398 |
-| 6 | `solve_czrc_ilp_for_cluster()` is called from 2 places — both need `override_min_spacing` | 4 | High | Keyword argument with `None` default ensures backward compatibility |
-| 7 | `override_min_spacing` affects only grid density, not coverage radius or conflict constraints | 4 | Medium | Document clearly in parameter docstring |
-| 8 | ILP tractability at 2 km² with 50m spacing → ~3200 candidates per cell | 4 | Medium | Monitor HiGHS solve times; may need to reduce threshold for small-spacing zones |
-| 9 | Third Pass `cell_spacing` (tier boundaries) vs `min_grid_spacing` (grid density) are different variables | 5 | Medium | Don't conflate them — `cell_spacing` stays as `overall_r_max` |
-| 10 | `_compute_cluster_cell_thresholds()` may become dead code after Phase 1 | 6 | Low | Verify no other callers before removing |
+| #   | Gotcha                                                                                                                                                | Phase | Severity | Mitigation                                                                      |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ----- | -------- | ------------------------------------------------------------------------------- |
+| 1   | Don't edit `zone_auto_splitting.spacing_relative` (First Pass) — only `cell_splitting.spacing_relative` (Second Pass)                                 | 1     | High     | Double-check config section path before editing                                 |
+| 2   | `candidate_grid_spacing` variable was used for both threshold AND K-means sample grid — ensure K-means section doesn't reference the deleted variable | 1     | Medium   | K-means section recalculates independently (lines 1918-1919)                    |
+| 3   | `_generate_candidate_grid()` `max_spacing` parameter is unused when `buffer_distance=0`, but passing a reasonable value avoids confusion              | 1     | Low      | Set to `sample_spacing * 2`                                                     |
+| 4   | `_override_target_cell_area()` becomes a no-op — harmless but potentially confusing                                                                   | 1     | Low      | Keep for now, clean up in Phase 6                                               |
+| 5   | `zone_geometries` are raw Shapely objects, NOT WKT — no deserialization needed                                                                        | 3     | Medium   | Confirmed from `czrc_geometry.py` line 398                                      |
+| 6   | `solve_czrc_ilp_for_cluster()` is called from 2 places — both need `override_min_spacing`                                                             | 4     | High     | Keyword argument with `None` default ensures backward compatibility             |
+| 7   | `override_min_spacing` affects only grid density, not coverage radius or conflict constraints                                                         | 4     | Medium   | Document clearly in parameter docstring                                         |
+| 8   | ILP tractability at 2 km² with 50m spacing → ~3200 candidates per cell                                                                                | 4     | Medium   | Monitor HiGHS solve times; may need to reduce threshold for small-spacing zones |
+| 9   | Third Pass `cell_spacing` (tier boundaries) vs `min_grid_spacing` (grid density) are different variables                                              | 5     | Medium   | Don't conflate them — `cell_spacing` stays as `overall_r_max`                   |
+| 10  | `_compute_cluster_cell_thresholds()` may become dead code after Phase 1                                                                               | 6     | Low      | Verify no other callers before removing                                         |
 
 ---
 
 ## Estimated Effort per Phase
 
-| Phase | Description | Effort | Lines Changed |
-|-------|------------|--------|---------------|
-| 1 | Config + remove spacing-relative | 1 hour | ~20 deleted, ~5 added |
-| 2 | `_compute_local_zone_spacing()` + test | 1 hour | ~35 new |
-| 3 | Plumb `zone_geometries` | 30 min | ~15 modified |
-| 4 | Per-cell local spacing | 1.5 hours | ~25 modified |
-| 5 | Third Pass local spacing | 30 min | ~10 modified |
-| 6 | Cleanup + docs | 30 min | ~20 deleted/modified |
-| **Total** | | **~5 hours** | **~130 lines** |
+| Phase     | Description                            | Effort       | Lines Changed         |
+| --------- | -------------------------------------- | ------------ | --------------------- |
+| 1         | Config + remove spacing-relative       | 1 hour       | ~20 deleted, ~5 added |
+| 2         | `_compute_local_zone_spacing()` + test | 1 hour       | ~35 new               |
+| 3         | Plumb `zone_geometries`                | 30 min       | ~15 modified          |
+| 4         | Per-cell local spacing                 | 1.5 hours    | ~25 modified          |
+| 5         | Third Pass local spacing               | 30 min       | ~10 modified          |
+| 6         | Cleanup + docs                         | 30 min       | ~20 deleted/modified  |
+| **Total** |                                        | **~5 hours** | **~130 lines**        |

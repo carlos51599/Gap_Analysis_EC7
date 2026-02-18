@@ -226,9 +226,9 @@ This makes it visible in the output which cells got different grid densities.
 
 ## Files Modified
 
-| File | Changes | Lines Added | Lines Modified |
-|------|---------|-------------|----------------|
-| `czrc_solver.py` | New `_compute_local_zone_spacing()`, modify 3 existing functions | ~25 new | ~30 modified |
+| File             | Changes                                                          | Lines Added | Lines Modified |
+| ---------------- | ---------------------------------------------------------------- | ----------- | -------------- |
+| `czrc_solver.py` | New `_compute_local_zone_spacing()`, modify 3 existing functions | ~25 new     | ~30 modified   |
 
 Total: ~55 lines changed in 1 file.
 
@@ -236,15 +236,15 @@ Total: ~55 lines changed in 1 file.
 
 ## What Does NOT Change
 
-| Component | Why |
-|-----------|-----|
-| Cell splitting thresholds | Static 2 km² — no spacing-relative cell sizing change |
-| K-means sample grid density | Still uses cluster-wide min for seed placement (cell shapes unchanged) |
-| Coverage radius logic | Still uses per-test-point `required_radius` |
-| `_build_coverage_dict_variable_test_radii()` | Unchanged — already correct |
-| Config values | No config changes needed |
-| First Pass | Unrelated — already uses per-zone spacing |
-| Visualization | No changes — same borehole markers, same layers |
+| Component                                    | Why                                                                    |
+| -------------------------------------------- | ---------------------------------------------------------------------- |
+| Cell splitting thresholds                    | Static 2 km² — no spacing-relative cell sizing change                  |
+| K-means sample grid density                  | Still uses cluster-wide min for seed placement (cell shapes unchanged) |
+| Coverage radius logic                        | Still uses per-test-point `required_radius`                            |
+| `_build_coverage_dict_variable_test_radii()` | Unchanged — already correct                                            |
+| Config values                                | No config changes needed                                               |
+| First Pass                                   | Unrelated — already uses per-zone spacing                              |
+| Visualization                                | No changes — same borehole markers, same layers                        |
 
 ---
 
@@ -288,31 +288,31 @@ Step 8: Run full pipeline and compare output
 
 ## Risk Assessment
 
-| Risk | Likelihood | Impact | Mitigation |
-|------|-----------|--------|------------|
-| `zone_geometries` not in `czrc_data` for some configs | Low | Medium | Fallback to cluster-wide min when `zone_geometries` is None |
-| Shapely `.intersects()` returns True for tangent-only contact | Low | Low | Filter by `intersection.area > min_area` |
-| Some cells overlap zero zones (geometric edge cases) | Low | Medium | Fallback to cluster-wide min spacing |
-| Performance regression from per-cell intersection checks | Very Low | Very Low | N_zones × N_cells intersections — typically <50 total |
+| Risk                                                          | Likelihood | Impact   | Mitigation                                                  |
+| ------------------------------------------------------------- | ---------- | -------- | ----------------------------------------------------------- |
+| `zone_geometries` not in `czrc_data` for some configs         | Low        | Medium   | Fallback to cluster-wide min when `zone_geometries` is None |
+| Shapely `.intersects()` returns True for tangent-only contact | Low        | Low      | Filter by `intersection.area > min_area`                    |
+| Some cells overlap zero zones (geometric edge cases)          | Low        | Medium   | Fallback to cluster-wide min spacing                        |
+| Performance regression from per-cell intersection checks      | Very Low   | Very Low | N_zones × N_cells intersections — typically <50 total       |
 
 ---
 
 ## Appendix: Current Code Locations
 
-| Component | File | Line |
-|-----------|------|------|
-| `_aggregate_zone_spacings()` | czrc_solver.py | 506 |
-| `_compute_cluster_cell_thresholds()` | czrc_solver.py | 1761 |
-| `check_and_split_large_cluster()` | czrc_solver.py | 1817 |
-| Cluster-wide min_zone_spacing | czrc_solver.py | 1862 |
-| K-means sample grid | czrc_solver.py | 1918-1940 |
-| Per-cell ILP call | czrc_solver.py | 1977 |
-| Third Pass min_grid_spacing | czrc_solver.py | 2132-2147 |
-| `run_cell_czrc_pass()` | czrc_solver.py | 2632 |
-| `solve_cell_cell_czrc()` | czrc_solver.py | 2312 |
-| `solve_czrc_ilp_for_cluster()` | czrc_solver.py | 2898 |
-| Spacing aggregation in cluster solver | czrc_solver.py | 2987-3002 |
-| `run_czrc_optimization()` | czrc_solver.py | 3350 |
-| Call to `check_and_split_large_cluster` | czrc_solver.py | 3447 |
-| `zone_geometries` source | czrc_geometry.py | 398-401 |
-| `_prepare_candidates_for_ilp()` | czrc_solver.py | 1003 |
+| Component                               | File             | Line      |
+| --------------------------------------- | ---------------- | --------- |
+| `_aggregate_zone_spacings()`            | czrc_solver.py   | 506       |
+| `_compute_cluster_cell_thresholds()`    | czrc_solver.py   | 1761      |
+| `check_and_split_large_cluster()`       | czrc_solver.py   | 1817      |
+| Cluster-wide min_zone_spacing           | czrc_solver.py   | 1862      |
+| K-means sample grid                     | czrc_solver.py   | 1918-1940 |
+| Per-cell ILP call                       | czrc_solver.py   | 1977      |
+| Third Pass min_grid_spacing             | czrc_solver.py   | 2132-2147 |
+| `run_cell_czrc_pass()`                  | czrc_solver.py   | 2632      |
+| `solve_cell_cell_czrc()`                | czrc_solver.py   | 2312      |
+| `solve_czrc_ilp_for_cluster()`          | czrc_solver.py   | 2898      |
+| Spacing aggregation in cluster solver   | czrc_solver.py   | 2987-3002 |
+| `run_czrc_optimization()`               | czrc_solver.py   | 3350      |
+| Call to `check_and_split_large_cluster` | czrc_solver.py   | 3447      |
+| `zone_geometries` source                | czrc_geometry.py | 398-401   |
+| `_prepare_candidates_for_ilp()`         | czrc_solver.py   | 1003      |
