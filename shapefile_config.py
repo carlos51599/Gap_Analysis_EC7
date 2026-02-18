@@ -91,8 +91,15 @@ SHAPEFILE_CONFIG: Dict[str, Any] = {
             },
             "features": {},  # No per-feature overrides (single zone from display_name)
             # ─── Centreline constraint settings ───
+            # Boreholes are placed at max_spacing_m intervals along the computed
+            # centreline. These boreholes are locked constants in all ILP solver
+            # passes and cannot be removed by CZRC optimisation.
             "centreline": {
                 "enabled": True,
+                "min_branch_length_m": 100.0,  # Prune branches shorter than this
+                "spacing_m": 5.0,  # Boundary point density for Voronoi
+                "simplify_tolerance_m": 2.0,  # Simplify centreline geometry
+                "sampling_mode": "zone_spacing",  # Uses zone's max_spacing_m
             },
         },
         # ───────────────────────────────────────────────────────────────────
@@ -140,10 +147,6 @@ SHAPEFILE_CONFIG: Dict[str, Any] = {
                 "boundary_linewidth": 1.5,
             },
             "features": {},  # No per-feature overrides
-            # ─── Centreline constraint settings ───
-            "centreline": {
-                "enabled": True,
-            },
         },
         # ───────────────────────────────────────────────────────────────────
         # Coverage layer: Buildings (used for coverage analysis)
@@ -181,8 +184,15 @@ SHAPEFILE_CONFIG: Dict[str, Any] = {
             },
             "features": {},
             # ─── Centreline constraint settings ───
+            # Boreholes are placed at max_spacing_m intervals along the computed
+            # centreline. These boreholes are locked constants in all ILP solver
+            # passes and cannot be removed by CZRC optimisation.
             "centreline": {
                 "enabled": True,
+                "min_branch_length_m": 100.0,  # Prune branches shorter than this
+                "spacing_m": 5.0,  # Boundary point density for Voronoi
+                "simplify_tolerance_m": 2.0,  # Simplify centreline geometry
+                "sampling_mode": "zone_spacing",  # Uses zone's max_spacing_m
             },
         },
         # ───────────────────────────────────────────────────────────────────
@@ -203,8 +213,15 @@ SHAPEFILE_CONFIG: Dict[str, Any] = {
             },
             "features": {},
             # ─── Centreline constraint settings ───
+            # Boreholes are placed at max_spacing_m intervals along the computed
+            # centreline. These boreholes are locked constants in all ILP solver
+            # passes and cannot be removed by CZRC optimisation.
             "centreline": {
                 "enabled": True,
+                "min_branch_length_m": 100.0,  # Prune branches shorter than this
+                "spacing_m": 5.0,  # Boundary point density for Voronoi
+                "simplify_tolerance_m": 2.0,  # Simplify centreline geometry
+                "sampling_mode": "zone_spacing",  # Uses zone's max_spacing_m
             },
         },
         # ───────────────────────────────────────────────────────────────────
@@ -225,8 +242,15 @@ SHAPEFILE_CONFIG: Dict[str, Any] = {
             },
             "features": {},
             # ─── Centreline constraint settings ───
+            # Boreholes are placed at max_spacing_m intervals along the computed
+            # centreline. These boreholes are locked constants in all ILP solver
+            # passes and cannot be removed by CZRC optimisation.
             "centreline": {
                 "enabled": True,
+                "min_branch_length_m": 100.0,  # Prune branches shorter than this
+                "spacing_m": 5.0,  # Boundary point density for Voronoi
+                "simplify_tolerance_m": 2.0,  # Simplify centreline geometry
+                "sampling_mode": "zone_spacing",  # Uses zone's max_spacing_m
             },
         },
         # ───────────────────────────────────────────────────────────────────
