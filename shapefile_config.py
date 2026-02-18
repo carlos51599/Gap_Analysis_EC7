@@ -90,6 +90,10 @@ SHAPEFILE_CONFIG: Dict[str, Any] = {
                 "boundary_linewidth": 2.5,
             },
             "features": {},  # No per-feature overrides (single zone from display_name)
+            # ─── Centreline constraint settings ───
+            "centreline": {
+                "enabled": True,
+            },
         },
         # ───────────────────────────────────────────────────────────────────
         # Coverage layer: Highways (used for coverage analysis)
@@ -136,6 +140,10 @@ SHAPEFILE_CONFIG: Dict[str, Any] = {
                 "boundary_linewidth": 1.5,
             },
             "features": {},  # No per-feature overrides
+            # ─── Centreline constraint settings ───
+            "centreline": {
+                "enabled": True,
+            },
         },
         # ───────────────────────────────────────────────────────────────────
         # Coverage layer: Buildings (used for coverage analysis)
@@ -172,6 +180,10 @@ SHAPEFILE_CONFIG: Dict[str, Any] = {
                 "boundary_linewidth": 2.0,
             },
             "features": {},
+            # ─── Centreline constraint settings ───
+            "centreline": {
+                "enabled": True,
+            },
         },
         # ───────────────────────────────────────────────────────────────────
         # Coverage layer: W&B Canal Model (used for coverage analysis)
@@ -190,6 +202,10 @@ SHAPEFILE_CONFIG: Dict[str, Any] = {
                 "boundary_linewidth": 2.0,
             },
             "features": {},
+            # ─── Centreline constraint settings ───
+            "centreline": {
+                "enabled": True,
+            },
         },
         # ───────────────────────────────────────────────────────────────────
         # Coverage layer: Water Course Diversion (used for coverage analysis)
@@ -208,6 +224,10 @@ SHAPEFILE_CONFIG: Dict[str, Any] = {
                 "boundary_linewidth": 2.0,
             },
             "features": {},
+            # ─── Centreline constraint settings ───
+            "centreline": {
+                "enabled": True,
+            },
         },
         # ───────────────────────────────────────────────────────────────────
         # Coverage layer: Borrow Pit (used for coverage analysis)
